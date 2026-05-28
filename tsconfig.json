@@ -6,15 +6,15 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "dist",
-    "rootDir": "src",
     "declaration": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noUnusedLocals": false,
-    "noUnusedParameters": false
+    "noUnusedParameters": false,
+    "outDir": "dist",
+    "rootDir": "."
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "tests", "../pi"]
+  "include": ["packages/*/src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/__tests__/**"]
 }

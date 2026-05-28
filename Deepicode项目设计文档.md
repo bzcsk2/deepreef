@@ -1,0 +1,394 @@
+# deepicode 架构设计文档
+
+---
+
+## 一、项目概述
+
+### 1.1 项目名称与定位
+
+**deepicode** 是一个以 DeepSeek 为核心推理引擎、以极致性能和极低成本为目标的终端原生 AI 编程 Agent。该项目融合了流式工具执行（Streaming Tool Execution）、AST 级意图解析、异步流式大文件处理等生产级特性，旨在为开发者提供一个高速、低成本、稳定且可扩展的终端编程助手。
+
+项目的核心设计理念是**"核壳分离"**——`deepicode-core` 引擎作为"核"负责推理与 API 交互优化，`deepicode-shell` 基础设施作为"壳"负责 TUI 渲染、工具管理和用户交互，两者通过清晰的事件接口解耦。这种架构使得引擎层可以独立迭代优化（如 cache 策略、token 计数），而壳层可以独立扩展功能（如新工具、新前端），互不干扰。
+### 1.2 核心目标
+
+项目围绕四大核心目标展开设计与实现：
+
+1. **速度**：每轮响应时间减少 30-50%。这一目标通过 Streaming Tool Executor（模型输出时即启动工具）、分级 Tokenizer Worker Pool（增量旁路 + 异步卸载）以及后台预测性 Fold（上下文压缩不阻塞主流程）三大机制协同实现。
+
+2. **成本**：无 Fold 轮次保持 99.8% cache hit 率，API 调用成本最小化。通过 `SegmentedLog` 确保前缀缓存最大化命中，通过 Tool-call repair 流水线避免因格式错误导致的二次计费，通过智能推理强度调节系统自动选择最经济的模型档位。
+
+3. **稳定性**：消除 TUI 卡顿、fold 假死、大文件 IO 阻塞等体验问题。彻底废弃同步读取操作，通过 Transform Stream 实现大文件 Hash 流式异步计算，确保 Node.js 主线程始终流畅响应（帧率 > 30fps）。
+
+4. **扩展性**：支持多 Agent 角色、插件系统、未来多前端。通过集中式状态管理、Event Bus 发布订阅、Agent 配置化等设计，为后续功能扩展预留充分空间。
+
+### 1.3 目标用户
+
+- 使用 DeepSeek API 进行日常编程的开发者，尤其是对终端工具有偏好的用户群体
+- 需要长会话（超过 50 轮）的复杂代码重构场景，如大型项目迁移、架构升级等
+- 对 API 成本敏感的个人开发者或小团队，希望在保证质量的前提下最大化降低调用费用
+- 需要同时进行代码分析与编写的全栈开发者，期望 Agent 能在"只读分析"和"可写构建"模式间灵活切换
+
+---
+
+## 二、架构设计
+
+### 2.1 架构原则
+
+项目遵循四项核心架构原则，贯穿所有层级的设计决策：
+
+1. **核壳分离**：`deepicode-core`（核）与 `deepicode-shell`（壳）通过清晰接口解耦。核层只关心推理循环、API 调用和上下文管理，壳层只关心渲染、工具调度和用户交互。两者之间的唯一通信通道是 AsyncGenerator 事件流和 AgentState 状态快照。
+
+2. **事件驱动**：核心 loop 使用 AsyncGenerator（拉模式），壳层使用 EventStream（推模式）。这种双模式设计使得核心层可以保持简洁的迭代式处理逻辑，而壳层可以灵活地将事件分发到 TUI、日志、插件等多个消费者。
+
+3. **增量优化**：先让引擎在壳中跑起来，再逐步引入增强功能。每个 Phase 都有独立的验收标准，确保项目始终处于可运行状态，降低集成风险。
+
+4. **DeepSeek-first**：所有优化围绕 DeepSeek API 特性设计，不牺牲 cache 优势。这意味着不引入 Vercel AI SDK（其抽象层会破坏前缀缓存），所有 API 交互逻辑都针对 DeepSeek 的 SSE 流式响应和 prefix cache 机制深度优化。
+
+### 2.2 总体架构
+
+系统采用五层架构，自上而下依次为用户层、壳层、核层、工具层和安全层。每一层都有明确的职责边界和接口契约。
+
+**用户层**是交互入口，包含 Terminal（Ink TUI）等。所有前端通过统一的 CoreEngine 接口与壳层交互，确保不同前端的行为一致性。
+
+**壳层 (`deepicode-shell`)** 负责基础设施，包含 TUI 渲染引擎（Ink/React）、Event Bus（Pub/Sub 跨组件通信）、Plugin System（Hooks 扩展机制）和 Agent State Manager（集中状态管理，包含 Session、Stats、ReadTracker、Scratch 四个子模块）。
+
+**核层 (`deepicode-core`)** 是推理引擎的核心，包含 CacheFirstLoop（AsyncGenerator 驱动的主循环）、DeepSeekClient（SSE 流式 API 客户端）、ContextManager（上下文管理，含 SegmentedLog、ImmutablePrefix、VolatileScratch、Token Counter Worker）和 StreamingToolExecutor（流式工具执行器，含 AST 级 Eager Dispatch、并发安全、状态机）。核层还集成了智能推理强度调节系统和 Token 用量预估系统（CNY Native）。
+
+**工具层**是能力提供层，包含 File Ops、Shell Exec、Search/Grep、Edit/Hash（异步流式锚定编辑）、LSP Client、Web Fetch、MCP Client 和 Python Kernel 等 30+ 核心能力。
+
+**安全层**是防护机制，包含 Deny-first Rule Engine（默认拒绝规则引擎）、System-level Bypass（死锁提权）、Hooks 和 Git Snapshot（变更追踪）。
+
+### 2.3 分层职责总览
+
+| 层级 | 职责 | 核心模块 | 关键技术 |
+|------|------|---------|---------|
+| 用户层 | 交互入口 | Terminal (Ink), CLI | Ink/React |
+| 壳层 | 基础设施 | TUI 渲染、Event Bus、Agent State Manager | AsyncGenerator→EventStream |
+| 核层 | 推理引擎 | CacheFirstLoop、DeepSeekClient、ContextManager、StrategySelector | SSE 流式、Prefix Cache、AST 局部解析、滑动 TPS |
+| 工具层 | 能力提供 | File Ops、Shell、Search、Edit (Hash)、LSP、Web、MCP | 流式 Hash 计算、9-Pass Fuzzy |
+| 安全层 | 防护机制 | Deny-first 权限、Hooks、Git Snapshot、系统级免检 | 局部单文件 Shadow Git、规则引擎 |
+
+---
+
+## 三、核心层设计
+
+### 3.1 CacheFirstLoop（引擎心脏）
+
+CacheFirstLoop 是整个系统的核心驱动引擎，采用 AsyncGenerator 模式实现，每轮用户输入触发一次 step 迭代，通过 yield 事件向壳层推送状态变化。
+
+**核心状态**包含四个关键数据结构：
+- **SegmentedLog**（分段日志）：替代原朴素 AppendOnlyLog。包含 `FoldedArchive`（已压缩归档区）和 `ActiveWindow`（活跃滑动窗口）。只有分段管理才能明确 Prefix Cache 的生命周期和刷新时机。
+- **VolatileScratch**（易失性草稿区）：存储当前轮的临时数据，不发往 API。
+- **SessionStats**（会话统计）：追踪 token 用量和 CNY 成本。
+- **ReadTracker**（读取追踪器）：记录模型已读文件以支持 stale-read 检测。
+
+**单轮执行流程**分为七个阶段：
+1. **策略选择集成**：分析输入，输出 4 档位 CNY 估算对比，推送倒计时，确定模型（chat/reasoner）。
+2. **预测性 Fold**：后台启动 Fold 操作（如果超出容量），异步进行。
+3. **构建消息**：合并 ImmutablePrefix 与 SegmentedLog 的活跃区。
+4. **API 流式调用**：发起 SSE 请求，实时解析文本、工具和推理（R1 reasoning_content）。
+5. **流式处理与 Eager Tool Dispatch**：**AST 级防护的流式 JSON 解析**，完整后即刻发起并发工具执行。
+6. **收集工具结果**：合并所有并行和串行工具结果，追加到 SegmentedLog。
+7. **检查 Fold 结果与 Cache Miss 阵痛管理**：如果本轮完成后台 Fold，替换历史归档并立刻抛出 `status` 事件，通知 TUI 下一轮必将发生 Cache Miss。
+
+### 3.2 StreamingToolExecutor（流式工具执行器）
+
+打破"模型输出完毕→解析→执行→返回"串行模式，实现模型输出和工具调用的并行。
+
+**AST 级 Eager Dispatch 机制**：
+为防止模型在正文中输出正则或代码片段 `{ ... }` 导致假闭合的毁灭性后果，引入**局部 JSON Parser（轻量级 AST 解析）**。仅当累积的 buffer 能够被 `JSON.parse` 无错解析为一棵结构完整的工具参数树时，才立即创建 Promise 发起 Eager Dispatch。
+
+**并发安全检查**：
+- **Concurrency-safe（并发安全）**：读操作（如 read、grep）。可以与其他读操作无缝并行。
+- **Exclusive（独占）**：写操作（如 write、bash）。必须串行执行，且需等待所有并发读操作归零。
+
+### 3.3 ContextManager（上下文管理器）
+
+**三段式上下文结构**：
+- **ImmutablePrefix**：系统提示词 + 工具规格定义，永不变化。100% 触发前缀缓存。
+- **SegmentedLog**：历史对话分段归档区和活跃区。
+- **VolatileScratch**：本轮临时缓冲区。
+
+**Token 计数阈值旁路优化 (Bypass Threshold)**：
+- **$< 2000$ 字符（如普通对话增量）**：直接在主线程执行 O(1) 的同步 Token 计数累加，耗时 < 1ms，彻底消除使用 Worker 带来的 IPC 进程通信反噬。
+- **$\ge 2000$ 字符（如全量读文件、历史树加载）**：Offload 到 Worker 线程池。
+
+**预测性 Fold 及其 Cache Miss 阵痛管理**：
+当 Token 占比超 65% 后台触发大模型压缩。由于 Fold 会直接破坏 Prefix 一致性，导致下一轮 API 请求发生 Cache Miss（首字延迟变长且产生 Miss 计费）。ContextManager 会针对该轮次抛出 `status` 事件，TUI 渲染 `"Context optimized, cold starting API..."` 以平抑用户焦虑，Token 预估系统也将该轮 Cache 命中率强制算为 0。
+
+### 3.4 Tokenizer Worker Pool（分词器线程池）
+
+为消除传统方案在主线程执行 BPE 算法造成的 TUI 假死，采用 Worker Threads 卸载 CPU 密集型任务。
+
+**O(1) 任务 Map 调度优化**：
+原设计中使用 `queue.find()` 查找回执会导致 O(n) 开销并容易引发 Promise 泄漏。改进为：
+- 维护一个自增的 `this.taskId`。
+- 使用 `Map<number, { resolve, reject }>` 作为任务槽。
+- Worker 处理完数据携带 ID 返回，主线程 O(1) 取出 resolve 并从 Map 中 delete 释放内存。
+
+### 3.5 DeepSeekClient（API 客户端）
+
+封装与 DeepSeek API 的交互，处理 SSE 解析、退避重试和 Usage 收割。
+- **R1 适配**：对于 R1 模型的特有字段 `reasoning_content`，它被提取并通过事件流推给 TUI，但**绝不写入 SegmentedLog 历史区**，防止污染标准前缀。
+
+### 3.6 Tool-call Repair 流水线
+
+防止因 JSON 格式损坏引发 API 二次重试计费。三阶段保障：
+1. **Scavenge（拾荒）**：正则强取损坏内容。
+2. **Truncation（截断）**：基于对象边界截断超出 MaxTokens 的参数。
+3. **Storm（暴力）**：补全引号，去除非法转义字符。
+若三阶段均失败，将 Error 作为 Feedback 抛回给模型，禁止引擎自我循环重试。
+
+---
+
+## 四、智能推理强度调节系统
+
+### 4.1 功能概述
+
+在每次用户输入后、API 调用前，插入"策略选择阶段"，自动分析复杂度并推荐档位。由 TaskClassifier、ChainEstimator 和 StrategySelector 协同工作，**全程 0 额外 API 成本（纯规则/算法）**。
+
+### 4.2 档位定义 (CNY 本币计价)
+
+**废弃所有硬编码的美元汇率**，底层与 UI 全面采用人民币 (CNY) 原生计价，避免换算。
+
+| 档位 | 模型 | 适用场景 |
+|------|------|---------|
+| chat-fast | deepseek-chat | 问答、解释、单文件查找 (Temp 0.3) |
+| chat-full | deepseek-chat | 常规编码、调试、小修改 (Temp 0.6) |
+| reasoner-budget | deepseek-reasoner | 中等复杂、限制 Thinking 上限 |
+| reasoner | deepseek-reasoner | 重构、架构、复杂 bug (Thinking 无上限) |
+
+### 4.3 TaskClassifier（任务分类器）
+
+纯规则引擎，不引入 LLM 延迟：
+1. **用户自定义覆盖**：优先加载 `classifier.json` 正则映射。
+2. **信号打分**：文件引用数量、跨模块关键词、广度词汇（“全部”、“架构”等）进行加减分，最终 Clamp 到 0-10 分，映射到对应的推理档位。
+
+### 4.4 ChainEstimator（任务链估算器）
+
+**动态滑动 TPS 窗口**：
+由于大模型 API 响应速度存在潮汐现象，废除静态 TPS 公式。系统为 Chat 和 Reasoner 独立维护最近 10 次真实调用的 TPS 滑动均值，确保时间预估精准。
+
+**Agentic Chain 轮次补偿**：
+由于 R1 处理复杂任务（如读 5 文件写 3 文件）必定产生多轮次 Agent 循环。当分数 $> 6$ 时，输出 Token 估算将乘以 **2~3 倍的链式轮次补偿系数**，彻底解决单轮视角的“预估账单远低于实际账单”的致命缺陷。
+
+### 4.5 StrategySelector（策略选择器）
+
+编排前两个模块，抛出 `StrategyNotifyEvent` 附带 3 秒倒计时。如果在倒计时内异步 glob 扫文件完成，将抛出 `strategy_estimate_refined` 事件精化 TUI 面板。
+
+### 4.6 TUI 倒计时交互
+
+TUI 渲染 4 个档位卡片，左右键切换，Enter 确认，超时自动使用推荐。面板原生展示 CNY 价格区间。
+
+---
+
+## 五、Token 用量预估系统
+
+### 5.1 本币 Native 计价体系
+
+使用 DeepSeek 官方 CNY 定价（Cache hit: 0.5/1，Cache miss: 2/4，Output: 8/16 元 / 1M Tokens）。直接输出人民币金额预估，取消 `0.14` 转换率。
+
+### 5.2 预估维度与 Fold 感知
+
+除了常规的前缀、增量预估，**TokenEstimator 必须具备 Fold 状态感知**。当检测到上下文本轮执行了合并，本轮请求的 Cache Hit 强行算作 0，Cache Miss 按全量上下文估算，向用户传递真实的费用预期。
+
+---
+
+## 六、壳层设计
+
+### 6.1 集中式状态管理 (`state.ts`)
+
+采用 `AgentState` 声明式更新，不直接修改对象树。`processEvents()` 函数接收事件队列，派生出全新的 TUI 渲染树，支持状态回溯。
+
+### 6.2 双模式事件系统
+
+- **核心拉模式 (AsyncGenerator)**：按需生成，解决背压。
+- **壳层推模式 (EventStream + EventBus)**：支持多消费者（TUI、日志、插件）订阅。LoopEvent 联合类型完整涵盖了包括 `token_estimate` 在内的所有生命周期枚举。
+
+### 6.3 多 Agent 系统
+
+- **Build Agent**：全工具权限，执行修改。
+- **Plan Agent**：只读权限（read, grep, lsp）。
+- **无缝切换**：终端内 Tab 键秒切，切换时完成 Plan-to-Build 的分析结果继承（将分析报告压入 `system-reminder` 上下文）。
+
+---
+
+## 七、工具层设计
+
+### 7.1 流式异步 Hash-Anchored Edit（哈希锚定编辑）
+
+**核心架构升级**：
+传统方案读取 5MB 甚至更大的日志/JSON文件时，使用 `fs.readFileSync` 并在主线程逐行计算 SHA-256，会造成长达数秒的 Event Loop 阻塞，导致 TUI 假死卡顿。
+
+**重构方案**：采用 **Stream-based Asynchronous Hash 计算**。
+使用 `fs.createReadStream` 结合 Node.js 的 `Transform Stream`。对文件进行流式切分，每读一个 Chunk 异步计算一次多行的 Hash。在整个超大文件编辑过程中，确保主线程 TUI 帧率不掉下 30fps。安全规则：任一 oldHash 匹配失败即回退。
+
+### 7.2 9-Pass Fuzzy Edit（九轮模糊编辑）
+
+在 Hash 因并发修改等原因严格不匹配时，启动安全网：
+1. simpleMatch (精确)
+2. lineTrimmedMatch (去尾白)
+3. blockAnchorMatch (锚点模糊)
+4. whitespaceNormalizedMatch (压缩连续空白)
+5. indentationFlexibleMatch (忽略缩进)
+6. escapeNormalizedMatch (统一转义)
+7. trimmedBoundaryMatch (修剪边界)
+8. contextAwareMatch (上下文定位)
+9. multiOccurrenceMatch (多匹配选优)
+
+### 7.3 Stale-read Validation 与系统级提权 (System-level Bypass)
+
+**死锁痛点修复**：如果发现当前代码已经被外部修改，Agent 会自动发起重读操作（read_file）。但在 Deny-first 引擎下，如果默认规则要求 `Ask` 用户确认，这种机器自发的自动纠正会被弹窗打断，导致死锁。
+
+**系统级免检提权**：
+为内部生成的自动重试操作隐式注入 **System-level Bypass** 标志。安全层遇到该标志，静默放行读取操作，让 LLM 平滑拿到最新 diff，不在 TUI 骚扰用户。
+
+### 7.4 其它工具集
+
+- **LSP Touch**：文件编辑后触发 `vscode-languageclient`，3 秒内若发生类型或语法错误，自动反馈至本轮消息要求 LLM 修复。
+- **内置生态**：Unified Diff 预览、`bash`（带10000字截断与超时控制）、`grep`、MCP 支持。
+
+---
+
+## 八、安全层设计
+
+### 8.1 Deny-first 权限引擎
+
+"默认拒绝"（Deny-first）。三级决策：`Deny` 规则优先（如拦截 `rm -rf /`），`Allow` 规则次之（如所有读操作），未命中强行 `Ask` 弹窗。
+
+### 8.2 并发安全分类
+
+由 `isConcurrencySafe` 布尔值控制。读安全，写独占。
+
+### 8.3 Git Snapshot 局部单文件追踪
+
+**大仓库优化**：
+对于极大型项目（数十万个文件），复制整个工作区到 `~/.reasonix/snapshot/` 极度缓慢。改为在工作区根目录维护一个隐蔽的 `.deepicode_patches/` 目录，每次写操作前仅在其中生成**目标单文件的变更历史快照**。满足毫秒级 `revert()` 的同时避免 IO 阻塞。
+
+---
+
+## 九、数据流
+
+### 9.1 单轮对话与并发控制数据流
+
+1. 用户输入触发 TUI，状态机切为 `isStreaming`。
+2. 策略引擎接管：TaskClassifier 分类 → ChainEstimator 动态预估 → 抛出倒计时 TUI。
+3. 超时或确认后，执行 `DeepSeekClient.stream()` 发起请求。
+4. AST 局部解析器在 Stream 中寻找 JSON 参数树的合法边界。
+5. 闭合一刻，若 `isConcurrencySafe=true`，不等后续文本生成，立即触发 Eager Dispatch 并发读取。
+6. 并发结果合并回写，抛出 `done`，保存会话。
+
+### 9.2 Context Fold 缓存断崖处理流
+
+1. 计数器触及 65% 阈值，启动异步 Fold。
+2. Fold 完成后，调用 `SegmentedLog.compactInPlace()` 将活跃区压入归档区。
+3. 抛出 Context Optimized 事件，UI 闪烁，Token Estimator 在下一轮强置 Cache Hit = 0，确保预期费用透明。
+
+---
+
+## 十、接口定义
+
+### 10.1 核心层与壳层接口
+
+`CoreEngine` 接口：
+- `submit(userInput, agent)` → `AsyncGenerator<LoopEvent>`
+- `getState()` → `AgentState`
+- `interrupt()` → `void`
+
+`LoopEvent` 联合角色：
+`assistant_delta`, `tool_call_delta`, `tool_start`, `tool`, `warning`, `error`, `status`, `done`, `strategy_notify`, `strategy_estimate_refined`, **`token_estimate`**。
+
+### 10.2 工具层与权限接口
+
+- `AgentTool`：`execute()`, `isConcurrencySafe`, JSON Schema spec。
+- `PermissionSystem`：`check(tool, args, context)` → `PermissionDecision(allow/deny/ask)`。
+
+---
+
+## 十一、功能需求总览
+
+### 11.1 核心引擎需求
+
+| 需求 ID | 需求描述 | 优先级 | 备注 |
+|---------|---------|--------|------|
+| ENG-001 | Prefix-cache 优化的 SegmentedLog | P0 | 替代有歧义的 AppendOnlyLog |
+| ENG-002 | DeepSeek API 客户端（SSE 流式） | P0 | 原生支持 |
+| ENG-003 | Tool-call repair 流水线 | P0 | 防二次计费 |
+| ENG-004 | R1 thought harvesting (防历史污染) | P0 | R1特色，拦截写入归档区 |
+| ENG-005 | Tokenizer Worker (含 Bypass 阈值和 Map 回收) | P0 | 彻底消除 O(n) 与 IPC 卡顿 |
+| ENG-006 | Eager Tool Dispatch (AST 级流式 JSON 解析防假闭合) | P0 | 提速核心与防暴走 |
+| ENG-011 | ~~自动模型升级~~ | - | **(Superseded)** 已被 ENG-013/014/015 取代 |
+| ENG-013 | TaskClassifier：零成本规则复杂度分类 | P1 | 策略系统 |
+| ENG-014 | ChainEstimator：滑动 TPS 与 Agentic 链路补偿 | P1 | 策略系统 |
+| ENG-015 | StrategySelector：倒计时与自动/手动模型降级 | P1 | 策略系统 |
+
+### 11.2 壳层与编辑需求
+
+| 需求 ID | 需求描述 | 优先级 | 备注 |
+|---------|---------|--------|------|
+| SHELL-001 | Ink/React TUI (终端原生界面) | P0 | |
+| EDIT-001 | Stream-based Hash-anchored edits (异步流式防阻塞) | P0 | 核心大文件编辑方案 |
+| EDIT-002 | 9-Pass Fuzzy Edit Matching ( fallback ) | P1 | 保底方案 |
+| SEC-001 | Deny-first 权限规则引擎与 System-level bypass | P0 | 权限安全与防死锁提权 |
+
+---
+
+## 十二、非功能需求
+
+### 12.1 性能
+- **TUI 帧率**：大于 30fps，在大文件 Hash 流式计算与并发读写期间无卡顿。
+- **Token 计数**：短增量（<2000字）O(1) 旁路同步计算，< 1ms；大文本卸载，不阻塞主线程。
+- **响应速度**：AST 解析通过后，首工具 Eager 启动延迟 < 10ms。
+
+### 12.2 成本
+- **Cache Hit**：非 Fold 轮次 > 99.8%。
+- **对账误差**：CNY 计价预估系统与 DeepSeek 真实账单差额 < 20%。
+
+### 12.3 可靠性
+- **并发保护**：哈希计算失败时抛弃更改；死循环 JSON 修理不重发请求。
+
+---
+
+## 十三、约束条件
+
+- **语言与生态**：纯 TypeScript 编写，运行于 Node.js 22+，利用最新 ESM 与 Transform Stream 特性。
+- **架构红线**：不引入 Vercel AI SDK 等破坏原生 SSE 字段提取的中间层；不可引入机器学习模型判定器（保证 0 Token 调度耗费）。
+
+---
+
+## 十四、实施计划 (摘要)
+
+详细计划见《Deepicode 实施计划》。总体分阶：
+1. **Phase 0**：核心接口搭建。
+2. **Phase 1**：核心引擎（Map Tokenizer, AST Eager, SegmentedLog）。
+3. **Phase 2**：策略选择系统（CNY Native, 滑动 TPS）。
+4. **Phase 3**：双模式事件与壳层。
+5. **Phase 4**：工具层（流式异步 Hash 编辑重构, Bypass）。
+6. **Phase 5**：安全层（单文件快照）。
+7. **Phase 6/7**：LSP、TTSR 及最终压测调优。
+
+---
+
+## 十五、风险与应对
+
+| 风险 | 概率 | 影响 | 应对策略 |
+|------|------|------|---------|
+| DeepSeek API 字段变化 | 中 | 高 | 封装 provider 层，将 API 字段解析隔离在 DeepSeekClient 内部 |
+| AST 假闭合防御失灵 | 低 | 高 | 畸形代码输出导致误发时，结合正则底线判定，失败退回 Scavenge 阶段重新请求 |
+| Worker 线程不可用 | 低 | 中 | 提供主线程降级计算 Fallback |
+| glob 扫描耗时过长 | 中 | 中 | 对超大 monorepo 限制最多扫 50 个文件，设 500ms 超时强制中断 |
+| 预估打分边缘效应 | 低 | 低 | 5~6 分处默认走 reasoner-budget 作为中坚兜底，可覆盖大多数情况 |
+| JSONL 写入被强杀中断 | 低 | 中 | 使用原子写操作（先写临时文件再 rename）确保可恢复性 |
+
+---
+
+## 十六、技术栈
+
+| 模块 | 技术与库 | 说明 |
+|------|------|------|
+| 运行时 | Node.js 22+ | 原生 Fetch, Worker Threads, Transform Streams |
+| TUI 层 | Ink 4.x + React 18 | 终端渲染与组件树管理 |
+| 分词器 | js-tiktoken (WASM) | 部署于 Worker 池，Map 队列调度 |
+| 大文件编辑 | fs.createReadStream | 完全规避 readFileSync 的异步流块式哈希算法 |
+| 语言服务 | vscode-languageclient | 提供秒级的类型推导和错误检查反馈 |
+| 测试框架 | Vitest | 单元、E2E 及并发竞态压测 |
