@@ -173,6 +173,9 @@ export class DeepSeekClient {
           try {
             json = JSON.parse(payload) as SSEChunk
           } catch {
+            if (process.env.DEEPICODE_DEBUG) {
+              console.debug("[SSE] JSON parse failed:", payload.slice(0, 200))
+            }
             continue
           }
 
@@ -276,11 +279,14 @@ function isAbortError(error: unknown): boolean {
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, ms)
     const onAbort = () => {
       clearTimeout(timer)
       reject(new DOMException("Aborted", "AbortError"))
     }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
     signal?.addEventListener("abort", onAbort, { once: true })
   })
 }

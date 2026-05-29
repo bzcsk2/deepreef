@@ -154,12 +154,17 @@ describe("fuzzyReplaceOnce", () => {
     expect(res!.edited).toBe("prefix\nREPLACED\nsuffix")
   })
 
-  it("multiOccurrence: non-first occurrence when first is non-unique", () => {
+  it("should reject ambiguous old_string with multiple occurrences", () => {
     const haystack = "common\ncommon\nunique"
     const needle = "common"
     const res = fuzzyReplaceOnce(haystack, needle, "REPLACED")
-    expect(res).not.toBeNull()
-    expect(res!.method).toBe("multiOccurrence")
-    expect(res!.edited).toBe("common\nREPLACED\nunique")
+    expect(res).toBeNull()
+  })
+
+  it("should match unique old_string with surrounding context", () => {
+    const haystack = "function a() { return 1 }\nfunction b() { return 2 }"
+    const result = fuzzyReplaceOnce(haystack, "a() { return 1", "a() { return 42")
+    expect(result).not.toBeNull()
+    expect(result!.edited).toContain("return 42")
   })
 })

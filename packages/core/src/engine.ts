@@ -1,13 +1,11 @@
+import { randomUUID } from "node:crypto"
 import type { DeepicodeConfig } from "./config.js"
 import { ContextManager } from "./context/manager.js"
 import type { ChatMessage, ToolCall, ToolSpec } from "./types.js"
-import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, ToolContext, SessionStats, ToolResult } from "./interface.js"
+import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolContext, ToolResult } from "./interface.js"
 import { DeepSeekClient } from "./client.js"
 import { StreamingToolExecutor } from "./streaming-executor.js"
 import { AsyncSessionWriter } from "./session.js"
-
-/** 全局会话计数器，用于生成唯一会话 ID */
-let sessionCounter = 0
 
 /**
  * ReasonixEngine 是 Deepicode 的核心引擎，负责：
@@ -51,7 +49,7 @@ export class ReasonixEngine implements CoreEngine {
     this.config = config
     this.ctx = new ContextManager(config.maxContextRounds)
     this.client = new DeepSeekClient()
-    this.sessionId = `session-${++sessionCounter}-${Date.now()}`
+    this.sessionId = randomUUID()
     this.toolExecutor = new StreamingToolExecutor(this.tools, this.sessionId)
     this.onStart = onStart
     this.onStart?.()
@@ -251,7 +249,7 @@ export class ReasonixEngine implements CoreEngine {
                 yield { role: "status", content: "tools_completed" }
                 this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
               } else if (finishedWithToolUse) {
-                // 上一轮已经是工具调用，本次 [DONE] 来自工具调用后的流结束标记，继续 while 循环
+                // 防御性分支：client fix 后二次 done 不应出现，但保留以防 API 行为变化
               } else {
                 // 纯文本响应（无工具调用），保存后结束
                 this.ctx.log.append({ role: "assistant", content: fullContent, reasoning_content: fullReasoning || null })
@@ -274,6 +272,11 @@ export class ReasonixEngine implements CoreEngine {
         }
 
         if (streamError) {
+          // 用户主动中断时立即退出，不进入重试
+          if (this._interrupted) {
+            yield { role: "status", content: "interrupted" }
+            return
+          }
           // 如果有部分内容，先保存再重试
           if (fullContent) {
             this.ctx.log.append({ role: "assistant", content: fullContent, reasoning_content: fullReasoning || null })

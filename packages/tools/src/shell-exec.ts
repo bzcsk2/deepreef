@@ -134,5 +134,5 @@ async function runBash(command: string, cwd: string, timeoutMs: number, maxChars
 
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s
-  return s.slice(0, max)
+  return s.slice(0, max) + `\n... [truncated: ${s.length - max} more chars]`
 }

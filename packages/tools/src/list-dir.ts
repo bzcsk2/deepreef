@@ -35,7 +35,7 @@ export function createListDirTool(): AgentTool {
           const st = await stat(full)
           items.push({ name, type: st.isDirectory() ? "dir" : "file", size: st.size })
         } catch {
-          items.push({ name, type: "file" })
+          items.push({ name, type: "unknown" })
         }
       }
 

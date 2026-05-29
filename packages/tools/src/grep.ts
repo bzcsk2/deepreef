@@ -1,5 +1,5 @@
 import { resolve } from "node:path"
-import { execSync } from "node:child_process"
+import { spawnSync } from "node:child_process"
 import type { AgentTool } from "../../core/src/interface.js"
 
 export function createGrepTool(): AgentTool {
@@ -55,22 +55,21 @@ export function createGrepTool(): AgentTool {
 
 function runSearch(pattern: string, searchPath: string, include?: string): string {
   try {
-    const rgCmd = ["rg", "-n", "--no-heading"]
-    if (include) rgCmd.push("-g", include)
-    rgCmd.push(pattern, searchPath)
-    return execSync(rgCmd.join(" "), { encoding: "utf-8", timeout: 15000 })
+    const rgArgs = ["-n", "--no-heading"]
+    if (include) rgArgs.push("-g", include)
+    rgArgs.push(pattern, searchPath)
+    const result = spawnSync("rg", rgArgs, { encoding: "utf-8", timeout: 15000 })
+    if (result.error || result.status === 127) throw result.error ?? new Error("rg not found")
+    return result.stdout ?? ""
   } catch {
     // rg not found or failed, fallback to grep
-    const grepCmd = ["grep", "-rn"]
-    if (include) grepCmd.push(`--include=${include}`)
-    grepCmd.push(pattern, searchPath)
-    try {
-      return execSync(grepCmd.join(" "), { encoding: "utf-8", timeout: 15000 })
-    } catch (e: unknown) {
-      const err = e as { stdout?: string; stderr?: string; status?: number }
-      // grep returns exit code 1 when no matches found
-      if (err.status === 1) return ""
-      throw e
-    }
+    const grepArgs = ["-rn"]
+    if (include) grepArgs.push(`--include=${include}`)
+    grepArgs.push(pattern, searchPath)
+    const result = spawnSync("grep", grepArgs, { encoding: "utf-8", timeout: 15000 })
+    // grep returns exit code 1 when no matches found
+    if (result.status === 1) return ""
+    if (result.error) throw result.error
+    return result.stdout ?? ""
   }
 }

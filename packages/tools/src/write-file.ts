@@ -1,5 +1,5 @@
-import { writeFile as fsWriteFile } from "node:fs/promises"
-import { resolve } from "node:path"
+import { writeFile as fsWriteFile, mkdir } from "node:fs/promises"
+import { resolve, dirname } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
 import { isSensitive } from "./sensitive.js"
 
@@ -31,6 +31,7 @@ export function createWriteFileTool(): AgentTool {
         return { content: JSON.stringify({ error: `Writing to sensitive file is denied: ${args.path}` }), isError: true }
       }
 
+      await mkdir(dirname(path), { recursive: true })
       await fsWriteFile(path, args.content, "utf-8")
       return { content: JSON.stringify({ path: args.path, size: args.content.length, cwd: ctx.cwd }), isError: false }
     },

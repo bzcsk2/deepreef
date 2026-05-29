@@ -5,15 +5,14 @@ export interface FuzzyEditResult {
 }
 
 export function fuzzyReplaceOnce(haystack: string, needle: string, replacement: string): FuzzyEditResult | null {
-  // Pass 1: exact match (prefer last occurrence if multiple)
+  // Pass 1: exact match
   const allOccurrences = findAllOccurrences(haystack, needle)
-  if (allOccurrences.length > 0) {
-    if (allOccurrences.length >= 2) {
-      // Multi-occurrence: prefer the last one (more likely the intended edit target)
-      const lastIdx = allOccurrences[allOccurrences.length - 1]
-      return { edited: haystack.slice(0, lastIdx) + replacement + haystack.slice(lastIdx + needle.length), replacedCount: 1, method: "multiOccurrence" }
-    }
+  if (allOccurrences.length === 1) {
     return { edited: haystack.slice(0, allOccurrences[0]) + replacement + haystack.slice(allOccurrences[0] + needle.length), replacedCount: 1, method: "exact" }
+  }
+  if (allOccurrences.length >= 2) {
+    // 歧义：不猜测，让模型提供更多上下文
+    return null
   }
 
   // Pass 2: trimmed variants (trim entire needle, or trim right sides of lines)

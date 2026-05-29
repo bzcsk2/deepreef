@@ -47,7 +47,15 @@ export class ContextManager {
         if (log[i].role === "user") userIdx.push(i)
       }
       if (userIdx.length > this.maxRounds) {
-        const cutFrom = userIdx[userIdx.length - this.maxRounds]
+        let cutFrom = userIdx[userIdx.length - this.maxRounds]
+        // 向前扫描，确保不切断 tool 消息组（孤立 tool 消息会导致 API 400）
+        for (let i = cutFrom; i < log.length; i++) {
+          if (log[i].role === "tool" && (i === 0 || log[i - 1].role !== "assistant")) {
+            while (i < log.length && log[i].role !== "user") i++
+            cutFrom = i
+            break
+          }
+        }
         log = log.slice(cutFrom)
       }
     }
