@@ -202,7 +202,8 @@
 | Cache miss 阵痛事件 | 未完成 | 无 fold 决策 |
 | assistant_final 协议边界 | 完成 | 每次模型响应后产出完整 assistant 消息边界 |
 | 工具结果顺序确定性 | 完成 | shared 工具并发执行后按声明 index 顺序提交到上下文 |
-| 核心测试 | 部分完成 | 现有 16 pass / 3 skip |
+| prefix fingerprint 覆盖 toolSpecs/fewShots | 完成 | cacheKey 三段组合，4 个单测覆盖三类变化 |
+| 核心测试 | 部分完成 | 现有 20 pass / 3 skip |
 
 ## Phase 2：智能推理强度调节系统
 
@@ -331,7 +332,7 @@ bun test
 结果：
 
 - `bun run typecheck`：通过。
-- `bun test`：16 pass / 3 skip / 0 fail（含 engine-tools 工具顺序测试）。
+- `bun test`：20 pass / 3 skip / 0 fail（含 fingerprint + engine-tools 测试）。
 
 测试文件：
 
@@ -354,7 +355,7 @@ bun test
 
 ## 已知限制
 
-- prefix fingerprint 尚未覆盖 toolSpecs / fewShots。
 - `edit` 工具仍是最小版本，不具备完整 9-pass。
+- 展示事件与协议事件尚未分层（`tool_progress` 未实现）。
 - Stale-read validation 尚未实现。
 - `session.ts` 尚不能恢复历史。

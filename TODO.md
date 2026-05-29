@@ -108,24 +108,33 @@
   - multiOccurrence
 - 所有 pass 有独立单测。
 
-## P2：Context 与 Session
+## P1.5：事件体系分层
 
-### 9. prefix fingerprint 覆盖真实请求前缀
+### 9. 展示事件与协议事件分层
+
+状态：待完成
 
 目标：
 
-- cacheKey 反映真实影响 prefix-cache 的内容。
+- 协议事件：`assistant_final`、`tool`、`done`
+- 展示事件：`status`、`tool_progress`、`warning`
 
 验收：
 
-- `ImmutablePrefix` 覆盖：
-  - system
-  - toolSpecs
-  - fewShots
-- 工具 schema 变化会改变 fingerprint。
-- 单测覆盖 system/tool/fewShot 三类变化。
+- `tool_progress` 事件可展示工具执行进度，不影响协议事件顺序
+- assistant_final/tool/done 保持协议 deterministic
 
-### 10. 接入 token 估算与 fold 决策
+## P2：Context 与 Session
+
+### 10. prefix fingerprint 覆盖真实请求前缀
+
+状态：完成 ✅（2026-05-29）
+
+- cacheKey 由 system + toolSpecs JSON + fewShots JSON 三者 SHA-256 组合计算
+- 工具 schema 变化会改变 fingerprint
+- 4 个单测覆盖 system/toolSpecs/fewShots 三类变化
+
+### 11. 接入 token 估算与 fold 决策
 
 目标：
 
@@ -137,7 +146,7 @@
 - 实现 75% fold 建议、80% force summary 的最小决策。
 - 暂时可用近似 token 估算，后续再替换 tokenizer worker。
 
-### 11. 完成 session 恢复
+### 12. 完成 session 恢复
 
 目标：
 
@@ -151,7 +160,7 @@
 
 ## P2：DeepSeekClient 稳定性
 
-### 12. 增加 API 重试与错误分类
+### 13. 增加 API 重试与错误分类
 
 目标：
 
@@ -163,7 +172,7 @@
 - 400 / 401 不重试，直接返回结构化错误。
 - 单测 mock fetch 覆盖 retry / no-retry。
 
-### 13. 补齐 SSE 边界测试
+### 14. 补齐 SSE 边界测试
 
 目标：
 
@@ -177,7 +186,7 @@
 
 ## P3：Shell / TUI / Agent 外壳
 
-### 14. 建立 shell 状态层
+### 15. 建立 shell 状态层
 
 目标：
 
@@ -188,7 +197,7 @@
 - `packages/shell/src/state.ts` 实现不可变状态更新。
 - 支持 messages、tool status、stats、errors。
 
-### 15. 重新评估 TUI 接入
+### 16. 重新评估 TUI 接入
 
 目标：
 
@@ -206,7 +215,7 @@
 
 ## P4：测试与文档
 
-### 16. README 重建
+### 17. README 重建
 
 目标：
 
@@ -216,7 +225,7 @@
 
 - 包含安装、配置、运行、测试、工具说明、限制。
 
-### 17. 增加 E2E 场景
+### 18. 增加 E2E 场景
 
 目标：
 
