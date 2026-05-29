@@ -6,7 +6,7 @@
 - `最小完成`：具备可用闭环，但未达到实施计划中的完整版要求。
 - `部分完成`：只完成子集能力，仍需后续补齐。
 
-最后更新：2026-05-28
+最后更新：2026-05-29
 
 ## Phase 0：脚手架搭建
 
@@ -61,7 +61,7 @@
 | 一轮简单对话可完成 | 完成 | 已用 CLI 单轮验证 |
 | 一次工具调用可完成 | 完成 | `read_file` / `bash` / `edit` 已接入 CLI |
 | CoreEngine 接口定义完整 | 部分完成 | 基础接口完成，策略/权限决策仍为空实现 |
-| LoopEvent 覆盖计划 role | 部分完成 | 当前未实现 `token_estimate` / `assistant_final` |
+| LoopEvent 覆盖计划 role | 部分完成 | 当前未实现 `token_estimate` |
 | TypeScript 编译零错误 | 完成 | `bun run typecheck` 通过 |
 
 ## Phase 1：核心引擎改造
@@ -88,7 +88,6 @@
 未达到计划完整版的部分：
 
 - 尚未实现 429/5xx 指数退避重试。
-- `reasoning_content` 目前主要作为流式事件输出，尚未作为正式历史字段 round-trip。
 
 ### Step 1.2 SegmentedLog 与 Session 持久化
 
@@ -159,7 +158,6 @@
 
 - 尚未实现 AST parser 防 JSON 假闭合。
 - 尚未实现边流式参数边提前执行。
-- shared 工具结果当前按完成顺序回传，后续如需协议确定性，应改为并发执行、按模型声明顺序提交。
 
 ### Step 1.6 Tool-call Repair 流水线
 
@@ -184,8 +182,6 @@
 未完成：
 
 - 尚未拆出计划中的 `loop.ts`。
-- 尚未实现 `assistant_final` 协议边界事件。
-- 尚未实现 reasoning_content 正式历史 round-trip。
 - 尚未实现预算、fold、repair、force summary。
 
 ### Phase 1 当前验证状态
@@ -193,12 +189,14 @@
 | 检查项 | 状态 | 说明 |
 | --- | --- | --- |
 | DeepSeekClient SSE 解析 | 最小完成 | content/reasoning/tool/usage 可解析 |
-| reasoning 分离 | 部分完成 | 流式事件已分离，历史 round-trip 未完成 |
+| reasoning 分离 | 完成 | 流式事件已分离，历史 round-trip 已实现 |
 | SegmentedLog / JSONL | 最小完成 | 仅 best-effort 追加写 |
 | 阈值旁路 | 未完成 | 无 token 估算模块 |
 | Tokenizer Map 回收 | 未完成 | 未实现 tokenizer pool |
 | AST 防假闭合 | 未完成 | 当前非 eager dispatch |
 | Cache miss 阵痛事件 | 未完成 | 无 fold 决策 |
+| assistant_final 协议边界 | 完成 | 每次模型响应后产出完整 assistant 消息边界 |
+| 工具结果顺序确定性 | 完成 | shared 工具并发执行后按声明 index 顺序提交到上下文 |
 | 核心测试 | 部分完成 | 现有 16 pass / 3 skip |
 
 ## Phase 2：智能推理强度调节系统
@@ -324,7 +322,7 @@ bun test
 结果：
 
 - `bun run typecheck`：通过。
-- `bun test`：16 pass / 3 skip / 0 fail。
+- `bun test`：16 pass / 3 skip / 0 fail（含 engine-tools 工具顺序测试）。
 
 测试文件：
 
@@ -347,8 +345,6 @@ bun test
 
 ## 已知限制
 
-- `assistant_final` 尚未实现，后续事件/reducer/TUI 接入前应补齐。
-- `reasoning_content` 尚未作为历史字段 round-trip。
 - prefix fingerprint 尚未覆盖 toolSpecs / fewShots。
 - 无权限层，`bash` / `edit` 当前没有用户确认与风险拦截。
 - `read_file` 目前没有路径沙箱、文件大小 outline mode、stale-read tracking。

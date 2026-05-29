@@ -158,10 +158,14 @@ export class ReasonixEngine implements CoreEngine {
               const isToolUse =
                 reason === "tool_calls" || reason === "tool_use" || reason === "toolUse" || reason === "toolCall" || reason === "tool"
 
+              // yield assistant_final before tool execution or done
+              yield { role: "assistant_final", content: fullContent, metadata: { reasoning: fullReasoning || undefined } }
+
               if (isToolUse) {
                 this.ctx.log.append({
                   role: "assistant",
-                  content: fullContent || fullReasoning || null,
+                  content: fullContent || null,
+                  reasoning_content: fullReasoning || null,
                   tool_calls: toolCalls,
                 })
                 this.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })
@@ -173,7 +177,7 @@ export class ReasonixEngine implements CoreEngine {
                 yield { role: "status", content: "tools_completed" }
                 this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
               } else {
-                this.ctx.log.append({ role: "assistant", content: fullContent })
+                this.ctx.log.append({ role: "assistant", content: fullContent, reasoning_content: fullReasoning || null })
                 yield { role: "done", metadata: { reason } as Record<string, unknown> }
                 this.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })
                 this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "done", metadata: { reason } } })

@@ -28,6 +28,9 @@ async function runPrompt(engine: ReasonixEngine, prompt: string): Promise<void> 
         output.write(event.content ?? "")
         wroteAssistantText = true
         break
+      case "assistant_final":
+        if (wroteAssistantText) output.write("\n")
+        break
       case "tool_start":
         output.write(`\n[tool] ${event.toolName ?? "unknown"} ...\n`)
         break

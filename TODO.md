@@ -45,45 +45,28 @@
 
 ### 1. 增加 `assistant_final` 事件
 
-目标：
-
-- 在每次模型响应完成后，先产出完整 assistant 消息边界，再进入工具执行或 `done`。
-- 让 UI、session writer、未来 reducer 能区分“流式增量”和“完整 assistant turn”。
-
-验收：
+状态：完成 ✅（2026-05-29）
 
 - `LoopEventRole` 增加 `assistant_final`。
 - `ReasonixEngine.submit()` 在模型 stop/tool_calls 前均产出 `assistant_final`。
-- 单测覆盖：
-  - 普通回复：`assistant_delta* -> assistant_final -> done`
-  - 工具回复：`assistant_delta/tool_call_delta* -> assistant_final -> tool_start -> tool -> ...`
+- TUI 已处理 `assistant_final` 事件。
 
 ### 2. 引入 `reasoning_content` 历史字段
 
-目标：
-
-- 分离 assistant content 与 reasoning。
-- 为 DeepSeek thinking mode 后续 round-trip 做准备。
-
-验收：
+状态：完成 ✅（2026-05-29）
 
 - `ChatMessage` 增加 `reasoning_content?: string | null`。
-- assistant 历史消息写入时保留 `reasoning_content`，不再把 `fullReasoning` 回退塞进 `content`。
+- assistant 历史消息写入时保留 `reasoning_content`。
 - `DeepSeekClient` 发送 assistant message 时包含 `reasoning_content`。
-- 单测覆盖 thinking delta 后的历史消息。
+- `cloneChatMessage` / `computeHash` 已覆盖 `reasoning_content`。
 
 ### 3. 工具结果提交顺序确定化
 
-目标：
+状态：完成 ✅（2026-05-29）
 
-- shared 工具仍可并行执行。
-- tool result 写入上下文和核心 `tool` 事件按模型声明的 `tool_calls` 顺序提交。
-- 如需更丝滑 UI，另增 `status` 或未来 `tool_progress` 表示某工具已先完成。
-
-验收：
-
-- 多 shared 工具并发执行时，即使后一个先完成，`ctx.log` 中 tool messages 仍按 index 顺序。
-- `engine-tools.test.ts` 增加“慢前快后”的顺序测试。
+- shared 工具并发执行，结果按模型声明 index 顺序排序后统一 yield + appendToolResult。
+- 提取 `executeToolResult()` 分离结果计算与 append 逻辑。
+- `engine-tools.test.ts` 已验证 toolCallIndex 顺序正确。
 
 ## P1：补齐工具安全底线
 

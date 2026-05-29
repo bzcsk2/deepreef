@@ -81,6 +81,9 @@ export class DeepSeekClient {
         }
         if (m.role === "assistant") {
           const msg: any = { role: "assistant", content: m.content }
+          if (m.reasoning_content !== undefined && m.reasoning_content !== null) {
+            msg.reasoning_content = m.reasoning_content
+          }
           if (m.tool_calls) msg.tool_calls = m.tool_calls
           return msg
         }

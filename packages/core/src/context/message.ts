@@ -15,6 +15,7 @@ export function cloneChatMessage(message: ChatMessage): ChatMessage {
   return {
     role: message.role,
     content: message.content,
+    reasoning_content: message.reasoning_content,
     tool_calls: message.tool_calls?.map(cloneToolCall),
     tool_call_id: message.tool_call_id,
     name: message.name,

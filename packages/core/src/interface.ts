@@ -4,6 +4,7 @@ import type { ChatMessage, ToolSpec, Usage } from "./types.js"
 
 export type LoopEventRole =
   | "assistant_delta"
+  | "assistant_final"
   | "reasoning_delta"
   | "tool_call_delta"
   | "tool_start"

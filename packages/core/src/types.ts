@@ -9,6 +9,7 @@ export type Role = "system" | "user" | "assistant" | "tool"
 export interface ChatMessage {
   role: Role               // 消息角色
   content: string | null   // 消息文本内容，可为 null（如仅包含 tool_calls 的 assistant 消息）
+  reasoning_content?: string | null  // 推理过程内容（如 DeepSeek reasoning_content）
   tool_calls?: ToolCall[]  // assistant 消息中携带的工具调用列表
   tool_call_id?: string    // tool 消息关联的 tool call ID
   name?: string            // tool 消息的工具名称

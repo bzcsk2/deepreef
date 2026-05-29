@@ -24,6 +24,7 @@ export class ImmutablePrefix {
       msgs.map((m) => ({
         role: m.role,
         content: m.content,
+        reasoning_content: m.reasoning_content ?? null,
         tool_calls: m.tool_calls ?? null,
         tool_call_id: m.tool_call_id ?? null,
         name: m.name ?? null,

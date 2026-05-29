@@ -23,18 +23,19 @@ export class StreamingToolExecutor {
         yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
       }
 
-      const pending = batch.map(({ tc, index }) => ({
-        index,
-        promise: exec.executeToolCall(tc, index, signal, appendToolResult),
-      }))
+      // Run all shared tools concurrently, collect results
+      const pending = batch.map(({ tc, index }) =>
+        exec.executeToolResult(tc, index, signal).then((r) => ({ index, ...r })) as Promise<{ index: number; event: LoopEvent; result: ToolResult }>,
+      )
 
-      while (pending.length > 0) {
-        const completed = await Promise.race(
-          pending.map(({ index, promise }) => promise.then((event) => ({ index, event }))),
-        )
-        const pendingIndex = pending.findIndex((item) => item.index === completed.index)
-        if (pendingIndex >= 0) pending.splice(pendingIndex, 1)
-        yield completed.event
+      const completed = await Promise.all(pending)
+      // Reorder by declaration index before yielding/appending
+      completed.sort((a, b) => a.index - b.index)
+
+      for (const { index, event, result } of completed) {
+        const originalTc = batch.find((b) => b.index === index)!.tc
+        appendToolResult(originalTc, result)
+        yield event
       }
     }
 
@@ -57,26 +58,14 @@ export class StreamingToolExecutor {
     yield* flushSharedBatch(this, sharedBatch)
   }
 
-  private async executeToolCall(
-    tc: ToolCall,
-    index: number,
-    signal: AbortSignal,
-    appendToolResult: (tc: ToolCall, result: ToolResult) => void,
-  ): Promise<LoopEvent> {
+  // Execute tool and return result without appending to context
+  private async executeToolResult(tc: ToolCall, index: number, signal: AbortSignal): Promise<{ event: LoopEvent; result: ToolResult }> {
     const handler = this.tools.get(tc.function.name)
     const toolCtx: ToolContext = { cwd: process.cwd(), sessionId: this.sessionId, signal }
 
     if (!handler) {
       const result = makeToolError(`Unknown tool: ${tc.function.name}`)
-      appendToolResult(tc, result)
-      return {
-        role: "error",
-        content: result.content,
-        toolName: tc.function.name,
-        toolCallIndex: index,
-        severity: "error",
-        metadata: result.metadata,
-      }
+      return { event: makeErrorEvent(result, tc.function.name, index), result }
     }
 
     let args: Record<string, unknown>
@@ -84,40 +73,48 @@ export class StreamingToolExecutor {
       args = parseToolArguments(tc.function.arguments)
     } catch (e) {
       const result = makeToolError(`Invalid arguments for ${tc.function.name}: ${errorMessage(e)}`)
-      appendToolResult(tc, result)
-      return {
-        role: "error",
-        content: result.content,
-        toolName: tc.function.name,
-        toolCallIndex: index,
-        severity: "error",
-        metadata: result.metadata,
-      }
+      return { event: makeErrorEvent(result, tc.function.name, index), result }
     }
 
     try {
       const result = normalizeToolResult(await handler.execute(args, toolCtx))
-      appendToolResult(tc, result)
       return {
-        role: result.isError ? "error" : "tool",
-        toolName: tc.function.name,
-        toolCallIndex: index,
-        content: result.content,
-        severity: result.isError ? "error" : undefined,
-        metadata: result.metadata,
+        event: {
+          role: result.isError ? "error" : "tool",
+          toolName: tc.function.name,
+          toolCallIndex: index,
+          content: result.content,
+          severity: result.isError ? "error" : undefined,
+          metadata: result.metadata,
+        },
+        result,
       }
     } catch (e) {
       const result = makeToolError(errorMessage(e))
-      appendToolResult(tc, result)
-      return {
-        role: "error",
-        content: result.content,
-        toolName: tc.function.name,
-        toolCallIndex: index,
-        severity: "error",
-        metadata: result.metadata,
-      }
+      return { event: makeErrorEvent(result, tc.function.name, index), result }
     }
+  }
+
+  private async executeToolCall(
+    tc: ToolCall,
+    index: number,
+    signal: AbortSignal,
+    appendToolResult: (tc: ToolCall, result: ToolResult) => void,
+  ): Promise<LoopEvent> {
+    const { event, result } = await this.executeToolResult(tc, index, signal)
+    appendToolResult(tc, result)
+    return event
+  }
+}
+
+function makeErrorEvent(result: ToolResult, toolName: string, index: number): LoopEvent {
+  return {
+    role: "error",
+    content: result.content,
+    toolName,
+    toolCallIndex: index,
+    severity: "error",
+    metadata: result.metadata,
   }
 }
 
