@@ -1,11 +1,38 @@
-import { mkdir, appendFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import { mkdir, appendFile, readFile } from "node:fs/promises"
+import { dirname, resolve } from "node:path"
 import type { ChatMessage } from "./types.js"
 
 export interface SessionRecord {
   ts: number
   type: "event" | "messages" | "stats"
   payload: unknown
+}
+
+export class SessionLoader {
+  static sessionDir = `${process.cwd()}/.deepicode/sessions`
+
+  static async read(sessionId: string): Promise<ChatMessage[]> {
+    const path = resolve(this.sessionDir, `${sessionId}.jsonl`)
+    let raw: string
+    try {
+      raw = await readFile(path, "utf-8")
+    } catch {
+      return []
+    }
+    const lines = raw.trim().split("\n")
+    let lastMessages: ChatMessage[] | null = null
+    for (const line of lines) {
+      try {
+        const rec: SessionRecord = JSON.parse(line)
+        if (rec.type === "messages" && Array.isArray(rec.payload)) {
+          lastMessages = rec.payload as ChatMessage[]
+        }
+      } catch {
+        continue
+      }
+    }
+    return lastMessages ?? []
+  }
 }
 
 export class SegmentedLog {

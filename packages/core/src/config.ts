@@ -12,6 +12,7 @@ export interface DeepicodeConfig {
   maxTokens: number    // 单次回复最大 token 数
   temperature: number  // 采样温度，越低越确定
   maxContextRounds?: number  // 上下文保留的最大对话轮数（默认 20），超出部分截断
+  contextWindow?: number     // 上下文窗口大小（token 数，默认 128K）
 }
 
 function loadApiKeyFromProjectFile(): string | undefined {
@@ -50,6 +51,7 @@ export function loadConfig(): DeepicodeConfig {
     maxTokens: 8192,
     temperature: 0.3,
     maxContextRounds: 20,
+    contextWindow: 128_000,
   }
 }
 

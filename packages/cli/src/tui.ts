@@ -37,6 +37,11 @@ async function runPrompt(engine: ReasonixEngine, prompt: string): Promise<void> 
       case "tool":
         output.write(formatToolEvent(event.toolName ?? "unknown", event.content ?? ""))
         break
+      case "tool_progress":
+        if (event.content === "running") {
+          output.write(`\r[tool] ${event.toolName ?? "unknown"} ...`)
+        }
+        break
       case "warning":
         output.write(`\nwarning: ${event.content ?? ""}\n`)
         break
@@ -105,7 +110,13 @@ async function main(): Promise<void> {
     return
   }
 
-  const engine = new ReasonixEngine(loadConfig(), clearReadTracker)
+  const sessionIdx = process.argv.indexOf("--session")
+  const sessionId = sessionIdx >= 0 ? process.argv[sessionIdx + 1] : undefined
+  const config = loadConfig()
+
+  const engine = sessionId
+    ? await ReasonixEngine.recover(config, sessionId)
+    : new ReasonixEngine(config, clearReadTracker)
   engine.setSystemPrompt(buildSystemPrompt(process.cwd()))
   engine.registerTool(createReadFileTool())
   engine.registerTool(createBashTool())

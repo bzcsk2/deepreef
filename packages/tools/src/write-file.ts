@@ -2,6 +2,7 @@ import { writeFile as fsWriteFile, mkdir } from "node:fs/promises"
 import { resolve, dirname } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
 import { isSensitive } from "./sensitive.js"
+import { safeStringify } from "./safe-stringify.js"
 
 export function createWriteFileTool(): AgentTool {
   return {
@@ -19,21 +20,21 @@ export function createWriteFileTool(): AgentTool {
     approval: "write",
     async execute(args, ctx) {
       if (typeof args.path !== "string" || !args.path) {
-        return { content: JSON.stringify({ error: "path is required" }), isError: true }
+        return { content: safeStringify({ error: "path is required" }), isError: true }
       }
       if (typeof args.content !== "string") {
-        return { content: JSON.stringify({ error: "content is required" }), isError: true }
+        return { content: safeStringify({ error: "content is required" }), isError: true }
       }
 
       const path = resolve(ctx.cwd, args.path)
 
       if (isSensitive(path)) {
-        return { content: JSON.stringify({ error: `Writing to sensitive file is denied: ${args.path}` }), isError: true }
+        return { content: safeStringify({ error: `Writing to sensitive file is denied: ${args.path}` }), isError: true }
       }
 
       await mkdir(dirname(path), { recursive: true })
       await fsWriteFile(path, args.content, "utf-8")
-      return { content: JSON.stringify({ path: args.path, size: args.content.length, cwd: ctx.cwd }), isError: false }
+      return { content: safeStringify({ path: args.path, size: args.content.length, cwd: ctx.cwd }), isError: false }
     },
   }
 }

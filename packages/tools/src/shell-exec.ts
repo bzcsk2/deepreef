@@ -2,6 +2,7 @@ import { spawn } from "node:child_process"
 import * as os from "node:os"
 import { resolve } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
+import { safeStringify, hasBinaryEncoding } from "./safe-stringify.js"
 
 const DENY_PATTERNS = [
   /\brm\s+(?:-[A-Za-z]*r[A-Za-z]*\s+.*\/\*|.*-[A-Za-z]*r[A-Za-z]*\s+\/)/, // catch rm -rf / or rm -rf /*
@@ -39,19 +40,22 @@ export function createBashTool(): AgentTool {
     approval: "exec",
     async execute(args, ctx) {
       if (typeof args.command !== "string" || !args.command.trim()) {
-        return { content: JSON.stringify({ error: "command is required" }), isError: true }
+        return { content: safeStringify({ error: "command is required" }), isError: true }
       }
-      const command = args.command
+      const command = args.command.trim()
       const denied = isDenied(command)
       if (denied) {
-        return { content: JSON.stringify({ error: `Command denied: matches dangerous pattern /${denied}/` }), isError: true }
+        return { content: safeStringify({ error: `Command denied: matches dangerous pattern /${denied}/` }), isError: true }
       }
       const cwd = typeof args.cwd === "string" ? resolve(ctx.cwd, args.cwd) : ctx.cwd
       const timeoutMs = typeof args.timeout_ms === "number" ? Math.max(0, Math.floor(args.timeout_ms)) : 30_000
       const maxChars = typeof args.max_chars === "number" ? Math.max(0, Math.floor(args.max_chars)) : 200_000
 
       const out = await runBash(command, cwd, timeoutMs, maxChars, ctx.signal)
-      return { content: JSON.stringify(out), isError: out.exitCode !== 0, metadata: { exitCode: out.exitCode } }
+      if (hasBinaryEncoding(out.stdout) || hasBinaryEncoding(out.stderr)) {
+        ;(out as any).encoding_warning = "output contains non-UTF-8 binary data"
+      }
+      return { content: safeStringify(out), isError: out.exitCode !== 0, metadata: { exitCode: out.exitCode } }
     },
   }
 }

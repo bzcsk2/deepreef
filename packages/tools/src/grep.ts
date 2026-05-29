@@ -1,6 +1,7 @@
 import { resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import type { AgentTool } from "../../core/src/interface.js"
+import { safeStringify } from "./safe-stringify.js"
 
 export function createGrepTool(): AgentTool {
   return {
@@ -19,7 +20,7 @@ export function createGrepTool(): AgentTool {
     approval: "read",
     async execute(args, ctx) {
       if (typeof args.pattern !== "string" || !args.pattern) {
-        return { content: JSON.stringify({ error: "pattern is required" }), isError: true }
+        return { content: safeStringify({ error: "pattern is required" }), isError: true }
       }
 
       const searchPath = typeof args.path === "string" ? resolve(ctx.cwd, args.path) : ctx.cwd
@@ -30,7 +31,7 @@ export function createGrepTool(): AgentTool {
       try {
         stdout = runSearch(pattern, searchPath, include)
       } catch {
-        return { content: JSON.stringify({ error: "Search failed. Pattern may be invalid or path not found." }), isError: true }
+        return { content: safeStringify({ error: "Search failed. Pattern may be invalid or path not found." }), isError: true }
       }
 
       const lines = stdout.split("\n").filter(Boolean)
@@ -39,7 +40,7 @@ export function createGrepTool(): AgentTool {
       const results = truncated ? lines.slice(0, maxResults) : lines
 
       return {
-        content: JSON.stringify({
+        content: safeStringify({
           pattern,
           path: args.path ?? ctx.cwd,
           results,

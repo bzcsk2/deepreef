@@ -6,7 +6,7 @@
 - `最小完成`：具备可用闭环，但未达到实施计划中的完整版要求。
 - `部分完成`：只完成子集能力，仍需后续补齐。
 
-最后更新：2026-05-29（N1/N3/N4/#7/#8 已完成）
+最后更新：2026-05-29（N2 + #9 + #11 + #12 完成）
 
 ## Phase 0：脚手架搭建
 
@@ -62,6 +62,7 @@
 | 一次工具调用可完成 | 完成 | `read_file` / `bash` / `edit` 已接入 CLI |
 | CoreEngine 接口定义完整 | 部分完成 | 基础接口完成，策略/权限决策仍为空实现 |
 | LoopEvent 覆盖计划 role | 部分完成 | 当前未实现 `token_estimate` |
+| 展示事件分层 (tool_progress) | 完成 | #9: 工具执行期间 yield `tool_progress` 事件 |
 | TypeScript 编译零错误 | 完成 | `bun run typecheck` 通过 |
 
 ## Phase 1：核心引擎改造
@@ -108,10 +109,15 @@
   - messages
   - stats
 
+额外完成：
+
+- #12: `SessionLoader.read()` 从 JSONL 恢复 messages
+- `ReasonixEngine.recover()` 静态工厂方法
+- `tui.ts` 支持 `--session <id>` CLI 参数
+
 未达到计划完整版的部分：
 
 - `SegmentedLog` 尚未接入主上下文替代 `AppendOnlyLog`。
-- 尚未实现 JSONL 恢复加载。
 - 尚未实现原子写入、rewrite、archive、compact 恢复。
 
 ### Step 1.3 ContextManager
@@ -130,11 +136,13 @@
 - prefix fingerprint 覆盖 toolSpecs 和 fewShots（不限于 system prompt）
 - 单元测试覆盖 system / toolSpecs / fewShots 三类变化
 - N1 上下文截断：`buildMessages()` 按 user 消息计数截断，保留最近 `maxContextRounds` 轮（默认 20），5 个单测
+- #11: `token-estimator.ts` 近似 token 估算（4 chars ≈ 1 token）
+- #11: `getFoldDecision()` 实现 65%/75%/80% fold 决策阈值
+- `ContextManager` 增加 `estimateTokens()` / `getFoldDecision()` 方法
 
 未完成：
 
 - 增量 token 统计旁路。
-- 65% / 75% / 80% fold 决策。
 - turn-start 估算。
 - cache miss 阵痛管理事件。
 
@@ -156,6 +164,7 @@
   - `exclusive` 工具串行执行。
   - `tool_start` 事件。
   - `tool` / `error` 结果事件。
+  - `tool_progress` 事件。
   - 工具结果写回上下文。
   - 工具返回内容保持为字符串。
 
@@ -204,8 +213,8 @@
 | --- | --- | --- |
 | DeepSeekClient SSE 解析 | 最小完成 | content/reasoning/tool/usage 可解析 |
 | reasoning 分离 | 完成 | 流式事件已分离，历史 round-trip 已实现 |
-| SegmentedLog / JSONL | 最小完成 | 仅 best-effort 追加写 |
-| 阈值旁路 | 未完成 | 无 token 估算模块 |
+| SegmentedLog / JSONL | 最小完成 | 追加写 + #12 恢复读 |
+| 阈值旁路 | 完成 | #11: 近似 token 估算 + fold 决策阈值 |
 | Tokenizer Map 回收 | 未完成 | 未实现 tokenizer pool |
 | AST 防假闭合 | 未完成 | 当前非 eager dispatch |
 | Cache miss 阵痛事件 | 未完成 | 无 fold 决策 |
@@ -352,7 +361,7 @@ bun test
 结果：
 
 - `bun run typecheck`：通过。
-- `bun test`：65 pass / 3 skip / 0 fail。
+- `bun test`：66 pass / 3 skip / 0 fail（#9/#11/#12 后测试依然全绿）。
 
 测试文件：
 
@@ -376,6 +385,45 @@ bun test
 | 会话持久化 | JSONL best-effort append | 写入 `.deepicode/sessions/`，不阻塞主流程 |
 | 当前 CLI | readline | 暂未接入真正 TUI 组件 |
 
+## Phase 1.5：事件体系
+
+### #9. 展示事件与协议事件分层
+
+状态：完成（2026-05-29）
+
+- `interface.ts` 新增 `tool_progress` 事件角色
+- `streaming-executor.ts` 在工具执行前/后 yield `tool_progress` 事件
+- `tui.ts` 展示 `[tool] <name> ...` 进度提示
+
+## N2. 工具输出非 UTF-8 乱码检测 + safeStringify
+
+状态：完成（2026-05-29）
+
+- 新增 `packages/tools/src/safe-stringify.ts`：
+  - `safeStringify(obj, maxLen)` — try-catch + 200K 截断
+  - `hasBinaryEncoding(s)` — 检测 `\uFFFD` 占比 > 5%
+- `shell-exec.ts` 在输出中检测编码警告
+- 所有 7 个工具文件的 `JSON.stringify` 替换为 `safeStringify`
+
+## #11. Token 估算与 fold 决策
+
+状态：完成（2026-05-29）
+
+- 新增 `packages/core/src/context/token-estimator.ts`：
+  - `estimateTokens(messages)` — 4 chars ≈ 1 token 近似估算
+  - `getFoldDecision(used, total)` — <65% none, 65-75% suggest, 75-80% suggest (warn), >80% force
+- `ContextManager.estimateTokens()` / `getFoldDecision()`
+- `config.ts` 增加 `contextWindow` 配置（默认 128K）
+
+## #12. Session 恢复
+
+状态：完成（2026-05-29）
+
+- `session.ts` 新增 `SessionLoader.read(sessionId)` — 从 JSONL 恢复 ChatMessage[]
+- `engine.ts` 新增 `ReasonixEngine.recover(config, sessionId)` 静态工厂
+- 构造器可选 `sessionId` 参数
+- `tui.ts` 支持 `--session <id>` CLI 参数
+
 ## ADVICE.md 修复汇总
 
 2026-05-29 根据 `ADVICE.md` 全面审查后完成以下修复：
@@ -394,15 +442,29 @@ bun test
 | N1 | 上下文无界增长 → 会话硬终止 | `context/manager.ts` / `config.ts` | buildMessages() 按 user 消息计数截断（默认 20 轮） |
 | N3 | hash-edit 临时文件泄漏 | `hash-edit.ts` | try-finally + tmpCreated 标记 |
 | N4 | stale-read 全局状态跨会话污染 | `engine.ts` / `tui.ts` | 构造函数回调 clearReadTracker() |
+| P0-1 | grep 命令注入 | `grep.ts` | execSync → spawnSync 传参数组 |
+| P0-2 | write_file 无 mkdir | `write-file.ts` | 增加 mkdir(dirname, recursive) |
+| P1-1 | 截断破坏 tool 消息对 | `context/manager.ts` | 截断后向前扫描配对 |
+| P1-2 | multiOccurrence 歧义 | `fuzzy-edit.ts` | 拒绝猜测，返回 null |
+| P1-3 | interrupt 延迟 | `engine.ts` | error 路径检查 _interrupted |
+| P2-1 | shell-exec 截断无提示 | `shell-exec.ts` | 追加 truncated 说明 |
+| P2-2 | sessionId 碰撞 | `engine.ts` | Date.now() → randomUUID() |
+| P2-3 | SSE JSON 解析静默丢失 | `client.ts` | DEEPICODE_DEBUG 日志 |
+| P2-4 | list-dir stat 失败 type 误导 | `list-dir.ts` | file → unknown |
+| P2-5 | sleep 监听器泄漏 | `client.ts` | timer 完成时 removeEventListener |
+| P2-6 | 死代码分支 | `engine.ts` | 增加防御性注释 |
 
 此外：
 - 系统提示词重写：全中文、环境注入、todowrite 任务跟踪、7 工具指南、闭环工作流
 - `grep` 工具回退机制修复：rg 不可用时 grep `--include` 参数格式错误
 - #7: hash-anchored edit 增加 oldHash 参数校验，6 个单测
 - #8: 9-pass fuzzy edit 完整实现（新增 5 pass），9 个单测
+- 清理 `sessionCounter` 全局变量（engine.ts）
+- N2: 所有工具的 JSON.stringify → safeStringify（7 文件，20+ 调用点）
+- #9: tool_progress 事件分层（interface/executor/tui）
+- #11: token 估算与 fold 决策（token-estimator.ts + ContextManager）
+- #12: session JSONL 恢复（SessionLoader + Recover 工厂）
 
 ## 已知限制
 
-- 展示事件与协议事件尚未分层（`tool_progress` 未实现）。
-- `session.ts` 尚不能恢复历史。
-- `grep` 工具使用同步 `execSync` 调用 rg/grep，不适合大代码库搜索。
+- `token_estimate` 事件尚未产出（#11 提供了 ContextManager 接口，未接入 loop event）。

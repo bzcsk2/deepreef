@@ -33,9 +33,11 @@ export class StreamingToolExecutor {
       completed.sort((a, b) => a.index - b.index)
 
       for (const { index, event, result } of completed) {
+        yield { role: "tool_progress", toolName: event.toolName, toolCallIndex: index, content: "running" }
         const originalTc = batch.find((b) => b.index === index)!.tc
         appendToolResult(originalTc, result)
         yield event
+        yield { role: "tool_progress", toolName: event.toolName, toolCallIndex: index, content: "done" }
       }
     }
 
@@ -52,7 +54,7 @@ export class StreamingToolExecutor {
       sharedBatch = []
 
       yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
-      yield await this.executeToolCall(tc, index, signal, appendToolResult)
+      yield* this.executeToolCall(tc, index, signal, appendToolResult)
     }
 
     yield* flushSharedBatch(this, sharedBatch)
@@ -95,15 +97,17 @@ export class StreamingToolExecutor {
     }
   }
 
-  private async executeToolCall(
+  private async *executeToolCall(
     tc: ToolCall,
     index: number,
     signal: AbortSignal,
     appendToolResult: (tc: ToolCall, result: ToolResult) => void,
-  ): Promise<LoopEvent> {
+  ): AsyncGenerator<LoopEvent, void> {
+    yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "running" }
     const { event, result } = await this.executeToolResult(tc, index, signal)
+    yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "done" }
     appendToolResult(tc, result)
-    return event
+    yield event
   }
 }
 

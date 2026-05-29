@@ -1,4 +1,5 @@
 import type { AgentTool } from "../../core/src/interface.js"
+import { safeStringify } from "./safe-stringify.js"
 
 interface TodoItem {
   content: string
@@ -34,14 +35,12 @@ export function createTodoWriteTool(): AgentTool {
     async execute(args) {
       const todos = args.todos
       if (!Array.isArray(todos) || todos.length === 0) {
-        return { content: JSON.stringify({ error: "todos array is required" }), isError: true }
+        return { content: safeStringify({ error: "todos array is required" }), isError: true }
       }
 
-      const items = todos as TodoItem[]
-      const summary = items.map((t) => `[${statusIcon(t.status)}] ${t.content}`).join("\n")
-
+      const summary = todos.map((t: TodoItem) => `[${statusIcon(t.status)}] ${t.content}`).join("\n")
       return {
-        content: JSON.stringify({ todos: items, summary }),
+        content: safeStringify({ todos, summary }),
         isError: false,
       }
     },

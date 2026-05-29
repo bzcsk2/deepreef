@@ -3,6 +3,7 @@ import { resolve } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
 import { recordRead } from "./stale-read.js"
 import { isSensitive } from "./sensitive.js"
+import { safeStringify } from "./safe-stringify.js"
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
@@ -24,27 +25,27 @@ export function createReadFileTool(): AgentTool {
     approval: "read",
     async execute(args, ctx) {
       if (typeof args.path !== "string" || !args.path) {
-        return { content: JSON.stringify({ error: "path is required" }), isError: true }
+        return { content: safeStringify({ error: "path is required" }), isError: true }
       }
       const path = resolve(ctx.cwd, args.path)
 
       if (isSensitive(path)) {
-        return { content: JSON.stringify({ error: `Reading sensitive file is denied: ${args.path}` }), isError: true }
+        return { content: safeStringify({ error: `Reading sensitive file is denied: ${args.path}` }), isError: true }
       }
 
       let fileStat
       try {
         fileStat = await stat(path)
       } catch {
-        return { content: JSON.stringify({ error: `File not found: ${args.path}` }), isError: true }
+        return { content: safeStringify({ error: `File not found: ${args.path}` }), isError: true }
       }
 
       if (!fileStat.isFile()) {
-        return { content: JSON.stringify({ error: `Not a file: ${args.path}` }), isError: true }
+        return { content: safeStringify({ error: `Not a file: ${args.path}` }), isError: true }
       }
 
       if (fileStat.size > MAX_FILE_SIZE) {
-        return { content: JSON.stringify({ error: `File too large (${fileStat.size} bytes). Max allowed: ${MAX_FILE_SIZE} bytes.` }), isError: true }
+        return { content: safeStringify({ error: `File too large (${fileStat.size} bytes). Max allowed: ${MAX_FILE_SIZE} bytes.` }), isError: true }
       }
 
       const maxChars = typeof args.max_chars === "number" ? Math.max(0, args.max_chars) : 200_000
@@ -64,7 +65,7 @@ export function createReadFileTool(): AgentTool {
       if (out.length > maxChars) out = out.slice(0, maxChars)
       recordRead(path, fileStat.mtimeMs, fileStat.size)
       return {
-        content: JSON.stringify({ path: args.path, content: out, cwd: ctx.cwd }),
+        content: safeStringify({ path: args.path, content: out, cwd: ctx.cwd }),
         isError: false,
       }
     },

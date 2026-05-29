@@ -5,6 +5,7 @@ import { hashAnchoredReplaceOnce } from "./hash-edit.js"
 import { fuzzyReplaceOnce } from "./fuzzy-edit.js"
 import { checkStale } from "./stale-read.js"
 import { isSensitive } from "./sensitive.js"
+import { safeStringify } from "./safe-stringify.js"
 
 export function createEditTool(): AgentTool {
   return {
@@ -24,13 +25,13 @@ export function createEditTool(): AgentTool {
     approval: "write",
     async execute(args, ctx) {
       if (typeof args.path !== "string" || !args.path) {
-        return { content: JSON.stringify({ error: "path is required" }), isError: true }
+        return { content: safeStringify({ error: "path is required" }), isError: true }
       }
       if (typeof args.old_string !== "string") {
-        return { content: JSON.stringify({ error: "old_string is required" }), isError: true }
+        return { content: safeStringify({ error: "old_string is required" }), isError: true }
       }
       if (typeof args.new_string !== "string") {
-        return { content: JSON.stringify({ error: "new_string is required" }), isError: true }
+        return { content: safeStringify({ error: "new_string is required" }), isError: true }
       }
 
       const path = resolve(ctx.cwd, args.path)
@@ -39,27 +40,27 @@ export function createEditTool(): AgentTool {
       const oldHash = typeof args.old_hash === "string" && args.old_hash ? args.old_hash : undefined
 
       if (isSensitive(path)) {
-        return { content: JSON.stringify({ error: `Editing sensitive file is denied: ${args.path}` }), isError: true }
+        return { content: safeStringify({ error: `Editing sensitive file is denied: ${args.path}` }), isError: true }
       }
 
       const staleCheck = await checkStale(path)
       if (staleCheck.isStale) {
-        return { content: JSON.stringify({ error: staleCheck.message, path: args.path }), isError: true }
+        return { content: safeStringify({ error: staleCheck.message, path: args.path }), isError: true }
       }
 
       const hashRes = await hashAnchoredReplaceOnce(path, oldString, newString, oldHash)
       if (hashRes) {
-        return { content: JSON.stringify({ path: args.path, replaced: hashRes.replacedCount, method: hashRes.method, cwd: ctx.cwd }), isError: false }
+        return { content: safeStringify({ path: args.path, replaced: hashRes.replacedCount, method: hashRes.method, cwd: ctx.cwd }), isError: false }
       }
 
       // fallback: load into memory and do fuzzy replace once
       const raw = await readFile(path, "utf-8")
       const fuzzy = fuzzyReplaceOnce(raw, oldString, newString)
       if (!fuzzy) {
-        return { content: JSON.stringify({ error: "old_string not found", path: args.path }), isError: true }
+        return { content: safeStringify({ error: "old_string not found", path: args.path }), isError: true }
       }
       await writeFile(path, fuzzy.edited, "utf-8")
-      return { content: JSON.stringify({ path: args.path, replaced: fuzzy.replacedCount, method: fuzzy.method, cwd: ctx.cwd }), isError: false }
+      return { content: safeStringify({ path: args.path, replaced: fuzzy.replacedCount, method: fuzzy.method, cwd: ctx.cwd }), isError: false }
     },
   }
 }

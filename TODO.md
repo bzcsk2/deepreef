@@ -6,16 +6,7 @@
 
 ### 9. 展示事件与协议事件分层
 
-状态：待完成
-
-目标：
-
-- 协议事件：`assistant_final`、`tool`、`done`
-- 展示事件：`status`、`tool_progress`、`warning`
-
-验收：
-
-- `tool_progress` 事件可展示工具执行进度，不影响协议事件确定性。
+状态：完成
 
 ---
 
@@ -23,41 +14,15 @@
 
 ### 11. 接入 token 估算与 fold 决策
 
-状态：待完成
-
-目标：为长会话做上下文预算保护。与 N1 互补——N1 做粗粒度兜底，本项做精确控制。
-
-验收：
-
-- `ContextManager` 提供估算接口（暂时可用近似 token 估算）。
-- 实现 75% fold 建议、80% force summary 的最小决策。
+状态：完成
 
 ### 12. 完成 session 恢复
 
-状态：待完成
-
-目标：JSONL 不只写入，也能恢复。
-
-验收：
-
-- 支持从 `.deepicode/sessions/<sessionId>.jsonl` 加载 messages。
-- 启动参数或 API 支持指定 sessionId。
-- 恢复后可继续对话。
+状态：完成
 
 ### N2. 工具输出的非 UTF-8 乱码检测
 
-状态：待完成
-
-目标：bash 命令对非 UTF-8 二进制输出做 `String(b)` 时产生静默乱码，模型可能基于乱码做出错误判断。
-
-方案：
-
-- `shell-exec.ts` 在 `String(b)` 后检测替换字符占比（� > 5%），附加 `encoding_warning` 字段。
-- 所有工具的 `JSON.stringify` 调用统一替换为 `safeStringify`（try-catch + 超长截断）。
-
-验收：
-
-- `cat /bin/ls` 类二进制输出在结果中带 `encoding_warning` 标记。
+状态：完成
 
 ---
 
@@ -173,3 +138,7 @@
 | N1 | 上下文无界增长截断 | 4821054 |
 | N3 | hash-edit 临时文件泄漏修复 | a3ace0a |
 | N4 | stale-read 全局状态清理 | a3ace0a |
+| N2 | 非UTF-8乱码检测 + safeStringify | — |
+| 9 | 展示事件与协议事件分层 | — |
+| 11 | token估算与fold决策 | — |
+| 12 | session恢复 | — |

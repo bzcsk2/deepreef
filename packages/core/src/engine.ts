@@ -5,7 +5,7 @@ import type { ChatMessage, ToolCall, ToolSpec } from "./types.js"
 import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolContext, ToolResult } from "./interface.js"
 import { DeepSeekClient } from "./client.js"
 import { StreamingToolExecutor } from "./streaming-executor.js"
-import { AsyncSessionWriter } from "./session.js"
+import { AsyncSessionWriter, SessionLoader } from "./session.js"
 
 /**
  * ReasonixEngine 是 Deepicode 的核心引擎，负责：
@@ -45,11 +45,11 @@ export class ReasonixEngine implements CoreEngine {
   /** 可选：新引擎初始化时调用的清理钩子（如清除全局 stale-read tracker） */
   private onStart?: () => void
 
-  constructor(config: DeepicodeConfig, onStart?: () => void) {
+  constructor(config: DeepicodeConfig, onStart?: () => void, sessionId?: string) {
     this.config = config
-    this.ctx = new ContextManager(config.maxContextRounds)
+    this.ctx = new ContextManager(config.maxContextRounds, config.contextWindow)
     this.client = new DeepSeekClient()
-    this.sessionId = randomUUID()
+    this.sessionId = sessionId ?? randomUUID()
     this.toolExecutor = new StreamingToolExecutor(this.tools, this.sessionId)
     this.onStart = onStart
     this.onStart?.()
@@ -59,6 +59,15 @@ export class ReasonixEngine implements CoreEngine {
     const writer = new AsyncSessionWriter(sessionPath)
     writer.init().catch(() => {})
     this.sessionWriter = writer
+  }
+
+  static async recover(config: DeepicodeConfig, sessionId: string): Promise<ReasonixEngine> {
+    const engine = new ReasonixEngine(config, undefined, sessionId)
+    const messages = await SessionLoader.read(sessionId)
+    if (messages.length > 0) {
+      engine.ctx.log.appendMany(messages)
+    }
+    return engine
   }
 
   /** 设置系统级 system prompt */

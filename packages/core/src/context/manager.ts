@@ -2,6 +2,8 @@ import type { ChatMessage } from "../types.js"
 import { AppendOnlyLog } from "./append-log.js"
 import { ImmutablePrefix } from "./immutable.js"
 import { VolatileScratch } from "./scratch.js"
+import { estimateTokens, getFoldDecision } from "./token-estimator.js"
+import type { FoldDecision } from "./token-estimator.js"
 
 /**
  * ContextManager — 三区域上下文管理器
@@ -29,11 +31,19 @@ export class ContextManager {
   // 上下文截断阈值：保留的最大对话轮数（按 user 消息计数），0 表示不截断
   private maxRounds: number
 
-  constructor(maxRounds = 20) {
+  constructor(maxRounds = 20, private contextWindow = 128_000) {
     this.prefix = new ImmutablePrefix()
     this.log = new AppendOnlyLog()
     this.scratch = new VolatileScratch()
     this.maxRounds = maxRounds
+  }
+
+  estimateTokens(): number {
+    return estimateTokens(this.buildMessages())
+  }
+
+  getFoldDecision(): FoldDecision {
+    return getFoldDecision(this.estimateTokens(), this.contextWindow)
   }
 
   /** 组装完整的 messages 数组：prefix + log（截断后）+ scratch */

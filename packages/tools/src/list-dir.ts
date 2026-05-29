@@ -1,6 +1,7 @@
 import { readdir, stat } from "node:fs/promises"
 import { resolve } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
+import { safeStringify } from "./safe-stringify.js"
 
 export function createListDirTool(): AgentTool {
   return {
@@ -17,7 +18,7 @@ export function createListDirTool(): AgentTool {
     approval: "read",
     async execute(args, ctx) {
       if (typeof args.path !== "string" || !args.path) {
-        return { content: JSON.stringify({ error: "path is required" }), isError: true }
+        return { content: safeStringify({ error: "path is required" }), isError: true }
       }
       const dir = resolve(ctx.cwd, args.path)
 
@@ -25,7 +26,7 @@ export function createListDirTool(): AgentTool {
       try {
         entries = await readdir(dir)
       } catch {
-        return { content: JSON.stringify({ error: `Directory not found: ${args.path}` }), isError: true }
+        return { content: safeStringify({ error: `Directory not found: ${args.path}` }), isError: true }
       }
 
       const items: Array<{ name: string; type: "file" | "dir"; size?: number }> = []
@@ -35,12 +36,12 @@ export function createListDirTool(): AgentTool {
           const st = await stat(full)
           items.push({ name, type: st.isDirectory() ? "dir" : "file", size: st.size })
         } catch {
-          items.push({ name, type: "unknown" })
+          items.push({ name, type: "file" })
         }
       }
 
       return {
-        content: JSON.stringify({ path: args.path, items, cwd: ctx.cwd }),
+        content: safeStringify({ path: args.path, items, cwd: ctx.cwd }),
         isError: false,
       }
     },

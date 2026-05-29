@@ -15,6 +15,7 @@ export type LoopEventRole =
   | "done"
   | "strategy_notify"
   | "strategy_estimate_refined"
+  | "tool_progress"
 
 export interface LoopEvent {
   role: LoopEventRole
