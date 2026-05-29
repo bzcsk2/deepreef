@@ -6,7 +6,7 @@
 - `最小完成`：具备可用闭环，但未达到实施计划中的完整版要求。
 - `部分完成`：只完成子集能力，仍需后续补齐。
 
-最后更新：2026-05-29（N2 + #9 + #11 + #12 完成）
+最后更新：2026-05-30（ADVICE.md P1x3 + P2x3 全部修复）
 
 ## Phase 0：脚手架搭建
 
@@ -361,7 +361,7 @@ bun test
 结果：
 
 - `bun run typecheck`：通过。
-- `bun test`：66 pass / 3 skip / 0 fail（#9/#11/#12 后测试依然全绿）。
+- `bun test`：66 pass / 3 skip / 0 fail（ADVICE.md v2 修复后测试依然全绿）。
 
 测试文件：
 
@@ -450,9 +450,15 @@ bun test
 | P2-1 | shell-exec 截断无提示 | `shell-exec.ts` | 追加 truncated 说明 |
 | P2-2 | sessionId 碰撞 | `engine.ts` | Date.now() → randomUUID() |
 | P2-3 | SSE JSON 解析静默丢失 | `client.ts` | DEEPICODE_DEBUG 日志 |
-| P2-4 | list-dir stat 失败 type 误导 | `list-dir.ts` | file → unknown |
+| P2-4 | list-dir stat 失败 type 误导 | `list-dir.ts` | file → unknown（v2 改为 type: "unknown"） |
 | P2-5 | sleep 监听器泄漏 | `client.ts` | timer 完成时 removeEventListener |
 | P2-6 | 死代码分支 | `engine.ts` | 增加防御性注释 |
+| P1-1 | finish_reason 不一致 | `client.ts` / `engine.ts` | 提取 `isToolUseFinishReason` 共享函数 |
+| P1-2 | 空 toolCalls 死循环 | `engine.ts` | empty guard + yield warning |
+| P1-3 | token-estimator 忽略 reasoning | `token-estimator.ts` | 加入 reasoning_content 估算 |
+| P2-1 | read_file 截断无提示 | `file-ops.ts` | 追加 truncation notice |
+| P2-2 | list-dir 标记未知为 file | `list-dir.ts` | type 扩展为 `"unknown"` |
+| P2-5 | SegmentedLog 死代码 | `session.ts` | 删除类定义 |
 
 此外：
 - 系统提示词重写：全中文、环境注入、todowrite 任务跟踪、7 工具指南、闭环工作流
@@ -465,6 +471,12 @@ bun test
 - #11: token 估算与 fold 决策（token-estimator.ts + ContextManager）
 - #12: session JSONL 恢复（SessionLoader + Recover 工厂）
 - reasoning_content 不入上下文：client.ts 不再回传 + engine.ts 三处 log.append 不再写入
+- P1-1: `isToolUseFinishReason` 共享函数，client.ts + engine.ts 统一 5 种 finish_reason 判断
+- P1-2: engine.ts 空 toolCalls 死循环保护（yield warning + break）
+- P1-3: token-estimator 加入 reasoning_content 估算
+- P2-1: read_file 截断追加 `[truncated: N more chars]` 提示
+- P2-2: list-dir stat 失败标记为 `"unknown"` 类型（扩展 type 联合）
+- P2-5: 删除 session.ts 中 SegmentedLog 死代码类
 
 ## 已知限制
 

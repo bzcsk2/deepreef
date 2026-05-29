@@ -26,7 +26,7 @@
 
 ---
 
-## P2：DeepSeekClient 稳定性
+## P4：测试与文档
 
 ### 14. 补齐 SSE 边界测试
 
@@ -138,7 +138,8 @@
 | N1 | 上下文无界增长截断 | 4821054 |
 | N3 | hash-edit 临时文件泄漏修复 | a3ace0a |
 | N4 | stale-read 全局状态清理 | a3ace0a |
-| N2 | 非UTF-8乱码检测 + safeStringify | — |
-| 9 | 展示事件与协议事件分层 | — |
-| 11 | token估算与fold决策 | — |
-| 12 | session恢复 | — |
+| N2 | 非UTF-8乱码检测 + safeStringify | ad8785a |
+| 9 | 展示事件与协议事件分层 | ad8785a |
+| 11 | token估算与fold决策 | ad8785a |
+| 12 | session恢复 | ad8785a |
+| P1-1~P1-3 + P2-1/P2-2/P2-5 | ADVICE.md v2 全部 6 项 Bug | fdb7cff |
