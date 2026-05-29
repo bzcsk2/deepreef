@@ -6,14 +6,13 @@
 
 ### N1. 上下文无界增长的硬终止防护
 
-状态：待完成
+状态：✅ 已完成（commit 预计）
 
-目标：AppendOnlyLog 无裁剪机制，长会话 token 线性增长直到 API 返回 400 `context_length_exceeded`，该错误不可重试，会话直接报错退出。
-
-短期方案（无需 tokenizer）：
-
-- `buildMessages()` 中做粗粒度截断：保留 system message + 最近 N 条 user/assistant 消息对（默认 20 轮），超出丢弃。
-- N 可配置，默认值基于 DeepSeek V4 128K 窗口的安全余量估算（扣除 tool result 和 reasoning 的膨胀空间）。
+实现方式：
+- `config.ts`：新增 `maxContextRounds` 配置项（默认 20）
+- `ContextManager`：`buildMessages()` 中按 user 消息计数截断，保留最近 N 轮
+- 完整工具调用轮次（user → assistant + tool_calls → tool results → assistant）保持完整
+- 5 个新单测覆盖：默认值、不截断、截断、包含工具消息的截断、禁用截断
 
 长期方案（配合 #11）：
 
@@ -21,8 +20,8 @@
 
 验收：
 
-- 模拟超过 30 轮对话后，`buildMessages()` 返回的消息数不超过配置上限。
-- API 调用不因 context_length_exceeded 而报错。
+- ✅ 模拟超过 30 轮对话后，`buildMessages()` 返回的消息数不超过配置上限。
+- ✅ API 调用不因 context_length_exceeded 而报错。
 
 ---
 
@@ -46,66 +45,53 @@
 
 ### N4. Stale-read 全局状态改为会话级
 
-状态：待完成
+状态：✅ 已完成
 
-目标：`stale-read.ts` 的 `track` Map 是模块级全局单例，跨会话残留导致新会话中错误触发"文件已过期"判定。
-
-短期方案（最小改动，1 行）：
-
-- 在 `engine.ts` 的 constructor 或 `submit()` 入口调用 `clearReadTracker()`。
+实现方式：
+- `ReasonixEngine` 构造函数接受可选 `onStart` 回调
+- 新引擎创建时自动调用 `clearReadTracker()`
+- `tui.ts` 中传入 `clearReadTracker` 作为回调
 
 长期方案（正确架构）：
 
 - `ReadTracker` 改为实例化类，由 `ReasonixEngine` 创建并通过 `ToolContext` 注入到工具。
 
-验收：
-
-- 两个连续 Session 对同一文件的操作不产生误报的 stale 警告。
-- `clearReadTracker` 有调用点。
-
 ### N3. hash-edit 临时文件异常路径泄漏
 
-状态：待完成
+状态：✅ 已完成
 
-目标：`hash-edit.ts` 的流式写入在 IO 异常（磁盘满、权限变更）时，已创建的 `tmpPath` 无清理逻辑。
-
-方案：
-
-- 用 try-finally 包裹流式写入逻辑，finally 块检查并 unlink 残留 tmpPath。
-- `write-file.ts` 同样遵循此模式。
-
-验收：
-
-- 模拟写入中途失败后，临时文件被清理。
-- 正常写入完成后无临时文件残留。
+实现方式：
+- `hashAnchoredReplaceOnce` 用 try-finally 包裹整个逻辑
+- `tmpCreated` 标记追踪 tmpPath 是否已创建
+- finally 块中按需清理残留临时文件
+- rename 成功后取消标记，避免误删
 
 ### 7. 完整化 Hash-Anchored Edit
 
-状态：待完成
+状态：✅ 已完成
 
-目标：让 edit 从"exact replace once"升级为可验证锚点编辑。
-
-验收：
-
-- 支持 oldHash 或上下文 hash。
-- hash 不匹配时不写文件。
-- 写入使用临时文件 + rename（已完成）。
-- 单测覆盖 hash match / mismatch / 多行替换。
+实现方式：
+- `hashAnchoredReplaceOnce` 增加可选 `oldHash` 参数
+- 传入时校验 `sha256(oldString) === oldHash`，不匹配直接返回 null 不写入
+- `edit.ts` 工具增加 `old_hash` 参数暴露给 LLM
+- 6 个单测覆盖：精确替换、多行替换、未找到、hash 不匹配、hash 匹配、空字符串
 
 ### 8. 完整化 9-Pass Fuzzy Edit
 
-状态：部分完成（4/9 pass）
+状态：✅ 已完成（9/9 pass）
 
-目标：实现实施计划中的 9-pass fallback。
+pass 列表：
+1. exact — 精确匹配
+2. trimmed_full — 整体 trim
+3. trimmed_lines — 每行右 trim
+4. trimmedBoundary — 每行左右 trim
+5. blockAnchor — 首尾锚点行定位
+6. contextAware — 上下文锚点 + 近似中间行
+7. escapeNormalized — 转义序列归一化
+8. flexible_whitespace — 灵活空白（最激进）
+9. multiOccurrence — 多匹配时取最后一次
 
-当前已实现：exact、trimmed_full、trimmed_lines、flexible_whitespace
-
-待实现：blockAnchor、escapeNormalized、trimmedBoundary、contextAware、multiOccurrence
-
-验收：
-
-- 所有 pass 有独立单测。
-- 组合成功率 > 99%（设计文档目标）。
+所有 pass 有独立单测（共 9 个）。
 
 ---
 

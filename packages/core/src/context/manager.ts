@@ -26,21 +26,37 @@ export class ContextManager {
   readonly log: AppendOnlyLog
   // 区域三：易失暂存区，每轮清空
   readonly scratch: VolatileScratch
+  // 上下文截断阈值：保留的最大对话轮数（按 user 消息计数），0 表示不截断
+  private maxRounds: number
 
-  constructor() {
+  constructor(maxRounds = 20) {
     this.prefix = new ImmutablePrefix()
     this.log = new AppendOnlyLog()
     this.scratch = new VolatileScratch()
+    this.maxRounds = maxRounds
   }
 
-  /** 组装完整的 messages 数组：prefix + log + scratch */
+  /** 组装完整的 messages 数组：prefix + log（截断后）+ scratch */
   buildMessages(): ChatMessage[] {
-    const msgs: ChatMessage[] = [
+    let log = [...this.log.messages]
+
+    // 截断：保留最近 maxRounds 轮对话（按 user 消息计数）
+    if (this.maxRounds > 0) {
+      const userIdx: number[] = []
+      for (let i = 0; i < log.length; i++) {
+        if (log[i].role === "user") userIdx.push(i)
+      }
+      if (userIdx.length > this.maxRounds) {
+        const cutFrom = userIdx[userIdx.length - this.maxRounds]
+        log = log.slice(cutFrom)
+      }
+    }
+
+    return [
       ...this.prefix.messages,
-      ...this.log.messages,
+      ...log,
       ...this.scratch.messages,
     ]
-    return msgs
   }
 
   /** 新轮次开始前调用：清空 scratch 暂存区 */

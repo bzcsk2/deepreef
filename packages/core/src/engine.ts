@@ -44,13 +44,17 @@ export class ReasonixEngine implements CoreEngine {
     cacheHitTokens: 0, cacheMissTokens: 0,
     apiCalls: 0, toolCalls: 0, totalCost: 0,
   }
+  /** 可选：新引擎初始化时调用的清理钩子（如清除全局 stale-read tracker） */
+  private onStart?: () => void
 
-  constructor(config: DeepicodeConfig) {
+  constructor(config: DeepicodeConfig, onStart?: () => void) {
     this.config = config
-    this.ctx = new ContextManager()
+    this.ctx = new ContextManager(config.maxContextRounds)
     this.client = new DeepSeekClient()
     this.sessionId = `session-${++sessionCounter}-${Date.now()}`
     this.toolExecutor = new StreamingToolExecutor(this.tools, this.sessionId)
+    this.onStart = onStart
+    this.onStart?.()
 
     // 尝试初始化会话持久化（best-effort，失败则不记录）
     const sessionPath = `${process.cwd()}/.deepicode/sessions/${this.sessionId}.jsonl`

@@ -4,6 +4,7 @@ import { loadConfig } from "../../core/src/config.js"
 import { ReasonixEngine } from "../../core/src/engine.js"
 import { buildSystemPrompt } from "../../core/src/system-prompt.js"
 import { createBashTool, createEditTool, createReadFileTool, createWriteFileTool, createListDirTool, createGrepTool, createTodoWriteTool } from "../../tools/src/index.js"
+import { clearReadTracker } from "../../tools/src/stale-read.js"
 
 function printHelp(): void {
   output.write(`deepicode
@@ -104,7 +105,7 @@ async function main(): Promise<void> {
     return
   }
 
-  const engine = new ReasonixEngine(loadConfig())
+  const engine = new ReasonixEngine(loadConfig(), clearReadTracker)
   engine.setSystemPrompt(buildSystemPrompt(process.cwd()))
   engine.registerTool(createReadFileTool())
   engine.registerTool(createBashTool())

@@ -241,3 +241,71 @@ describe("ContextManager - 三区域集成", () => {
     expect(msgs2[3].content).toBe("What is 3+3?")
   })
 })
+
+// === ContextManager 截断逻辑测试 ===
+describe("ContextManager - 截断逻辑", () => {
+  it("should not truncate when within maxRounds limit", () => {
+    const ctx = new ContextManager(3)
+    ctx.prefix.build("You are an assistant.")
+
+    ctx.log.append({ role: "user", content: "1" })
+    ctx.log.append({ role: "assistant", content: "A" })
+    ctx.log.append({ role: "user", content: "2" })
+    ctx.log.append({ role: "assistant", content: "B" })
+    ctx.log.append({ role: "user", content: "3" })
+
+    expect(ctx.buildMessages()).toHaveLength(6) // system + 5 log
+  })
+
+  it("should truncate oldest user round when exceeding maxRounds", () => {
+    const ctx = new ContextManager(2)
+    ctx.prefix.build("You are an assistant.")
+
+    ctx.log.append({ role: "user", content: "round1" })
+    ctx.log.append({ role: "assistant", content: "resp1" })
+    ctx.log.append({ role: "user", content: "round2" })
+    ctx.log.append({ role: "assistant", content: "resp2" })
+    ctx.log.append({ role: "user", content: "round3" })
+    ctx.log.append({ role: "assistant", content: "resp3" })
+
+    const msgs = ctx.buildMessages()
+    expect(msgs).toHaveLength(5) // system + round2 + resp2 + round3 + resp3
+    expect(msgs[1].content).toBe("round2")
+    expect(msgs[4].content).toBe("resp3")
+  })
+
+  it("should keep complete rounds with tool messages during truncation", () => {
+    const ctx = new ContextManager(1)
+    ctx.prefix.build("You are an assistant.")
+
+    ctx.log.append({ role: "user", content: "round1" })
+    ctx.log.append({ role: "assistant", content: null, tool_calls: [{ id: "1", type: "function", function: { name: "bash", arguments: "{}" } }] })
+    ctx.log.append({ role: "tool", content: "output1", tool_call_id: "1" })
+    ctx.log.append({ role: "assistant", content: "done1" })
+
+    ctx.log.append({ role: "user", content: "round2" })
+    ctx.log.append({ role: "assistant", content: "resp2" })
+
+    const msgs = ctx.buildMessages()
+    expect(msgs).toHaveLength(3) // system + round2 + resp2
+    expect(msgs[1].content).toBe("round2")
+    expect(msgs[2].content).toBe("resp2")
+  })
+
+  it("should not truncate when maxRounds is 0", () => {
+    const ctx = new ContextManager(0)
+    ctx.prefix.build("You are an assistant.")
+
+    for (let i = 0; i < 5; i++) {
+      ctx.log.append({ role: "user", content: `q${i}` })
+      ctx.log.append({ role: "assistant", content: `a${i}` })
+    }
+
+    expect(ctx.buildMessages()).toHaveLength(11) // system + 10 log
+  })
+
+  it("should default to 20 maxRounds", () => {
+    const ctx = new ContextManager()
+    expect(ctx["maxRounds"]).toBe(20)
+  })
+})

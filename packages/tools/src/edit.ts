@@ -16,6 +16,7 @@ export function createEditTool(): AgentTool {
         path: { type: "string", description: "File path." },
         old_string: { type: "string", description: "Exact old text to replace." },
         new_string: { type: "string", description: "New text to insert." },
+        old_hash: { type: "string", description: "Optional SHA-256 hash of old_string for integrity verification." },
       },
       required: ["path", "old_string", "new_string"],
     },
@@ -35,6 +36,7 @@ export function createEditTool(): AgentTool {
       const path = resolve(ctx.cwd, args.path)
       const oldString = args.old_string
       const newString = args.new_string
+      const oldHash = typeof args.old_hash === "string" && args.old_hash ? args.old_hash : undefined
 
       if (isSensitive(path)) {
         return { content: JSON.stringify({ error: `Editing sensitive file is denied: ${args.path}` }), isError: true }
@@ -45,7 +47,7 @@ export function createEditTool(): AgentTool {
         return { content: JSON.stringify({ error: staleCheck.message, path: args.path }), isError: true }
       }
 
-      const hashRes = await hashAnchoredReplaceOnce(path, oldString, newString)
+      const hashRes = await hashAnchoredReplaceOnce(path, oldString, newString, oldHash)
       if (hashRes) {
         return { content: JSON.stringify({ path: args.path, replaced: hashRes.replacedCount, method: hashRes.method, cwd: ctx.cwd }), isError: false }
       }
