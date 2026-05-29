@@ -143,3 +143,32 @@
   ├────────┼──────────────────┼───────────────────────────────────────────────────┤
   │ P3     │ D1-D5, C2-C6     │ 代码质量和未完成功能                              │
   └────────┴──────────────────┴───────────────────────────────────────────────────┘
+
+新的
+
+  1. 隐患 上下文无界增长引发的会话“硬终止”
+- 📍 影响位置：packages/core/src/context/append-log.ts
+- Bug 描述：AppendOnlyLog 没有任何裁剪机制，对话历史只会无限追加。随着会话进行，token 消耗量会线性增长。当达到 DeepSeek API 上下文限制时，API 会返回 400 context_length_exceeded。
+- 问题分析：在 client.ts 的重试逻辑中，400 属于不可重试错误。这意味着一旦达到上下文上限，当前 Agent 会话将直接报错、退出，且无法通过重试恢复。
+- 潜在后果：长会话 Agent 无法正常运行，用户被迫强制重启会话。
+2. 隐患 工具输出序列化引发的崩溃风险
+- 📍 影响位置：packages/tools/src/shell-exec.ts / file-ops.ts
+- Bug 描述：工具执行后，直接对返回的对象执行了 JSON.stringify(out)。
+- 问题分析：如果 bash 命令输出的内容包含非 UTF-8 编码的二进制流、无法被 JSON 序列化的数据，或者因为极度长导致 JSON.stringify 抛出 RangeError (字符串过长)，execute 方法内部将抛出未被捕获的异常，这会导致 StreamingToolExecutor 直接崩溃，从而导致整个 Agent Loop 停机，而不是将其包装为可控的 ToolResult。
+- 潜在后果：Agent 在执行复杂 Shell 命令时极易因非法输出而崩溃。
+3. Bug hash-edit.ts 强行中断引发的临时文件泄漏 (Zombie Temp Files)
+- 📍 影响位置：packages/tools/src/hash-edit.ts
+- Bug 描述：编辑操作在流式写入 tmpPath 期间，如果 ctx.signal 触发了 Abort，函数会直接抛出异常退出。
+- 问题分析：由于函数逻辑未包含 finally 块或明确的异常捕获来删除这个 tmpPath，一旦用户中断编辑或网络断开，该临时文件将永久驻留在文件系统中。
+- 潜在后果：长时间运行后，磁盘空间会被残留的临时文件耗尽。
+4. 设计缺陷 stale-read.ts 状态追踪的全局污染
+- 📍 影响位置：packages/tools/src/stale-read.ts
+- Bug 描述：track 是一个全局的 Map<string, ReadRecord>，其生命周期是随整个进程绑定的。
+- 问题分析：如果 Deepicode 服务长期运行（例如作为一个持续的后台 Agent），且读取过非常多的文件，这个 Map 不会随会话（Session）结束而清理。这意味着如果一个文件在两个不同的会话中被读取，旧会话的记录会干扰新会话对文件状态的校验。
+- 潜在后果：导致在新会话中出现错误的文件一致性校验（Stale read validation）冲突，引发不必要的“先读再写”强制阻断。
+下一步建议 (Plan)
+作为 Agent，我已完成深度的“Bug 扫描”。为了不违反只读约束，我不会修复它们，但建议将这些纳入您的后续开发迭代：
+1. 架构治理：针对 Bug 1，需要引入 Tokenizer 模块进行预估，并在达到阈值时触发 ContextManager 的裁剪 (Fold) 策略。
+2. 防御性编程：针对 Bug 2，所有工具的 execute 方法返回前应引入一个 safeStringify() 工具，处理特殊字符和超长截断。
+3. 资源管理：针对 Bug 3，使用 finally 块确保临时文件在任何异常路径下都能被 unlink。
+4. 作用域隔离：针对 Bug 4，将 StaleReadTracker 实例注入到 Agent Engine 中，随 Session 生命周期销毁，而非全局单例。

@@ -250,11 +250,11 @@
 
 ### Step 4.2 Hash-Anchored Edit
 
-状态：最小完成
+状态：最小完成（B4 已修复）
 
 - 新增 `packages/tools/src/hash-edit.ts`。
 - 使用 `createReadStream` / `createWriteStream` 实现流式替换。
-- 当前功能是 exact old_string replace once，hash 仅用于辅助校验。
+- 临时文件后缀使用 `randomUUID()` 替代 `Date.now()` 避免碰撞（B4）。
 
 未达到计划完整版的部分：
 
@@ -264,7 +264,7 @@
 
 ### Step 4.3 9-Pass Fuzzy Edit
 
-状态：部分完成
+状态：部分完成（B5 已修复）
 
 - 新增 `packages/tools/src/fuzzy-edit.ts`。
 - 当前支持：
@@ -272,6 +272,7 @@
   - trimRightLines
   - normalizeWhitespace
   - normalizeIndent
+- B5 修复：flexible_whitespace pass 改为按 whitespace 分段转义后 join `\s+`
 
 未完成：
 
@@ -308,7 +309,9 @@
 
 - 工具参数运行时校验（shell-exec / file-ops / edit）
 - B3: bash cwd 参数使用 `resolve(ctx.cwd, args.cwd)` 解析相对路径
+- D1: SENSITIVE_FILE_PATTERNS 提取到 `packages/tools/src/sensitive.ts` 共享使用
 - D2: edit.ts 补上 `known_hosts` 敏感文件保护
+- D3: `getState()` 改为参数化接口，可传入实际 streaming 状态
 
 ## Phase 5：安全层实现
 
@@ -349,13 +352,14 @@ bun test
 结果：
 
 - `bun run typecheck`：通过。
-- `bun test`：21 pass / 3 skip / 0 fail（含双重 done 去重测试）。
+- `bun test`：43 pass / 3 skip / 0 fail（含双重 done 去重 + 工具回归测试）。
 
 测试文件：
 
 - `packages/core/__tests__/context.test.ts`
 - `packages/core/__tests__/engine-tools.test.ts`
 - `packages/core/__tests__/integration.test.ts`（默认 skip）
+- `packages/core/__tests__/tools-regression.test.ts`
 
 ## 关键设计决策
 
@@ -371,10 +375,30 @@ bun test
 | 会话持久化 | JSONL best-effort append | 写入 `.deepicode/sessions/`，不阻塞主流程 |
 | 当前 CLI | readline | 暂未接入真正 TUI 组件 |
 
+## ADVICE.md 修复汇总
+
+2026-05-29 根据 `ADVICE.md` 全面审查后完成以下修复：
+
+| 编号 | 问题 | 修复文件 | 修复方式 |
+|------|------|----------|----------|
+| B1 | done 事件重复 → 工具循环提前终止 | `client.ts` / `engine.ts` | finishReasonYielded 标记 + finishedWithToolUse 防御 |
+| B2 | 缺少 write_file 工具 | `write-file.ts` (新增) | 创建新文件/覆盖已有文件，敏感路径保护 |
+| B3 | bash cwd 未基于 ctx.cwd resolve | `shell-exec.ts` | 增加 `resolve(ctx.cwd, args.cwd)` |
+| B4 | hash-edit 临时文件碰撞 | `hash-edit.ts` | `Date.now()` → `crypto.randomUUID()` |
+| B5 | fuzzy-edit 正则转义耦合 | `fuzzy-edit.ts` | 改为 `split(/\s+/)` 分段转义后 join |
+| C1 | 缺少 list_dir/grep/todowrite | 新增 3 个工具文件 | 结构化目录列表、rg/grep 搜索、任务跟踪 |
+| D1 | SENSITIVE_FILE_PATTERNS 三处重复 | `sensitive.ts` (新增) | 提取到共享模块，3 个工具统一引用 |
+| D2 | edit.ts 缺 known_hosts 保护 | `edit.ts` | 补上 `known_hosts` 模式 |
+| D3 | getState() 硬编码默认值 | `engine.ts` | 改为参数化接口 `getState(isStreaming, streamingMessage, pendingToolCalls)` |
+
+此外：
+- 系统提示词重写：全中文、环境注入、todowrite 任务跟踪、7 工具指南、闭环工作流
+- `grep` 工具回退机制修复：rg 不可用时 grep `--include` 参数格式错误
+
 ## 已知限制
 
 - `edit` 工具仍是最小版本，不具备完整 9-pass。
 - 展示事件与协议事件尚未分层（`tool_progress` 未实现）。
 - `session.ts` 尚不能恢复历史。
 - `grep` 工具使用同步 `execSync` 调用 rg/grep，不适合大代码库搜索。
-- `hashAnchoredReplaceOnce` 临时文件名用 `Date.now()` 无随机后缀，高并发可能碰撞。
+- `hashAnchoredReplaceOnce` 临时文件名用 `randomUUID()` 无碰撞风险（B4 已修）。
