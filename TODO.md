@@ -2,13 +2,17 @@
 
   主要问题
 
-  ✅ 已修复：
-  
-  4. ~~shared 工具结果顺序不稳定~~ → 已完成：并发执行后按声明 index 顺序提交到上下文
-  5. ~~toolCallIndex 映射可能丢失~~ → 已完成：executeToolResult 保留原始 index
-  6. ~~assistant_final / reasoning_content~~ → 已完成：协议边界 + 历史 round-trip
+   ✅ 已修复（2026-05-29）：
 
-  所有问题已修复 ✅（2026-05-29）
+   B1. ~~done 事件重复导致工具调用循环提前终止~~ → client.ts + engine.ts 双重防御
+   B2. ~~缺少 write_file~~ → 新增 write_file 工具
+   B3. ~~bash cwd 未基于 ctx.cwd resolve~~ → shell-exec.ts 增加 resolve()
+   C1. ~~缺少 list_dir / grep / todowrite~~ → 全部新增并注册到 CLI
+   D2. ~~edit.ts 缺 known_hosts 保护~~ → 补上了
+
+   4. ~~shared 工具结果顺序不稳定~~ → 并发执行后按声明 index 顺序提交到上下文
+   5. ~~toolCallIndex 映射可能丢失~~ → executeToolResult 保留原始 index
+   6. ~~assistant_final / reasoning_content~~ → 协议边界 + 历史 round-trip
 
 
 本文记录下一阶段任务。优先级从高到低排列，建议每个任务完成后同步更新 `DONE.md`。

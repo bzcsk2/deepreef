@@ -2,9 +2,8 @@ import { createInterface } from "node:readline/promises"
 import { stdin as input, stdout as output } from "node:process"
 import { loadConfig } from "../../core/src/config.js"
 import { ReasonixEngine } from "../../core/src/engine.js"
-import { createBashTool, createEditTool, createReadFileTool } from "../../tools/src/index.js"
-
-const SYSTEM_PROMPT = "你是一个高效的编码助手。你简洁、精确，只输出必要的内容。"
+import { buildSystemPrompt } from "../../core/src/system-prompt.js"
+import { createBashTool, createEditTool, createReadFileTool, createWriteFileTool, createListDirTool, createGrepTool, createTodoWriteTool } from "../../tools/src/index.js"
 
 function printHelp(): void {
   output.write(`deepicode
@@ -106,10 +105,14 @@ async function main(): Promise<void> {
   }
 
   const engine = new ReasonixEngine(loadConfig())
-  engine.setSystemPrompt(SYSTEM_PROMPT)
+  engine.setSystemPrompt(buildSystemPrompt(process.cwd()))
   engine.registerTool(createReadFileTool())
   engine.registerTool(createBashTool())
   engine.registerTool(createEditTool())
+  engine.registerTool(createWriteFileTool())
+  engine.registerTool(createListDirTool())
+  engine.registerTool(createGrepTool())
+  engine.registerTool(createTodoWriteTool())
 
   if (!input.isTTY) {
     const chunks: Buffer[] = []

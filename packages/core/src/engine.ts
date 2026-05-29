@@ -109,6 +109,7 @@ export class ReasonixEngine implements CoreEngine {
         let fullReasoning = ""
         const toolCalls: ToolCall[] = []
         let streamError: LoopEvent | null = null
+        let finishedWithToolUse = false
 
         for await (const event of this.client.chatCompletionsStream(this.ctx.buildMessages(), {
           apiKey: this.config.apiKey,
@@ -167,6 +168,7 @@ export class ReasonixEngine implements CoreEngine {
               yield { role: "assistant_final", content: fullContent, metadata: { reasoning: fullReasoning || undefined } }
 
               if (isToolUse) {
+                finishedWithToolUse = true
                 this.ctx.log.append({
                   role: "assistant",
                   content: fullContent || null,
@@ -181,6 +183,8 @@ export class ReasonixEngine implements CoreEngine {
                 }
                 yield { role: "status", content: "tools_completed" }
                 this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
+              } else if (finishedWithToolUse) {
+                // [DONE] marker after tool_calls — stream ended, continue while loop
               } else {
                 this.ctx.log.append({ role: "assistant", content: fullContent, reasoning_content: fullReasoning || null })
                 yield { role: "done", metadata: { reason } as Record<string, unknown> }

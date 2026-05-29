@@ -85,6 +85,61 @@ describe("ReasonixEngine tool loop regressions", () => {
     for (const m of toolMsgs) expect(typeof m.content).toBe("string")
   })
 
+  it("should survive double done event (B1 regression)", async () => {
+    streamMock.mockReset()
+
+    const tool: AgentTool = {
+      name: "ok",
+      description: "ok",
+      parameters: { type: "object", properties: { x: { type: "number" } }, required: ["x"] },
+      concurrency: "shared",
+      approval: "read",
+      async execute() {
+        return { content: "done", isError: false }
+      },
+    }
+
+    // Simulate real DeepSeek behavior: finish_reason done + [DONE] done
+    streamMock
+      .mockReturnValueOnce(
+        (async function* () {
+          yield { type: "tool_call_end", toolCallIndex: 0, id: "tc-1", name: "ok", arguments: "{\"x\":1}" }
+          yield { type: "usage", usage: { promptTokens: 10, completionTokens: 0, totalTokens: 10 } }
+          yield { type: "done", finishReason: "tool_calls" }
+          yield { type: "done", finishReason: null } // [DONE] marker
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          yield { type: "text_delta", delta: "final" }
+          yield { type: "usage", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+          yield { type: "done", finishReason: "stop" }
+        })(),
+      )
+
+    const engine = new ReasonixEngine({
+      apiKey: "sk-test",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-flash",
+      maxTokens: 256,
+      temperature: 0.1,
+    })
+    engine.registerTool(tool)
+
+    const events: LoopEvent[] = []
+    for await (const e of engine.submit("hi")) events.push(e)
+
+    const toolResults = events.filter((e) => e.role === "tool")
+    expect(toolResults).toHaveLength(1)
+
+    const doneEvent = events.find((e) => e.role === "done")
+    expect(doneEvent).toBeDefined()
+
+    const finalDelta = events.filter((e) => e.role === "assistant_delta")
+    expect(finalDelta).toHaveLength(1)
+    expect(finalDelta[0].content).toBe("final")
+  })
+
   it("should mark tool failures as error events and persist is_error=true", async () => {
     streamMock.mockReset()
 

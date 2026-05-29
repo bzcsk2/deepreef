@@ -145,6 +145,7 @@ export class DeepSeekClient {
 
     const toolState = new Map<number, { id?: string; name?: string; args: string }>()
     const finalized = new Set<number>()
+    let finishReasonYielded = false
 
     while (true) {
       const { value, done } = await reader.read()
@@ -162,7 +163,9 @@ export class DeepSeekClient {
           if (!trimmed.startsWith("data:")) continue
           const payload = trimmed.slice("data:".length).trimStart()
           if (payload === "[DONE]") {
-            yield { type: "done", finishReason: null }
+            if (!finishReasonYielded) {
+              yield { type: "done", finishReason: null }
+            }
             return
           }
 
@@ -231,13 +234,16 @@ export class DeepSeekClient {
           }
 
           if (choice?.finish_reason) {
+            finishReasonYielded = true
             yield { type: "done", finishReason: choice.finish_reason }
           }
         }
       }
     }
 
-    yield { type: "done", finishReason: null }
+    if (!finishReasonYielded) {
+      yield { type: "done", finishReason: null }
+    }
   }
 }
 

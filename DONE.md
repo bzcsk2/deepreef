@@ -90,6 +90,8 @@
 - 429/5xx 指数退避重试（最多 3 次，1s/2s/4s + jitter）
 - 引擎 loop 错误恢复：stream 失败后自动重试，连续 3 次失败才终止
 - Tool is_error 可见性修复：serialize 时给 tool content 加 `[Error]` 前缀，让模型能感知工具执行失败
+- B1 done 事件去重：`finishReasonYielded` 标记防止重复发射 done，engine 端加 `finishedWithToolUse` 防御
+- 系统提示词重写：全中文、带环境注入（cwd/platform/date）、todowrite 任务跟踪、核心工作流闭环
 
 ### Step 1.2 SegmentedLog 与 Session 持久化
 
@@ -294,15 +296,19 @@
   - `packages/tools/src/file-ops.ts`
   - `packages/tools/src/shell-exec.ts`
   - `packages/tools/src/edit.ts`
+  - `packages/tools/src/write-file.ts`
+  - `packages/tools/src/list-dir.ts`
+  - `packages/tools/src/grep.ts`
+  - `packages/tools/src/todowrite.ts`
 - 已实现并在 CLI 注册：
-  - `read_file`
-  - `bash`
-  - `edit`
+  - `read_file` / `write_file` / `edit` / `bash` / `list_dir` / `grep` / `todowrite`
 - CLI 已修复工具结果展示：tool call 后会显示 bash stdout/stderr、read_file 内容、edit 结果。
 
 额外完成：
 
 - 工具参数运行时校验（shell-exec / file-ops / edit）
+- B3: bash cwd 参数使用 `resolve(ctx.cwd, args.cwd)` 解析相对路径
+- D2: edit.ts 补上 `known_hosts` 敏感文件保护
 
 ## Phase 5：安全层实现
 
@@ -343,7 +349,7 @@ bun test
 结果：
 
 - `bun run typecheck`：通过。
-- `bun test`：20 pass / 3 skip / 0 fail（含 fingerprint + engine-tools 测试）。
+- `bun test`：21 pass / 3 skip / 0 fail（含双重 done 去重测试）。
 
 测试文件：
 
@@ -370,3 +376,5 @@ bun test
 - `edit` 工具仍是最小版本，不具备完整 9-pass。
 - 展示事件与协议事件尚未分层（`tool_progress` 未实现）。
 - `session.ts` 尚不能恢复历史。
+- `grep` 工具使用同步 `execSync` 调用 rg/grep，不适合大代码库搜索。
+- `hashAnchoredReplaceOnce` 临时文件名用 `Date.now()` 无随机后缀，高并发可能碰撞。

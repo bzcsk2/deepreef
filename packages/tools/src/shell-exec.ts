@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process"
 import * as os from "node:os"
+import { resolve } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
 
 const DENY_PATTERNS = [
@@ -45,7 +46,7 @@ export function createBashTool(): AgentTool {
       if (denied) {
         return { content: JSON.stringify({ error: `Command denied: matches dangerous pattern /${denied}/` }), isError: true }
       }
-      const cwd = typeof args.cwd === "string" ? args.cwd : ctx.cwd
+      const cwd = typeof args.cwd === "string" ? resolve(ctx.cwd, args.cwd) : ctx.cwd
       const timeoutMs = typeof args.timeout_ms === "number" ? Math.max(0, Math.floor(args.timeout_ms)) : 30_000
       const maxChars = typeof args.max_chars === "number" ? Math.max(0, Math.floor(args.max_chars)) : 200_000
 

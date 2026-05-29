@@ -13,6 +13,7 @@ const SENSITIVE_FILE_PATTERNS = [
   /(^|\/|\\)id_rsa$/,
   /(^|\/|\\)id_ed25519$/,
   /(^|\/|\\)\.ssh\//,
+  /(^|\/|\\)known_hosts$/,
 ]
 
 function isSensitive(path: string): boolean {
