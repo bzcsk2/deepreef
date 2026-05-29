@@ -5,5 +5,7 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {},
-  "dependencies": {}
+  "dependencies": {
+    "marked": "^15.0.0"
+  }
 }

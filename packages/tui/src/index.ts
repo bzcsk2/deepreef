@@ -1,2 +1,22 @@
-// TUI layer — placeholder for Phase 0 integration with oh-my-pi TUI
-export {}
+export { TUI, Container, CURSOR_MARKER, isFocusable } from "./tui";
+export type { Component, Focusable, OverlayAnchor, OverlayOptions, OverlayHandle, SizeValue } from "./tui";
+export { ProcessTerminal } from "./terminal";
+export type { Terminal, TerminalAppearance } from "./terminal";
+export { processEvents } from "./bridge";
+export * from "./components/chat-view";
+export * from "./components/tool-call-view";
+export * from "./components/strategy-notify";
+export * from "./components/token-estimate";
+export * from "./components/diff-preview";
+export * from "./components/status-line";
+export * from "./components/input";
+export * from "./components/box";
+export * from "./components/text";
+export * from "./components/spacer";
+export * from "./components/truncated-text";
+export * from "./components/loader";
+export * from "./components/markdown";
+export * from "./components/select-list";
+export { matchesKey, parseKey, Key, setKittyProtocolActive, isKeyRelease } from "./keys";
+export type { KeyId } from "./keys";
+export { visibleWidth, wrapTextWithAnsi, truncateToWidth, padding } from "./utils";

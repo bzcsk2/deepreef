@@ -1,10 +1,11 @@
-import { createInterface } from "node:readline/promises"
 import { stdin as input, stdout as output } from "node:process"
 import { loadConfig } from "../../core/src/config.js"
 import { ReasonixEngine } from "../../core/src/engine.js"
 import { buildSystemPrompt } from "../../core/src/system-prompt.js"
 import { createBashTool, createEditTool, createReadFileTool, createWriteFileTool, createListDirTool, createGrepTool, createTodoWriteTool } from "../../tools/src/index.js"
 import { clearReadTracker } from "../../tools/src/stale-read.js"
+import { TUI, ProcessTerminal, ChatView, ToolCallView, TokenEstimate, StatusLine, Input } from "../../tui/src/index.js"
+import { processEvents } from "../../tui/src/bridge.js"
 
 function printHelp(): void {
   output.write(`deepicode
@@ -17,91 +18,6 @@ Commands:
   /exit, /bye    exit the interactive session
   /help          show this help
 `)
-}
-
-async function runPrompt(engine: ReasonixEngine, prompt: string): Promise<void> {
-  let wroteAssistantText = false
-
-  for await (const event of engine.submit(prompt)) {
-    switch (event.role) {
-      case "assistant_delta":
-        output.write(event.content ?? "")
-        wroteAssistantText = true
-        break
-      case "assistant_final":
-        if (wroteAssistantText) output.write("\n")
-        break
-      case "tool_start":
-        output.write(`\n[tool] ${event.toolName ?? "unknown"} ...\n`)
-        break
-      case "tool":
-        output.write(formatToolEvent(event.toolName ?? "unknown", event.content ?? ""))
-        break
-      case "tool_progress":
-        if (event.content === "running") {
-          output.write(`\r[tool] ${event.toolName ?? "unknown"} ...`)
-        }
-        break
-      case "warning":
-        output.write(`\nwarning: ${event.content ?? ""}\n`)
-        break
-      case "error":
-        output.write(`\nerror: ${event.content ?? ""}\n`)
-        break
-      case "done":
-        if (wroteAssistantText) output.write("\n")
-        break
-    }
-  }
-}
-
-function formatToolEvent(toolName: string, content: string): string {
-  const rendered = renderToolContent(toolName, content)
-  if (!rendered) return `[tool] ${toolName} done\n`
-  return `[tool] ${toolName} done\n${rendered}\n`
-}
-
-function renderToolContent(toolName: string, content: string): string {
-  const parsed = parseJsonObject(content)
-  if (!parsed) return content.trim()
-
-  if (toolName === "bash") {
-    const stdout = typeof parsed.stdout === "string" ? parsed.stdout : ""
-    const stderr = typeof parsed.stderr === "string" ? parsed.stderr : ""
-    const exitCode = typeof parsed.exitCode === "number" ? parsed.exitCode : undefined
-    const timedOut = parsed.timedOut === true
-    const parts: string[] = []
-    if (stdout.trim()) parts.push(stdout.trimEnd())
-    if (stderr.trim()) parts.push(stderr.trimEnd())
-    if (exitCode !== undefined && (exitCode !== 0 || timedOut)) {
-      parts.push(`exitCode=${exitCode}${timedOut ? " timedOut=true" : ""}`)
-    }
-    return parts.join("\n")
-  }
-
-  if (toolName === "read_file") {
-    if (typeof parsed.content === "string") return parsed.content.trimEnd()
-  }
-
-  if (toolName === "edit") {
-    if (typeof parsed.error === "string") return `error: ${parsed.error}`
-    const path = typeof parsed.path === "string" ? parsed.path : "(unknown path)"
-    const method = typeof parsed.method === "string" ? parsed.method : "edit"
-    const replaced = typeof parsed.replaced === "number" ? parsed.replaced : 0
-    return `${path}: replaced ${replaced} occurrence(s) via ${method}`
-  }
-
-  return JSON.stringify(parsed, null, 2)
-}
-
-function parseJsonObject(content: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(content) as unknown
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
-    return parsed as Record<string, unknown>
-  } catch {
-    return null
-  }
 }
 
 async function main(): Promise<void> {
@@ -127,29 +43,70 @@ async function main(): Promise<void> {
   engine.registerTool(createTodoWriteTool())
 
   if (!input.isTTY) {
-    const chunks: Buffer[] = []
-    for await (const chunk of input) chunks.push(Buffer.from(chunk))
-    const prompt = Buffer.concat(chunks).toString("utf8").trim()
-    if (prompt) await runPrompt(engine, prompt)
+    await runPipeMode(engine)
     return
   }
 
-  const rl = createInterface({ input, output })
-  output.write("deepicode\n")
+  await runTUIMode(engine)
+}
 
-  try {
-    while (true) {
-      const prompt = (await rl.question("> ")).trim()
-      if (!prompt) continue
-      if (prompt === "/exit" || prompt === "/bye") break
-      if (prompt === "/help") {
-        printHelp()
-        continue
+async function runPipeMode(engine: ReasonixEngine): Promise<void> {
+  const chunks: Buffer[] = []
+  for await (const chunk of input) chunks.push(Buffer.from(chunk))
+  const prompt = Buffer.concat(chunks).toString("utf8").trim()
+  if (!prompt) return
+  for await (const event of engine.submit(prompt)) {
+    switch (event.role) {
+      case "assistant_delta":
+        output.write(event.content ?? "")
+        break
+      case "assistant_final":
+      case "done":
+        output.write("\n")
+        break
+      case "tool_start":
+        output.write(`\n[tool] ${event.toolName ?? "unknown"} ...\n`)
+        break
+      case "tool": {
+        const c = event.content ?? ""
+        try { const p = JSON.parse(c) as Record<string,unknown>; output.write(JSON.stringify(p, null, 2) + "\n") }
+        catch { output.write(c + "\n") }
+        break
       }
-      await runPrompt(engine, prompt)
+      case "error":
+        output.write(`\nerror: ${event.content ?? ""}\n`)
+        break
     }
-  } finally {
-    rl.close()
+  }
+}
+
+async function runTUIMode(engine: ReasonixEngine): Promise<void> {
+  const terminal = new ProcessTerminal()
+  const tui = new TUI(terminal)
+
+  const chatView = new ChatView()
+  const toolView = new ToolCallView()
+  const tokenEst = new TokenEstimate()
+  const statusLine = new StatusLine()
+  const input = new Input()
+
+  tui.addChild(chatView)
+  tui.addChild(toolView)
+  tui.addChild(tokenEst)
+  tui.addChild(statusLine)
+  tui.setFocus(input)
+
+  tui.start()
+
+  input.onSubmit = (text: string) => {
+    if (text === "__CANCEL__") { tui.stop(); process.exit(0); return }
+    if (text === "/exit" || text === "/bye") { tui.stop(); process.exit(0); return }
+    if (text === "/help") { printHelp(); return }
+    if (!text.trim()) return
+
+    chatView.addMessage("user", text)
+    const events = engine.submit(text)
+    processEvents(tui, chatView, toolView, tokenEst, statusLine, input, events)
   }
 }
 
