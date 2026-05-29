@@ -89,6 +89,7 @@
 
 - 429/5xx 指数退避重试（最多 3 次，1s/2s/4s + jitter）
 - 引擎 loop 错误恢复：stream 失败后自动重试，连续 3 次失败才终止
+- Tool is_error 可见性修复：serialize 时给 tool content 加 `[Error]` 前缀，让模型能感知工具执行失败
 
 ### Step 1.2 SegmentedLog 与 Session 持久化
 
@@ -277,9 +278,13 @@
 
 ### Step 4.4 Stale-read Validation
 
-状态：未开始
+状态：完成（2026-05-29）
 
-- 尚未实现 `stale-read.ts`。
+- 新增 `packages/tools/src/stale-read.ts`。
+- 模块级 `ReadTracker` 追踪文件路径 → `{mtimeMs, size}`。
+- `read_file` 成功读取后调用 `recordRead()` 记录。
+- `edit` 执行前调用 `checkStale()`，mtime/size 变化则返回 `{isError: true}`，提示先 re-read。
+- 不校验从未 read 过的文件（兼容 CLI 等外部写入场景）。
 
 ### Step 4.5 基础工具集
 
@@ -364,5 +369,4 @@ bun test
 
 - `edit` 工具仍是最小版本，不具备完整 9-pass。
 - 展示事件与协议事件尚未分层（`tool_progress` 未实现）。
-- Stale-read validation 尚未实现。
 - `session.ts` 尚不能恢复历史。

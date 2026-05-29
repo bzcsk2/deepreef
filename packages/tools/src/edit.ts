@@ -3,6 +3,7 @@ import { resolve } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
 import { hashAnchoredReplaceOnce } from "./hash-edit.js"
 import { fuzzyReplaceOnce } from "./fuzzy-edit.js"
+import { checkStale } from "./stale-read.js"
 
 const SENSITIVE_FILE_PATTERNS = [
   /(^|\/|\\)api-key$/,
@@ -54,6 +55,11 @@ export function createEditTool(): AgentTool {
 
       if (isSensitive(path)) {
         return { content: JSON.stringify({ error: `Editing sensitive file is denied: ${args.path}` }), isError: true }
+      }
+
+      const staleCheck = await checkStale(path)
+      if (staleCheck.isStale) {
+        return { content: JSON.stringify({ error: staleCheck.message, path: args.path }), isError: true }
       }
 
       const hashRes = await hashAnchoredReplaceOnce(path, oldString, newString)

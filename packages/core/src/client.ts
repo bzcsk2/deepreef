@@ -73,10 +73,14 @@ export class DeepSeekClient {
       model: opts.model,
       messages: messages.map((m) => {
         if (m.role === "tool") {
+          let content = m.content ?? ""
+          if (m.is_error && !content.startsWith("[Error]")) {
+            content = `[Error] ${content}`
+          }
           return {
             role: "tool",
             tool_call_id: m.tool_call_id,
-            content: m.content ?? "",
+            content,
           }
         }
         if (m.role === "assistant") {

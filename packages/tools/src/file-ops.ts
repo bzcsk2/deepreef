@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises"
 import { resolve } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
+import { recordRead } from "./stale-read.js"
 
 const SENSITIVE_FILE_PATTERNS = [
   /(^|\/|\\)api-key$/,
@@ -79,6 +80,7 @@ export function createReadFileTool(): AgentTool {
       }
 
       if (out.length > maxChars) out = out.slice(0, maxChars)
+      recordRead(path, fileStat.mtimeMs, fileStat.size)
       return {
         content: JSON.stringify({ path: args.path, content: out, cwd: ctx.cwd }),
         isError: false,

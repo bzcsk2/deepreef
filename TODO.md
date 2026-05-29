@@ -63,15 +63,11 @@
 
 ### 6. 完成 Stale-read Validation 最小版
 
-目标：
+状态：完成 ✅（2026-05-29）
 
-- 写入前确保文件内容没有被外部修改。
-
-验收：
-
-- `read_file` 记录 path + mtime + hash。
-- `edit` 前校验记录。
-- stale 时返回错误并提示先重新 read。
+- `stale-read.ts` 实现 ReadTracker（mtime + size 记录）。
+- `read_file` 成功读取后调用 `recordRead` 记录 mtime 和 size。
+- `edit` 执行前调用 `checkStale`，mtime/size 变化时返回错误，提示先 re-read。
 
 ## P1：补齐编辑工具
 
