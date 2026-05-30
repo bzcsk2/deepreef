@@ -1,6 +1,6 @@
 # Deepicode 代码审查与建议
 
-**最后更新**: 2026-06-05（第十五轮 — TT1-TT3 测试发现的 Bug 归入 ADVICE）
+**最后更新**: 2026-06-05（B1 afterToolCall 已修复验证，B2/B3/B4 未修复）
 
 > 已修复项见 `DONE.md`。
 
@@ -10,15 +10,13 @@
 
 ### 未修复
 
-#### B1. `afterToolCall` 异常传播（Round 十六）
+#### ~~B1. `afterToolCall` 异常传播（Round 十六）~~ ✅ 已修复
 
 | 项 | 内容 |
 |---|------|
-| **位置** | `packages/security/src/hooks.ts` — `HookManager.runAfterToolCall` |
-| **症状** | `afterToolCall` 回调抛异常时未被吞掉，向上传播中断主流程 |
-| **测试** | `hooks.test.ts` — "should survive afterToolCall exception" 标记 `⚠️` 仍失败 |
-| **原因** | `runAfterToolCall` 没有 try-catch 包裹每个回调 |
-| **修复** | 在 `runAfterToolCall` 循环内加 `try { cb(...) } catch { /* swallow */ }` |
+| **位置** | `packages/security/src/hooks.ts:54` |
+| **症状** | ~~`afterToolCall` 回调抛异常时未被吞掉~~ |
+| **修复验证** | 源码已有 `try { await hooks.afterToolCall(...) } catch { /* swallow */ }`，M14 测试确认第二个 hook 正常执行 |
 
 #### B2. `McpAuth.set()` 返回 `"stored"` 而非 `"not_implemented"`
 
@@ -49,12 +47,21 @@
 | **原因** | 多个测试共享的临时目录/进程文件出现竞争 |
 | **修复** | 每个测试使用 `mkdtempSync` 独立目录；或标记为 `--pool=forks` 避免线程共享 |
 
-### 已修复
+### 已修复（本轮）
 
 | Bug | 位置 | 原因 | 修复 |
 |-----|------|------|------|
+| B1 | `hooks.ts:51-57` | `runAfterToolCall` 回调抛异常中断后续 hook | try-catch 包裹每个回调 |
+| B2 | `auth.ts:36` | McpAuth.set() stub 返回 `"stored"` 误导 | 改为 `"not_implemented"` |
 | MockSseServer 连接泄漏 | `mock-sse-server.ts` | `server.close()` 未销毁 keep-alive socket | 追踪 `Set<Socket>` + `stop()` 时 `sock.destroy()` |
-| `refinedEstimate` CJK 双重计数 | `token-estimator.ts:14-18` | CJK 字符同时匹配 `CJK_RE` 和 `PUNCT_RE`（`[^\w\s]`），导致 asciiCount 负值 | `PUNCT_RE` 排除 CJK 范围 `[^\w\s一-鿿㐀-䶿豈-﫿]` |
+| CJK 双重计数 | `token-estimator.ts:14-18` | CJK 字符同时匹配 `CJK_RE` 和 `PUNCT_RE` | `PUNCT_RE` 排除 CJK 范围 |
+
+### 测试维护（非代码 Bug）
+
+| Bug | 说明 | 建议 |
+|-----|------|------|
+| B3 | sleep-clamp 测试预期值过时 | 更新断言值匹配当前 clamp 逻辑 |
+| B4 | bash-integration-concurrent 偶发竞态 | 每个测试使用独立临时目录 |
 
 ---
 

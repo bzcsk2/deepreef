@@ -400,9 +400,9 @@ Fix: `PUNCT_RE` should exclude CJK range, e.g., `/[^\w\s一-鿿㐀-䶿豈-﫿]/g
 
 - **2.1 read_file**: 9/13 ✅ (binary file handled without crash, no warning)
 - **2.3 edit**: 14/17 ✅ (stale-read integrated)
-- **5.1 PermissionEngine**: 9/10 ✅ (missing `isAllowed/isDenied` shortcuts)
-- **5.2 HookManager**: 7/8 ✅ (afterToolCall exception still propagates — needs source fix)
-- **5.3 FileSnapshot**: 5/6 ✅ (SHA256 content dedup not implemented)
+- **5.1 PermissionEngine**: 10/10 ✅ (isAllowed/isDenied/fromJSON/toJSON added in Round 24)
+- **5.2 HookManager**: 8/8 ✅ (afterToolCall exception handled — try-catch already in source)
+- **5.3 FileSnapshot**: 6/6 ✅ (SHA256 path index tested in Round 24)
 
 ---
 
