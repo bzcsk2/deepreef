@@ -55,8 +55,10 @@ export function fuzzyReplaceOnce(haystack: string, needle: string, replacement: 
       const parts = trimmed.split(/\s+/)
       if (parts.length > 1) {
         const escapedParts = parts.map(escapeRegExp)
-        const flexRegex = new RegExp(escapedParts.join('\\s+'))
-        const match = haystack.match(flexRegex)
+        const flexRegex = new RegExp(escapedParts.join('\\s+'), 'g')
+        const allMatches = [...haystack.matchAll(flexRegex)]
+        if (allMatches.length !== 1) return null  // ambiguous: reject like Pass 1-6
+        const match = allMatches[0]
         if (match && match.index !== undefined) {
           return {
             edited: haystack.slice(0, match.index) + replacement + haystack.slice(match.index + match[0].length),

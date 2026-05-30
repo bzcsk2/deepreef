@@ -38,8 +38,12 @@ export class HookManager {
   async runBeforeToolCall(context: BeforeToolCallContext): Promise<PermissionDecision | void> {
     for (const hooks of this.hooks) {
       if (hooks.beforeToolCall) {
-        const result = await hooks.beforeToolCall(context)
-        if (result === "deny" || result === "allow") return result
+        try {
+          const result = await hooks.beforeToolCall(context)
+          if (result === "deny" || result === "allow") return result
+        } catch {
+          return "deny" // hook failure = deny (fail-safe)
+        }
       }
     }
   }

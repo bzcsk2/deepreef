@@ -193,8 +193,9 @@ CNY 原生计价四档位，`packages/core/src/strategy/` 目录不存在，Loop
 | 0 | SIGINT / raw mode 修复（3轮迭代） | 1 | ✅ |
 | 1 | 安全层（PermissionEngine + HookManager + FileSnapshot） | 3 | ✅ |
 | 2 | 壳层增强 + 多 Agent（AppState + QueryEngine + Build/Plan Agent） | 3 | ✅ |
-| 3 | 工具层：第二批（11工具 + Skills + MCP） | 22 | ✅ 完成7/11工具 + Skills ✅ + MCP ✅ |
-| 3 | 工具层：第三批（~15工具） | 15 | ⬜ |
-| 4 | 智能推理调节 | 4 | ⬜ |
-| 5 | 测试与调优 | 3 | ⬜ |
+| 3 | 工具层：第二批（TL1, 11工具 + Skills + MCP） | 22 | ✅ 全部完成 |
+| 3 | 工具层：第三批（TL2, ~15工具） | 15 | ✅ 全部完成（MVP） |
+| 4 | 测试用例文档（TEST.md） | 1 | ✅ |
+| 5 | 测试与调优（TT1-3） | 3 | ⬜ |
+| 6 | 智能推理调节（ST1-4） | 4 | ⬜ |
 | — | 旧代码清理 | 2 | ⬜ |

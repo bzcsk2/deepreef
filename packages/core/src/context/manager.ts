@@ -77,6 +77,12 @@ export class ContextManager {
           }
         }
         log = log.slice(cutFrom)
+        // 反向检查：截断后第一条若为带 tool_calls 的 assistant，向前切到下一个 user
+        while (log.length > 0 && log[0].role === "assistant" && (log[0] as any).tool_calls?.length) {
+          const nextUser = log.findIndex(m => m.role === "user")
+          if (nextUser < 0) { log = []; break }
+          log = log.slice(nextUser)
+        }
       }
     }
 

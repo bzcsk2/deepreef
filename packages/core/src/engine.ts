@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { DeepicodeConfig } from "./config.js"
 import { ContextManager } from "./context/manager.js"
-import type { ToolCall, ToolSpec } from "./types.js"
+import type { ToolCall, ToolSpec, ChatMessage } from "./types.js"
 import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolResult } from "./interface.js"
 import { DeepSeekClient } from "./client.js"
 import { StreamingToolExecutor } from "./streaming-executor.js"
@@ -80,13 +80,24 @@ export class ReasonixEngine implements CoreEngine {
 
   static async recover(config: DeepicodeConfig, sessionId: string): Promise<ReasonixEngine> {
     const engine = new ReasonixEngine(config, undefined, sessionId)
+    await engine._loadSessionMessages(sessionId)
+    return engine
+  }
+
+  /** 加载指定 session 的历史消息到当前引擎上下文 */
+  async loadSession(sessionId: string): Promise<ChatMessage[]> {
+    this.sessionId = sessionId
+    this.ctx.log.clear()
+    return this._loadSessionMessages(sessionId)
+  }
+
+  private async _loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
     const messages = await SessionLoader.read(sessionId)
     if (messages.length > 0) {
-      // 过滤 system 消息——prefix.build() 会重新生成，避免重复
       const nonSystem = messages.filter(m => m.role !== "system")
-      engine.ctx.log.appendMany(nonSystem)
+      this.ctx.log.appendMany(nonSystem)
     }
-    return engine
+    return messages
   }
 
   /** 设置系统级 system prompt */

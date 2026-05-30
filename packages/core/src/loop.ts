@@ -1,14 +1,11 @@
 import type { ToolCall, ToolSpec } from "./types.js"
 import type { LoopEvent, SessionStats, ToolResult } from "./interface.js"
 import type { DeepSeekClient } from "./client.js"
+import { isToolUseFinishReason } from "./client.js"
 import type { ContextManager } from "./context/manager.js"
 import type { StreamingToolExecutor } from "./streaming-executor.js"
 import type { AsyncSessionWriter } from "./session.js"
 import type { FoldDecision } from "./context/token-estimator.js"
-
-function isToolUseFinishReason(reason: string | null): boolean {
-  return reason === "tool_calls" || reason === "tool_use" || reason === "toolUse" || reason === "toolCall" || reason === "tool"
-}
 
 export interface LoopOptions {
   ctx: ContextManager

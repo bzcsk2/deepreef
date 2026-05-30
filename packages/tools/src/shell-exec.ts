@@ -3,6 +3,7 @@ import * as os from "node:os"
 import { resolve } from "node:path"
 import type { AgentTool } from "../../core/src/interface.js"
 import { safeStringify, hasBinaryEncoding } from "./safe-stringify.js"
+import { isSensitive } from "./sensitive.js"
 
 const DENY_PATTERNS = [
   /\brm\s+(?:-[A-Za-z]*r[A-Za-z]*\s+.*\/\*|.*-[A-Za-z]*r[A-Za-z]*\s+\/)/, // catch rm -rf / or rm -rf /*
@@ -46,6 +47,15 @@ export function createBashTool(): AgentTool {
       const denied = isDenied(command)
       if (denied) {
         return { content: safeStringify({ error: `Command denied: matches dangerous pattern /${denied}/` }), isError: true }
+      }
+      // Extract file paths from command and check sensitive files
+      const pathRe = /\b([\w./-]*(?:\.\w{1,10}))\b/g
+      let pathMatch: RegExpExecArray | null
+      while ((pathMatch = pathRe.exec(command)) !== null) {
+        const fp = pathMatch[1]
+        if (isSensitive(fp)) {
+          return { content: safeStringify({ error: `Command references sensitive file: ${fp}` }), isError: true }
+        }
       }
       const cwd = typeof args.cwd === "string" ? resolve(ctx.cwd, args.cwd) : ctx.cwd
       const timeoutMs = typeof args.timeout_ms === "number" ? Math.max(0, Math.floor(args.timeout_ms)) : 30_000

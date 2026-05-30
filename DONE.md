@@ -6,7 +6,96 @@
 - `最小完成`：具备可用闭环，但未达到实施计划中的完整版要求。
 - `部分完成`：只完成子集能力，仍需后续补齐。
 
-最后更新：2026-06-01（TL1/TL3/TL4 工具层生态）
+最后更新：2026-06-02（TL1+TL2 全部完成 + TEST.md）
+
+## 第十二轮：TL1+TL2 剩余工具全部完成 + TEST.md（2026-06-02）
+
+### TL1 收尾（剩余 4 工具）
+
+| 工具 | 文件 | 说明 |
+|------|------|------|
+| AskUserQuestion | `ask-user.ts` | 向用户提问，支持可选的 options 多选 |
+| TaskCreate | `task-create.ts` | 创建任务（content/priority/tags） |
+| TaskUpdate | `task-update.ts` | 更新任务字段 |
+| TaskList | `task-list.ts` | 按 status/priority 过滤列任务 |
+| TaskGet | `task-get.ts` | 按 id 获取任务详情 |
+| TaskStop | `task-stop.ts` | 设 status → cancelled |
+| PlanMode | `plan-mode.ts` | enter/exit 规划模式信号 |
+| NotebookEdit | `notebook-edit.ts` | Jupyter notebook 增删改 cell（create/update/delete_cell） |
+| TaskManager | `task-manager.ts` | 共享 TaskManager 类，JSON 文件持久化 `.deepicode/tasks.json` |
+
+### TL2 全部完成（~15 工具）
+
+| 工具 | 文件 | 说明 |
+|------|------|------|
+| WebBrowser | `web-browser.ts` | navigate（HTTP fetch）/screenshot（Playwright fallback） |
+| LSP | `lsp.ts` | LSP 代码智能（返回 status:unavailable，需安装 language server） |
+| EnterWorktree / ExitWorktree | `worktree.ts` | git worktree add/remove 隔离开发 |
+| CronCreate/Delete/List | `cron.ts` | crontab 管理，`# deepicode-job:` 标记行 |
+| Workflow | `workflow.ts` | 多步骤 JSON 工作流编排 |
+| Monitor | `monitor.ts` | 系统监控（process/disk/memory/file 四模式） |
+| Sleep | `sleep.ts` | 延时执行（最大 300s，支持 AbortSignal） |
+| PushNotification | `push-notification.ts` | notify-send → terminal bell 回退 |
+| AgentTool | `agent-tool.ts` | 子 Agent 委托（build/plan 类型） |
+| SendMessage | `send-message.ts` | Agent 间消息通信 |
+
+### 全部工具注册
+
+| 文件 | 改动 |
+|------|------|
+| `packages/tools/src/index.ts` | 添加 WebBrowser/Worktree/Cron/Workflow/AgentTool/SendMessage/LSP 导出 |
+| `packages/cli/src/tui.ts` | 注册全部 19 个新工具（TL1 + TL2 + Workflow/AgentTool/SendMessage/LSP） |
+| `packages/core/src/agent.ts` | Build Agent toolNames 追加 15 个新工具名 |
+
+### TEST.md 测试用例文档
+
+| 文件 | 内容 |
+|------|------|
+| `TEST.md` | 覆盖 7 包 42+ 模块，含 ~450 项具体测试用例描述 |
+| Core | TokenEstimator/TokenizerPool/StreamingExecutor/QueryEngine/Session/Repair/Agent/Config/Client |
+| Tools | 全部 30+ 工具 + SafeStringify/Sensitive/StaleRead/Skills |
+| MCP | McpClient/McpHost/3 工具 |
+| Security | PermissionEngine/HookManager/FileSnapshot |
+| TUI | Bridge/Messages/PromptInput/StatusBar/ModelPicker/SessionPicker/App |
+| CLI | Pipe/TTY/--session |
+| 集成 | 工具链集成/SSE 边界/错误恢复 |
+
+### 验证
+
+- `bun run typecheck` 零错误 ✅
+- `bun test` 66 pass / 3 skip / 0 fail ✅
+
+---
+
+## 第四轮 ADVICE 修复（2026-06-02，9 项）
+
+根据 `DeepicodeAudit-2026-06-02.md` + `ADVICE.md` 评估结果修复。
+
+| 编号 | 问题 | 文件 | 改动 |
+|------|------|------|------|
+| NEW-1 | isToolUseFinishReason 重复定义 | `loop.ts` | 删除本地定义，改为 `import { isToolUseFinishReason } from "./client.js"` |
+| NEW-5 | hook beforeToolCall 异常未隔离 | `hooks.ts` | `runBeforeToolCall` 加 try-catch，异常时返回 `"deny"`（fail-safe） |
+| SEC-3 | bash 绕过 sensitive 检查 | `shell-exec.ts` | 正则提取命令中文件路径 → `isSensitive()` 检查，命中则拒绝 |
+| NEW-2 | hash-edit 恒真哈希 | `hash-edit.ts` | 删除 `sha256(oldString) === needleHash` 冗余校验 + `needleHash` 变量 |
+| NEW-4 | 截断边界 assistant(tool_calls) | `manager.ts` | `log.slice()` 后反向扫描带 `tool_calls` 的 assistant，向前切到下一个 user |
+| NEW-6 | MCP notifications/initialized 协议错误 | `mcp/client.ts` | 改为 `proc.stdin.write(json)` 直接发送通知（无 id），不走 request |
+| NEW-7 | MCP pending 泄漏 | `mcp/client.ts` | `request()` 加 30s 超时 + `pending` 条目加 `timer` + 响应到达时 `clearTimeout` |
+| NEW-8 | bridge contextUsage 跳变 | `bridge.tsx` | `contextUsage` 改为累积 `prev.tokens.input + addInput` |
+| NEW-9 | fuzzy-edit Pass 7 多匹配 | `fuzzy-edit.ts` | `.match()` → `.matchAll()` 全局搜索 + 多匹配时返回 null |
+
+---
+
+## Session 管理（2026-06-01）
+
+| 文件 | 改动 |
+|------|------|
+| `packages/core/src/session.ts` | `SessionLoader.list()` — 扫描 `.deepicode/sessions/` 目录，解析每个 JSONL 的元数据（ID、时间、消息数、token 用量），按时间倒序，限 20 条；单次扫描计数（不重复读文件） |
+| `packages/core/src/engine.ts` | `engine.loadSession(sessionId)` — 清空当前上下文 + 加载指定 session 历史消息，不替换引擎实例；抽取 `_loadSessionMessages()` 私有方法供 `recover()` 和 `loadSession()` 复用 |
+| `packages/core/src/index.ts` | 导出 `SessionLoader` + `SessionSummary` 类型 |
+| `packages/tui/src/SessionPicker.tsx` | **新建** — 会话列表选择器（↑↓ Enter 选择，Esc 取消），显示 ID 前缀、时间、消息数、token 用量 |
+| `packages/tui/src/App.tsx` | `/sessions` 命令 → `SessionPicker` → 选中后 `engine.loadSession()` → 重置 bridge 状态并显示恢复消息；`/help` 更新 |
+
+---
 
 ## 第十一轮：工具层生态（TL1 + TL3 + TL4，2026-06-01）
 

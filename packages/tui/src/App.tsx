@@ -13,6 +13,7 @@ import { StatusBar } from './StatusBar.js';
 import { FullscreenLayout } from './FullscreenLayout.js';
 import { isFullscreenEnvEnabled } from './fullscreen.js';
 import { ModelPicker } from './ModelPicker.js';
+import { SessionPicker } from './SessionPicker.js';
 
 // ---- Module-level interrupt state (shared by SIGINT handler + useInput \x03 handler) ----
 
@@ -133,6 +134,7 @@ export function App({ engine, config }: AppProps) {
   const [activeProvider, setActiveProvider] = useState(config.provider ?? 'zen');
   const [activeModel, setActiveModel] = useState(config.model);
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showSessionPicker, setShowSessionPicker] = useState(false);
   const [activeAgent, setActiveAgent] = useState(engine.getAgentName?.() ?? 'build');
 
   const handleSubmit = useCallback((text: string) => {
@@ -152,13 +154,17 @@ export function App({ engine, config }: AppProps) {
         ...prev,
         messages: [...prev.messages, {
           role: 'assistant' as const,
-          content: `Commands:\n  /exit, /bye  — exit\n  /help        — show this\n  /model       — switch provider/model\n  /agent       — switch agent\n  /skill       — list loaded skills\n\nAgents:\n${agentList}\n\nCurrent: ${AGENTS[activeAgent]?.label ?? activeAgent}`,
+          content: `Commands:\n  /exit, /bye  — exit\n  /help        — show this\n  /model       — switch provider/model\n  /sessions    — browse & resume past sessions\n  /agent       — switch agent\n  /skill       — list loaded skills\n\nAgents:\n${agentList}\n\nCurrent: ${AGENTS[activeAgent]?.label ?? activeAgent}`,
         }],
       }));
       return;
     }
     if (text === '/model') {
       setShowModelPicker(true);
+      return;
+    }
+    if (text === '/sessions') {
+      setShowSessionPicker(true);
       return;
     }
     if (text === '/skill') {
@@ -205,6 +211,25 @@ export function App({ engine, config }: AppProps) {
     setShowModelPicker(false);
   }, []);
 
+  const handleSessionSelect = useCallback(async (sessionId: string) => {
+    setShowSessionPicker(false);
+    // Load session messages into the current engine
+    const msgs = await engineRef.current.loadSession(sessionId);
+    // Reset bridge state with recovered messages
+    setBridgeState({
+      ...initialState,
+      messages: msgs,
+    });
+    setBridgeState(prev => ({
+      ...prev,
+      messages: [...prev.messages, { role: 'assistant' as const, content: `Resumed session ${sessionId.slice(0, 8)}... (${msgs.length} messages)` }],
+    }));
+  }, []);
+
+  const handleSessionCancel = useCallback(() => {
+    setShowSessionPicker(false);
+  }, []);
+
   const providerLabel = getProviderLabel(activeProvider);
 
   if (showModelPicker) {
@@ -215,6 +240,17 @@ export function App({ engine, config }: AppProps) {
           currentModel={activeModel}
           onSelect={handleModelSelect}
           onCancel={handleModelCancel}
+        />
+      </Box>
+    );
+  }
+
+  if (showSessionPicker) {
+    return (
+      <Box flexDirection="column" width="100%" height="100%">
+        <SessionPicker
+          onSelect={handleSessionSelect}
+          onCancel={handleSessionCancel}
         />
       </Box>
     );

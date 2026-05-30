@@ -35,10 +35,12 @@ interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown }
 }
 
+const REQUEST_TIMEOUT = 30_000
+
 export class McpClient {
   private proc: ChildProcess | null = null
   private buffer = ""
-  private pending = new Map<string | number, { resolve: (v: JsonRpcResponse) => void; reject: (e: Error) => void }>()
+  private pending = new Map<string | number, { resolve: (v: JsonRpcResponse) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   private msgId = 0
   private _connected = false
   private name: string
@@ -93,7 +95,8 @@ export class McpClient {
 
     const initResult = result as { protocolVersion?: string; capabilities?: Record<string, unknown>; serverInfo?: Record<string, unknown> }
     if (initResult?.protocolVersion) {
-      await this.request("notifications/initialized", {})
+      // notification — no id, no response expected
+      this.proc?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n")
     }
 
     this._connected = true
@@ -132,7 +135,11 @@ export class McpClient {
     const id = ++this.msgId
     const msg: JsonRpcRequest = { jsonrpc: "2.0", id, method, params }
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`MCP request timed out after ${REQUEST_TIMEOUT}ms: ${method}`))
+      }, REQUEST_TIMEOUT)
+      this.pending.set(id, { resolve, reject, timer })
       this.proc?.stdin?.write(JSON.stringify(msg) + "\n")
     })
   }
@@ -146,6 +153,7 @@ export class McpClient {
         const resp = JSON.parse(line) as JsonRpcResponse
         const handler = this.pending.get(resp.id)
         if (handler) {
+          clearTimeout(handler.timer)
           this.pending.delete(resp.id)
           if (resp.error) {
             handler.reject(new Error(`MCP error ${resp.error.code}: ${resp.error.message}`))

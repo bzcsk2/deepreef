@@ -130,8 +130,8 @@ export function createBridge(
                 cacheHit: prev.tokens.cacheHit + addCacheHit,
                 cacheMiss: prev.tokens.cacheMiss + addCacheMiss,
               },
-              // Last turn's prompt tokens ≈ current context usage
-              contextUsage: addInput,
+              // Cumulative input tokens ≈ current context usage
+              contextUsage: prev.tokens.input + addInput,
             }));
             break;
           }

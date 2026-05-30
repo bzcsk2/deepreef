@@ -41,7 +41,6 @@ export async function hashAnchoredReplaceOnce(
     await mkdir(dirname(tmpPath), { recursive: true })
     tmpCreated = true
 
-    const needleHash = sha256(oldString)
     const reader = createReadStream(filePath, { encoding: "utf-8" })
     const writer = createWriteStream(tmpPath, { encoding: "utf-8" })
 
@@ -57,7 +56,7 @@ export async function hashAnchoredReplaceOnce(
 
       if (!replaced) {
         const idx = buf.indexOf(oldString)
-        if (idx >= 0 && sha256(oldString) === needleHash) {
+        if (idx >= 0) {
           await write(buf.slice(0, idx))
           await write(newString)
           buf = buf.slice(idx + oldString.length)

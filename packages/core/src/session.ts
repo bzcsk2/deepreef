@@ -1,4 +1,4 @@
-import { mkdir, appendFile, readFile } from "node:fs/promises"
+import { mkdir, appendFile, readFile, readdir } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import type { ChatMessage } from "./types.js"
 
@@ -6,6 +6,15 @@ export interface SessionRecord {
   ts: number
   type: "event" | "messages" | "stats"
   payload: unknown
+}
+
+export interface SessionSummary {
+  id: string
+  ts: number
+  messageCount: number
+  userMessages: number
+  inputTokens: number
+  outputTokens: number
 }
 
 export class SessionLoader {
@@ -32,6 +41,53 @@ export class SessionLoader {
       }
     }
     return []
+  }
+
+  static async list(): Promise<SessionSummary[]> {
+    const entries: SessionSummary[] = []
+    let files: string[]
+    try {
+      files = await readdir(this.sessionDir)
+    } catch {
+      return []
+    }
+    for (const f of files) {
+      if (!f.endsWith(".jsonl")) continue
+      const id = f.slice(0, -6)
+      const path = resolve(this.sessionDir, f)
+      try {
+        const raw = await readFile(path, "utf-8")
+        const lines = raw.trim().split("\n")
+        if (lines.length === 0) continue
+        const firstRec = JSON.parse(lines[0]) as SessionRecord
+        let messageCount = 0
+        let userMessages = 0
+        let inputTokens = 0
+        let outputTokens = 0
+        // scan lines once for stats
+        for (const line of lines) {
+          try {
+            const rec = JSON.parse(line) as SessionRecord
+            if (rec.type === "messages" && Array.isArray(rec.payload)) {
+              messageCount++
+              // keep overwriting — last one wins (snapshot format)
+              userMessages = 0
+              for (const m of rec.payload as ChatMessage[]) {
+                if (m.role === "user") userMessages++
+              }
+            }
+            if (rec.type === "stats" && typeof rec.payload === "object" && rec.payload) {
+              const s = rec.payload as Record<string, unknown>
+              if (typeof s.inputTokens === "number") inputTokens += s.inputTokens
+              if (typeof s.outputTokens === "number") outputTokens += s.outputTokens
+            }
+          } catch { continue }
+        }
+        entries.push({ id, ts: firstRec.ts, messageCount, userMessages, inputTokens, outputTokens })
+      } catch { continue }
+    }
+    entries.sort((a, b) => b.ts - a.ts)
+    return entries.slice(0, 20)
   }
 }
 

@@ -3,7 +3,7 @@ import { writeSync } from "node:fs"
 import { loadConfig } from "../../core/src/config.js"
 import { ReasonixEngine } from "../../core/src/engine.js"
 import { buildSystemPrompt } from "../../core/src/system-prompt.js"
-import { createBashTool, createEditTool, createReadFileTool, createWriteFileTool, createListDirTool, createGrepTool, createTodoWriteTool, createGlobTool, createWebFetchTool, createWebSearchTool, createSkillTool } from "../../tools/src/index.js"
+import { createBashTool, createEditTool, createReadFileTool, createWriteFileTool, createListDirTool, createGrepTool, createTodoWriteTool, createGlobTool, createWebFetchTool, createWebSearchTool, createSkillTool, createTaskCreateTool, createTaskUpdateTool, createTaskListTool, createTaskGetTool, createTaskStopTool, createAskUserQuestionTool, createPlanModeTool, createNotebookEditTool, createSleepTool, createPushNotificationTool, createMonitorTool, createWebBrowserTool, createWorktreeTool, createCronTool, createWorkflowTool, createAgentToolTool, createSendMessageTool, createLspTool } from "../../tools/src/index.js"
 import { clearReadTracker } from "../../tools/src/stale-read.js"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, setMcpHost } from "../../mcp/src/index.js"
 import React from "react"
@@ -56,6 +56,24 @@ async function main(): Promise<void> {
   engine.registerTool(createListMcpResourcesTool())
   engine.registerTool(createReadMcpResourceTool())
   engine.registerTool(createMcpAuthTool())
+  engine.registerTool(createTaskCreateTool())
+  engine.registerTool(createTaskUpdateTool())
+  engine.registerTool(createTaskListTool())
+  engine.registerTool(createTaskGetTool())
+  engine.registerTool(createTaskStopTool())
+  engine.registerTool(createAskUserQuestionTool())
+  engine.registerTool(createPlanModeTool())
+  engine.registerTool(createNotebookEditTool())
+  engine.registerTool(createSleepTool())
+  engine.registerTool(createPushNotificationTool())
+  engine.registerTool(createMonitorTool())
+  engine.registerTool(createWebBrowserTool())
+  engine.registerTool(createWorktreeTool())
+  engine.registerTool(createCronTool())
+  engine.registerTool(createWorkflowTool())
+  engine.registerTool(createAgentToolTool())
+  engine.registerTool(createSendMessageTool())
+  engine.registerTool(createLspTool())
 
   if (!input.isTTY) {
     await runPipeMode(engine)
