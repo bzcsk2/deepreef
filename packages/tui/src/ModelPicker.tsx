@@ -24,7 +24,7 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
   const confirmSelection = useCallback(() => {
     const cfg = PROVIDERS[selProvider];
     if (!cfg) return;
-    const existingKey = process.env[getApiKeyEnvVar(selProvider)] ?? process.env.DEEPSEEK_API_KEY ?? '';
+    const existingKey = process.env[getApiKeyEnvVar(selProvider)] ?? '';
     onSelect({
       provider: selProvider,
       model: selModel || cfg.model,
@@ -53,7 +53,7 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
         setSelProvider(p);
         setSelModel(PROVIDERS[p].models[0]?.model ?? '');
         setInputBuf('');
-        if (PROVIDERS[p].requiresKey && !process.env[getApiKeyEnvVar(p)] && !process.env.DEEPSEEK_API_KEY) {
+        if (PROVIDERS[p].requiresKey && !process.env[getApiKeyEnvVar(p)]) {
           setStep('key');
         } else {
           setStep('model');

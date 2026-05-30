@@ -30,12 +30,12 @@ export interface ProviderInfo {
 export const PROVIDERS: Record<string, ProviderInfo> = {
   zen: {
     baseUrl: "https://opencode.ai/zen/v1",
-    model: "deepseek-v4-flash-free",
+    model: "deepseek-v4-flash",
     requiresKey: false,
     label: "Zen (Free)",
     models: [
-      { label: "deepseek-v4-flash-free", model: "deepseek-v4-flash-free" },
-      { label: "mimo-v2.5-free", model: "mimo-v2.5-free" },
+      { label: "deepseek-v4-flash", model: "deepseek-v4-flash" },
+      { label: "mimo-v2.5", model: "mimo-v2.5" },
     ],
   },
   deepseek: {
@@ -95,8 +95,8 @@ export function loadConfig(): DeepicodeConfig {
   const model = process.env.DEEPSEEK_MODEL ?? providerCfg?.model ?? DEEPSEEK_MODEL
   const apiKeyEnvVar = getApiKeyEnvVar(provider)
 
-  let apiKey = process.env[apiKeyEnvVar] ?? process.env.DEEPSEEK_API_KEY ?? ""
-  if (!apiKey) {
+  let apiKey = process.env[apiKeyEnvVar] ?? ""
+  if (!apiKey && provider === "deepseek") {
     apiKey = loadApiKeyFromProjectFile() ?? ""
   }
 
