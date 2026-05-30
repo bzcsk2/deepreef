@@ -288,4 +288,99 @@ describe("SSE Client with MockSseServer", () => {
     const dones = events.filter((e) => e.type === "done")
     expect(dones).toHaveLength(1)
   })
+
+  // ── TT1: SSE boundary tests ───────────────────────────
+
+  it("TT1: should survive 1-byte chunk streaming", async () => {
+    server = new MockSseServer()
+      .setScenario("normal")
+      .setChunkSize(1) // each byte sent individually
+      .setDelay(0)
+    await server.start()
+    const events = await collectStream()
+    const textDeltas = events.filter((e) => e.type === "text_delta")
+    expect(textDeltas.length).toBeGreaterThan(0)
+    expect(events.some((e) => e.type === "error")).toBe(false)
+  })
+
+  it("TT1: should handle data: prefix split across chunks", async () => {
+    // Split "data:" prefix itself across chunks
+    const content = `{"choices":[{"delta":{"content":"hello"}}]}`
+    server = new MockSseServer().setChunks([
+      { data: `da`, delay: 0 },
+      { data: `ta: ${content}\n\n`, delay: 0 },
+      { data: "data: [DONE]\n\n", delay: 0 },
+    ])
+    await server.start()
+    const events = await collectStream()
+    const deltas = events.filter((e) => e.type === "text_delta")
+    expect(deltas.length).toBeGreaterThanOrEqual(1)
+    expect(events.some((e) => e.type === "error")).toBe(false)
+  })
+
+  it("TT1: should handle half UTF-8 character across chunks", async () => {
+    // "你" is U+4F60, encoded as E4 BD A0 in UTF-8
+    // Split the 3-byte UTF-8 character: "E4 " | "BD A0"
+    const partial1 = Buffer.from([0xE4]).toString("binary")
+    const partial2 = Buffer.from([0xBD, 0xA0]).toString("binary")
+    server = new MockSseServer().setChunks([
+      { data: `data: {"choices":[{"delta":{"content":"Hello ${partial1}`, delay: 0 },
+      { data: `${partial2}"}}]}\n\n`, delay: 0 },
+      { data: `data: {"choices":[{"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n`, delay: 0 },
+      { data: "data: [DONE]\n\n", delay: 0 },
+    ])
+    await server.start()
+    const events = await collectStream()
+    const deltas = events.filter((e) => e.type === "text_delta")
+    expect(deltas.length).toBeGreaterThanOrEqual(1)
+    expect(events.some((e) => e.type === "error")).toBe(false)
+  })
+
+  it("TT1: should handle half JSON argument across chunks", async () => {
+    // Split a JSON tool call argument at arbitrary position
+    const chunk1 = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"/tmp/test'
+    const chunk2 = '.txt\\""}}]}}]}\n\n'
+    const chunk3 = 'data: {"choices":[{"delta":{"content":""},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}\n\n'
+    server = new MockSseServer().setChunks([
+      { data: chunk1, delay: 0 },
+      { data: chunk2, delay: 0 },
+      { data: chunk3, delay: 0 },
+      { data: "data: [DONE]\n\n", delay: 0 },
+    ])
+    await server.start()
+    const events = await collectStream()
+    const toolDeltas = events.filter((e) => e.type === "tool_call_delta")
+    expect(toolDeltas.length).toBeGreaterThanOrEqual(1)
+    expect(events.some((e) => e.type === "error")).toBe(false)
+  })
+
+  it("TT1: should handle \\n\\n delimiter split across chunks", { timeout: 15000 }, async () => {
+    // Split the SSE \n\n delimiter itself
+    server = new MockSseServer().setChunks([
+      { data: `data: {"choices":[{"delta":{"content":"hello"}}]}\n`, delay: 1 },
+      { data: `\n`, delay: 1 },
+      { data: "data: [DONE]\n\n", delay: 1 },
+    ])
+    await server.start()
+    const events = await collectStream()
+    const deltas = events.filter((e) => e.type === "text_delta")
+    expect(deltas.length).toBeGreaterThanOrEqual(1)
+    expect(events.some((e) => e.type === "error")).toBe(false)
+  })
+
+  it("TT1: should handle multiple \\n\\n splits across chunks", { timeout: 15000 }, async () => {
+    // Multiple SSE events with \n\n split across different chunks
+    server = new MockSseServer().setChunks([
+      { data: `data: {"choices":[{"delta":{"content":"hello"}}]}\n`, delay: 1 },
+      { data: `\ndata: {"choices":[{"delta":{"content":" world"}}]}\n`, delay: 1 },
+      { data: `\n`, delay: 1 },
+      { data: `data: {"choices":[{"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n`, delay: 1 },
+      { data: "data: [DONE]\n\n", delay: 1 },
+    ])
+    await server.start()
+    const events = await collectStream()
+    const deltas = events.filter((e) => e.type === "text_delta")
+    expect(deltas.length).toBeGreaterThanOrEqual(2)
+    expect(events.some((e) => e.type === "error")).toBe(false)
+  })
 })

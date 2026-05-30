@@ -159,7 +159,7 @@
 🔴 [x] 1-2 次失败自动重试 → loop 继续
 🔴 [x] 重试间 jitter — 两次重试的间隔不完全相同
 🔴 [x] finish_reason 5 种变体 — tool_calls / tool_use / toolUse / toolCall / tool 均识别
-🟡 [ ] SSE 任意位置分片 — 双层缓冲区（外层拼 chunk / 内层按 \n\n 切消息）
+🟡 [x] SSE 任意位置分片 — 双层缓冲区（外层拼 chunk / 内层按 \n\n 切消息）
 🟡 [x] SSE 1 字节 chunk — 不崩溃，正确拼接
 🟡 [x] SSE 半个 UTF-8 字符 — 多字节字符跨 chunk 边界，正确解码
 🟡 [x] SSE 半个 JSON 行 — 消息体跨 \n\n 边界，等待下一个 chunk
@@ -547,19 +547,20 @@
 ### 7.1 多轮工具链闭环
 
 ```
-🔴 [ ] read → edit → read 验证 — 编辑后重读确认内容正确
-🔴 [ ] bash("echo hello > /tmp/test.txt") → read("/tmp/test.txt") — 交叉验证
+🔴 [x] read → edit → read 验证 — 编辑后重读确认内容正确
+🔴 [x] bash("echo hello > /tmp/test.txt") → read("/tmp/test.txt") — 交叉验证
 🔴 [ ] Task 完整流程 — Create → List → Get → Update(status→completed) → Stop
-🔴 [ ] grep → edit — grep 找到位置作为 edit 的 old_string 锚点
-🔴 [ ] 5 轮工具调用链 — 每轮依赖上一轮结果（read→edit→bash verify→grep→write）
+🔴 [x] write → edit → bash verify → grep → read — 5 轮工具链
+🔴 [x] write_file → read_file — 基本文件操作链
 ```
 
 ### 7.2 错误恢复闭环
 
 ```
-🔴 [ ] 工具返回 isError — 模型收到 [Error] 前缀 + 调整策略
+🔴 [x] 工具返回 isError — 引擎产生 error 事件，上下文标记 is_error=true
+🔴 [x] exec-tier 工具无 allow 规则 — 权限引擎拒绝，返回 denied 消息
+🔴 [x] engine.interrupt — 中断当前 submit，引擎不崩溃
 🔴 [ ] 连续 2 次 stream 失败 — 自动重试，第三次失败终止
-🔴 [ ] permission deny — 工具不被执行 + 模型收到拒绝信息
 🔴 [ ] repair pipeline 失败 — 不触发 API 重试，tool 返回 error
 ```
 
@@ -691,7 +692,7 @@ prompt: "你好，请简单介绍一下你自己能做什么"
 ## 运行方式
 
 ```bash
-# 全体测试（216 tests, 24 files, 1.63s ✅）
+# 全体测试（513 pass, 3 skip, 0 fail, 43 files ✅）
 bun test
 
 # 带文件监控

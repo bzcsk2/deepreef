@@ -105,20 +105,37 @@ export class MockSseServer {
         Connection: "keep-alive",
       })
 
-      let idx = 0
+      let parts: string[] | null = null
+      let partIdx = 0
+      let chunkIdx = 0
       const emit = () => {
-        if (idx >= effectiveChunks.length) {
+        if (parts) {
+          if (partIdx < parts.length) {
+            res.write(parts[partIdx++])
+            setTimeout(emit, this.#delayMs > 0 ? 1 : 0)
+            return
+          }
+          parts = null
+          partIdx = 0
+        }
+        if (chunkIdx >= effectiveChunks.length) {
           res.end()
           return
         }
-        const c = effectiveChunks[idx++]
+        const c = effectiveChunks[chunkIdx++]
         const delay = c.delay ?? this.#delayMs
-        const body = this.#chunkSize > 0 ? splitChunk(c.data, this.#chunkSize) : c.data
-        res.write(body)
-        if (delay > 0) {
-          setTimeout(emit, delay)
+        if (this.#chunkSize > 0 && c.data.length > this.#chunkSize) {
+          parts = splitIntoParts(c.data, this.#chunkSize)
+          partIdx = 0
+          res.write(parts[partIdx++])
+          setTimeout(emit, this.#delayMs > 0 ? 1 : 0)
         } else {
-          setImmediate(emit)
+          res.write(c.data)
+          if (delay > 0) {
+            setTimeout(emit, delay)
+          } else {
+            setImmediate(emit)
+          }
         }
       }
       emit()
@@ -202,11 +219,10 @@ export class MockSseServer {
   }
 }
 
-function splitChunk(data: string, size: number): string {
-  if (size <= 0 || data.length <= size) return data
+function splitIntoParts(data: string, size: number): string[] {
   const parts: string[] = []
   for (let i = 0; i < data.length; i += size) {
     parts.push(data.slice(i, i + size))
   }
-  return parts.join("")
+  return parts
 }

@@ -8,11 +8,11 @@
 
 ## 一、测试与调优
 
-### TT1. SSE 边界测试
+### TT1. SSE 边界测试 ✅
 
-streaming parser 任意 chunk 切分：1 字节 / 半个 UTF-8 / 半个 JSON。
+streaming parser 任意 chunk 切分：1 字节 / 半个 UTF-8 / 半个 JSON / data:前缀跨chunk / \n\n跨chunk。
 
-### TT2. E2E 场景
+### TT2. E2E 场景 ✅
 
 bash / read_file / edit / 工具错误恢复 / 中断。不依赖真实 API。
 
@@ -55,6 +55,6 @@ CNY 原生计价四档位，`packages/core/src/strategy/` 目录不存在，Loop
 | 内容 | 状态 |
 |------|------|
 | Phase 0-4 全部 + SIGINT 修复 + TUI 重构 + 安全层 + 壳层增强 + 多 Agent + 工具层 30+ 工具 + Skills + MCP + ADVICE 审计修复 38 项 | ✅ 见 DONE.md |
-| 测试与调优（TT1-3） | ⬜ |
+| 测试与调优（TT1-2 ✅, TT3 ⬜） | 🟡 进行中 |
 | 智能推理调节（ST1-4） | ⬜ |
 | 旧代码清理 | ⬜ |
