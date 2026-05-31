@@ -87,6 +87,7 @@ const initialState: BridgeState = {
   contextUsage: 0,
   warnings: [],
   error: null,
+  permissionPrompt: null,
 };
 
 export function getProviderLabel(provider: string): string {
@@ -138,6 +139,14 @@ export function App({ engine, config }: AppProps) {
   const [activeAgent, setActiveAgent] = useState(engine.getAgentName?.() ?? 'build');
 
   const handleSubmit = useCallback((text: string) => {
+    // Permission confirmation prompt: next input is the response
+    if (bridgeState.permissionPrompt) {
+      const allowed = text.trim().toLowerCase() === 'y';
+      engineRef.current.respondPermission(allowed);
+      setBridgeState(prev => ({ ...prev, permissionPrompt: null }));
+      return;
+    }
+
     if (text === '/exit' || text === '/bye') {
       exitPending = true;
       engineRef.current.interrupt();
@@ -281,6 +290,11 @@ export function App({ engine, config }: AppProps) {
           <Text color="error">✗ {bridgeState.error}</Text>
         </Box>
       )}
+      {bridgeState.permissionPrompt && (
+        <Box paddingX={1} marginTop={1}>
+          <Text color="warning" bold>🔐 {bridgeState.permissionPrompt}</Text>
+        </Box>
+      )}
     </>
   );
 
@@ -308,7 +322,7 @@ export function App({ engine, config }: AppProps) {
 
   if (isFullscreenEnvEnabled()) {
     return (
-      <AlternateScreen mouseTracking>
+      <AlternateScreen>
         <FullscreenLayout
           scrollRef={scrollRef}
           scrollable={scrollableContent}

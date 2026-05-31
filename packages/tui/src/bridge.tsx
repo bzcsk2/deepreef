@@ -19,6 +19,7 @@ export interface BridgeState {
   contextUsage: number;
   warnings: string[];
   error: string | null;
+  permissionPrompt: string | null;
 }
 
 export function createBridge(
@@ -42,6 +43,7 @@ export function createBridge(
       reasoningText: null,
       error: null,
       warnings: [],
+      permissionPrompt: null,
     }));
 
     assistantContent = "";
@@ -63,19 +65,26 @@ export function createBridge(
             setState(prev => ({ ...prev, streamingText: assistantContent }));
             break;
 
-          case "assistant_final":
-            if (activeAssistantMsg) {
+          case "assistant_final": {
+            // Capture values BEFORE clearing — React batches setState
+            // and the functional updater captures variables by reference.
+            // By the time React executes the updater, these would be null/""
+            // if we clear them first.
+            const msgRef = activeAssistantMsg;
+            const content = assistantContent;
+            if (msgRef) {
               setState(prev => ({
                 ...prev,
                 streamingText: null,
                 messages: prev.messages.map(m =>
-                  m === activeAssistantMsg ? { ...m, content: assistantContent } : m
+                  m === msgRef ? { ...m, content } : m
                 ),
               }));
             }
             activeAssistantMsg = null;
             assistantContent = "";
             break;
+          }
 
           case "reasoning_delta":
             reasoningContent += event.content ?? "";
@@ -172,6 +181,13 @@ export function createBridge(
             // Phase 2 events — not yet implemented, ignore
             break;
 
+          case "permission_ask":
+            setState(prev => ({
+              ...prev,
+              permissionPrompt: `Allow ${event.toolName ?? 'tool'}? [y/n] ${event.content ?? ''}`,
+            }));
+            break;
+
           default: {
             const _exhaustiveCheck: never = event.role;
             void _exhaustiveCheck;
@@ -184,13 +200,33 @@ export function createBridge(
       setState(prev => ({ ...prev, error: msg }));
     } finally {
       setTUIState('idle');
-      setState(prev => ({
-        ...prev,
-        isLoading: false,
-        streamingText: null,
-        reasoningText: null,
-        activeTools: new Map(),
-      }));
+      setState(prev => {
+        // If streamingText has content but no assistant_final copied it into
+        // a message, finalize it here as a fallback.
+        const content = prev.streamingText || assistantContent;
+        if (activeAssistantMsg && content) {
+          return {
+            ...prev,
+            isLoading: false,
+            streamingText: null,
+            messages: prev.messages.map(m =>
+              m === activeAssistantMsg ? { ...m, content } : m
+            ),
+            activeTools: new Map(),
+            permissionPrompt: null,
+          };
+        }
+        return {
+          ...prev,
+          isLoading: false,
+          streamingText: null,
+          activeTools: new Map(),
+          permissionPrompt: null,
+        };
+      });
+      activeAssistantMsg = null;
+      assistantContent = "";
+      reasoningContent = "";
     }
   };
 
@@ -205,6 +241,7 @@ export function createBridge(
       streamingText: null,
       reasoningText: null,
       activeTools: new Map(),
+      permissionPrompt: null,
     }));
   };
 

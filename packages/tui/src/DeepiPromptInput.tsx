@@ -50,6 +50,11 @@ export function DeepiPromptInput({ onSubmit, isLoading, disabled, onCancel }: De
       return;
     }
 
+    // Ctrl+O — toggle reasoning panel (handled by DeepiMessages)
+    if (_input === '\x0f' || (key.ctrl && _input === 'o')) {
+      return;
+    }
+
     // Block normal input while loading
     if (isLoading) return;
 

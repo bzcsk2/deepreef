@@ -1,6 +1,6 @@
 # Deepicode 完成记录
 
-最后更新：2026-06-05（ADVICE P0-P3 批量修复 — 32 项，576 pass）
+最后更新：2026-05-31（N1-N14 修复 + Bash 确认 UI 核心机制，575 pass）
 
 本文按 **阶段 (Phase)** + **时间线** 记录已完成内容。
 
@@ -125,6 +125,22 @@
 
 ## 二、按时间线：Round 7–24 + 专项修复
 
+### 2026-06-05（旧代码清理 D5）
+
+删除 pi-ai 移植遗留代码，零生产引用：
+
+| 删除项 | 说明 |
+|--------|------|
+| `vendor/pi.d.ts` | 126 行 pi-ai 类型声明 |
+| `vendor/pi.js` | pi-ai 包装器，`completeSimple` 等 |
+| `vendor/` 目录 | 已空，移除 |
+| `config.ts` 中 `buildPiModel()` | 仅测试引用，生产代码未使用 |
+| `config.ts` 中 `import type { Model }` | 随 `buildPiModel` 移除 |
+| `config.test.ts` 中 `buildPiModel` describe 块 | 测试死代码的函数 |
+| `integration.test.ts` | 138 行，全部依赖 pi.js 且 `.skip` |
+
+验证：`bun run typecheck` 零错误，`bun test packages/core/` 258 pass / 0 fail。
+
 ### 2026-06-05（ADVICE P0-P3 批量修复，32 项）
 
 基于 `ADVICE.md` + 4 份配套审查报告（`deepicode_bug_report.md`、`review_core.md`、`review_tools.md`、`review_tui.md`）的综合评判结果，批量修复 P0-P2 全部 + P3 部分项。
@@ -184,6 +200,29 @@
 
 - `bun run typecheck` 零错误
 - `bun test` 576 pass / 3 skip / 5 fail（5 fail = 3 个 WebSearch 网络超时 + 1 个 SSE 性能 flaky + 1 error，均与修复无关）
+
+### 2026-05-31（N1-N14 修复 + Bash 确认 UI，13 项）
+
+基于三轮新审查报告（FindBugV4 + security/mcp/shell + packages_review）修复：
+
+| 编号 | 问题 | 文件 | 改动 |
+|------|------|------|------|
+| N1 | `bash -lc` source 用户 .bashrc，安全风险 | `shell-exec.ts` | `-lc` → `-c` |
+| N2 | SSE 流无看门狗超时 | `client.ts` | 60s 看门狗，无数据→cancel reader |
+| N3 | MCP connect 未校验 protocolVersion | `mcp/client.ts` | 缺失时 SIGTERM + throw |
+| N4 | MCP disconnect 不清理 pending | `mcp/client.ts` | reject 全部 pending + clearTimeout |
+| N6 | bash 无 git commit/push 拦截 | `shell-exec.ts` | DENY_PATTERNS 加 git push/commit |
+| N7 | runOnLoopEvent 无 try-catch | `engine.ts` | try-catch 包裹 |
+| N8 | removeDenyRule 无法移除 RegExp | `permission.ts` | RegExp 规则保留（用 clear() 移除） |
+| N9 | --session 参数越界 | `cli/tui.ts` | 边界检查 `idx+1 < length` |
+| N10 | FileSnapshot Date.now() 并发冲突 | `snapshot.ts` | `Date.now()_randomUUID()` |
+| N11 | SSE [DONE] tool call index 丢失 | `client.ts` | `values()` → `entries()` |
+| N12 | MCP listTools 顺序不稳定 | `host.ts` | 按 name sort |
+| N13 | AppState.notify listener 异常静默 | `state.ts` | catch → console.error |
+| — | Bash 确认 UI 核心机制 | 多文件 | permission_ask event + respondPermission + TUI prompt |
+| — | flushSharedBatch 绕过权限检查 | `streaming-executor.ts` | 提取 `checkAskPermission()` 方法，shared/exclusive 双路径覆盖 |
+
+验证：`bun run typecheck` 零错误，`bun test` 575 pass / 5 fail / 1 error（fail 均为网络/SSE 环境 flaky）。
 
 ### 2026-05-29
 
@@ -282,6 +321,23 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 | 测试回归修复 | B1: hooks.ts afterToolCall try-catch 隔离；B2: McpAuth.set() stub `"stored"` → `"not_implemented"` |
 | **第二十四轮** | **S1-S15 简单（15项）+ M7/M8/M11/M14/M15 中等（5项）+ 源码补齐 isAllowed/isDenied/fromJSON；总计 561 pass / 3 skip / 0 fail** |
 | **第二十五轮** | **M1-M6 Context/Session + M9 SessionWriter + M12 WebFetch + M13 WebSearch + M16 Task 全流程（9项中等）；总计 580 pass / 3 skip / 0 fail；中等等级 15/18 ✅，剩余 M10 write_file 权限继承** |
+| **TUI 重设计** | **Phase 1 完成：气泡消息+主题扩展+可折叠思考+思考持久化+助手回答消失修复** |
+
+---
+
+## 二.五、TUI 重设计（Phase 1，2026-05-31）
+
+### 问题诊断与修复
+
+| # | 问题 | 根因 | 文件 | 改动 |
+|---|------|------|------|------|
+| T5 | 可折叠思考：快捷键 Alt+R → Ctrl+O | 设计变更 | `DeepiMessages.tsx` | `key.meta && _input === 'r'` → `_input === '\x0f' \|\| (key.ctrl && _input === 'o')` |
+| T5a | 思考内容回答后自动折叠消失 | `finally` 块中 `reasoningText: null` 清空思考 | `bridge.tsx` | 移除 `reasoningText: null`，保留思考内容 |
+| T5b | Ctrl+O 在输入框中被插入为字符 | DeepiPromptInput 未拦截 Ctrl+O | `DeepiPromptInput.tsx` | 新增 `_input === '\x0f' \|\| (key.ctrl && _input === 'o')` 提前 return |
+| T5c | Assistant 回答完成后内容消失（**核心 Bug**） | `assistant_final` 的 `setState` 函数式更新器通过闭包引用捕获 `activeAssistantMsg`/`assistantContent`，React 批处理导致更新器执行时变量已被清空 | `bridge.tsx` | 用 `const` 局部变量保存引用值后再调用 `setState` |
+| T5d | 思考区块位置错误（在所有消息之后） | Thinking 作为独立 section 渲染在 messages.map 之后 | `DeepiMessages.tsx` | 移入最后一条 assistant 消息的独立 wrapper Box 中，位于内容之前 |
+| T5e | 折叠态无操作提示 | 无 | `DeepiMessages.tsx` | 折叠时显示 "ctrl+o open" 提示文本 |
+| — | `finally` 兜底保护 | 防御性设计 | `bridge.tsx` | `finally` 中检查 `activeAssistantMsg` + `streamingText/assistantContent`，未 finalize 时兜底复制到消息 |
 
 ---
 
@@ -544,6 +600,52 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 
 ---
 
-## 附录：旧 TUI 修复（已随旧代码删除失效）
+## TEST.md 已完成项（31 项）
 
-第五轮 TUI 修复（22 项）针对 oh-my-pi 自研 TUI 的旧代码（bridge.ts/chat-view.ts/tool-call-view.ts 等类组件），这些文件已在 Step 3.0 中整体删除并替换为 Ink/React 架构。新 TUI 代码质量由 2026-05-30 DecipecodeTUIReAudit 审计（23 项）覆盖。
+来自 TEST.md 标记为 ✅ 的测试项，已于各轮次中实现。
+
+### 🟢 简单（15 项）
+
+| # | 模块 | 项 |
+|---|------|----|
+| S1 | Repair | Truncation 截断后 JSON 合法但语义不同 |
+| S2 | SSE Client | reasoning_content 不进入 ChatMessage |
+| S3 | list/grep/glob | Bun.Glob 不可用 → fallback |
+| S4 | list/grep/glob | rg 不可用回退 grep |
+| S5 | Task Manager | 完整流程 — create→get→update→stop |
+| S6 | NotebookEdit | 路径穿越保护 |
+| S7 | 其余工具 | Cron: crontab 不存在 → 自动创建 |
+| S8 | Skills | SkillTool load 不存在 → 返回错误 |
+| S9 | Skills | skill 排序 — 按 matching score 降序 |
+| S10 | Permission | isAllowed / isDenied 快捷方法 |
+| S11 | Permission | 自定义规则从 JSON 加载 |
+| S12 | 安全 | bash 敏感文件 |
+| S13 | 安全 | web-fetch 内网 IP 拒绝 |
+| S14 | 安全 | glob / notebook-edit / monitor 路径穿越 |
+| S15 | 安全 | SQL 注入尝试 |
+
+### 🟡 中等（16 项）
+
+| # | 模块 | 项 |
+|---|------|----|
+| M1 | Context | fold force → yield status 警告事件 |
+| M2 | Context | fold suggest + ratio>75% → yield 推荐事件 |
+| M3 | Context | fold 100ms 超时降级不阻塞 loop |
+| M4 | Session | SessionLoader 系统消息被过滤 |
+| M5 | Session | loadSession — 清空+加载+继续 |
+| M6 | Session | recover — 静态工厂返回可用 engine |
+| M7 | SSE Client | 超长单行 >100K chars 不 OOM |
+| M8 | SSE Client | 并发 chatCompletionsStream 不干扰 |
+| M9 | Engine+Loop | SessionWriter enqueue 每轮写入 |
+| M11 | edit | 并发 edit — 不同文件可并行 |
+| M12 | WebFetch | 正常 HTTPS + HTTP 升级 + redirect + HTML 提取 + 超大 + 截断 |
+| M13 | WebSearch | 全套 6 项（搜索/空/限制/无结果/结构变更/超时） |
+| M14 | HookManager | afterToolCall 异常不中断主流程 |
+| M15 | FileSnapshot | SHA256 路径索引 |
+| M16 | 多轮工具链 | Task 完整流程 — Create→List→Get→Update→Stop |
+| M17 | 错误恢复 | 连续 stream 失败 → 重试，第三次终止 |
+| M18 | 错误恢复 | repair 失败 → 不触发 API 重试 |
+
+---
+
+

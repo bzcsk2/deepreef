@@ -54,6 +54,9 @@ export type Theme = {
   clawd_background: string
   userMessageBackground: string
   userMessageBackgroundHover: string
+  assistantMessageBackground: string
+  codeBlockBackground: string
+  reasoningBackground: string
   /** Message-actions selection. Cool shift toward `suggestion` blue; distinct from default AND userMessageBackground. */
   messageActionsBackground: string
   /** Text-selection highlight background (alt-screen mouse selection). Solid
@@ -162,6 +165,9 @@ const lightTheme: Theme = {
   clawd_background: 'rgb(0,0,0)',
   userMessageBackground: 'rgb(240, 240, 240)', // Slightly darker grey for optimal contrast
   userMessageBackgroundHover: 'rgb(252, 252, 252)', // ≥250 to quantize distinct from base at 256-color level
+  assistantMessageBackground: 'rgb(245, 245, 245)',
+  codeBlockBackground: 'rgb(230, 230, 230)',
+  reasoningBackground: 'rgb(250, 245, 240)',
   messageActionsBackground: 'rgb(232, 236, 244)', // cool gray — darker than userMsg 240 (visible on white), slight blue toward `suggestion`
   selectionBg: 'rgb(180, 213, 255)', // classic light-mode selection blue (macOS/VS Code-ish); dark fgs stay readable
   bashMessageBackgroundColor: 'rgb(250, 245, 250)',
@@ -244,6 +250,9 @@ const lightAnsiTheme: Theme = {
   clawd_background: 'ansi:black',
   userMessageBackground: 'ansi:white',
   userMessageBackgroundHover: 'ansi:whiteBright',
+  assistantMessageBackground: 'ansi:white',
+  codeBlockBackground: 'ansi:whiteBright',
+  reasoningBackground: 'ansi:white',
   messageActionsBackground: 'ansi:white',
   selectionBg: 'ansi:cyan', // lighter named bg for light-ansi; dark fgs stay readable
   bashMessageBackgroundColor: 'ansi:whiteBright',
@@ -325,6 +334,9 @@ const darkAnsiTheme: Theme = {
   clawd_background: 'ansi:black',
   userMessageBackground: 'ansi:blackBright',
   userMessageBackgroundHover: 'ansi:white',
+  assistantMessageBackground: 'ansi:blackBright',
+  codeBlockBackground: 'ansi:black',
+  reasoningBackground: 'ansi:blackBright',
   messageActionsBackground: 'ansi:blackBright',
   selectionBg: 'ansi:blue', // darker named bg for dark-ansi; bright fgs stay readable
   bashMessageBackgroundColor: 'ansi:black',
@@ -406,6 +418,9 @@ const lightDaltonizedTheme: Theme = {
   clawd_background: 'rgb(0,0,0)',
   userMessageBackground: 'rgb(220, 220, 220)', // Slightly darker grey for optimal contrast
   userMessageBackgroundHover: 'rgb(232, 232, 232)', // ≥230 to quantize distinct from base at 256-color level
+  assistantMessageBackground: 'rgb(225, 225, 225)',
+  codeBlockBackground: 'rgb(210, 210, 210)',
+  reasoningBackground: 'rgb(240, 235, 230)',
   messageActionsBackground: 'rgb(210, 216, 226)', // cool gray — darker than userMsg 220, slight blue
   selectionBg: 'rgb(180, 213, 255)', // light selection blue; daltonized fgs are yellows/blues, both readable on light blue
   bashMessageBackgroundColor: 'rgb(250, 245, 250)',
@@ -487,6 +502,9 @@ const darkTheme: Theme = {
   clawd_background: 'rgb(0,0,0)',
   userMessageBackground: 'rgb(55, 55, 55)', // Lighter grey for better visual contrast
   userMessageBackgroundHover: 'rgb(70, 70, 70)',
+  assistantMessageBackground: 'rgb(45, 45, 45)',
+  codeBlockBackground: 'rgb(35, 35, 35)',
+  reasoningBackground: 'rgb(50, 45, 40)',
   messageActionsBackground: 'rgb(44, 50, 62)', // cool gray, slight blue
   selectionBg: 'rgb(38, 79, 120)', // classic dark-mode selection blue (VS Code dark default); light fgs stay readable
   bashMessageBackgroundColor: 'rgb(65, 60, 65)',
@@ -568,6 +586,9 @@ const darkDaltonizedTheme: Theme = {
   clawd_background: 'rgb(0,0,0)',
   userMessageBackground: 'rgb(55, 55, 55)', // Lighter grey for better visual contrast
   userMessageBackgroundHover: 'rgb(70, 70, 70)',
+  assistantMessageBackground: 'rgb(45, 45, 45)',
+  codeBlockBackground: 'rgb(35, 35, 35)',
+  reasoningBackground: 'rgb(50, 45, 40)',
   messageActionsBackground: 'rgb(44, 50, 62)', // cool gray, slight blue
   selectionBg: 'rgb(38, 79, 120)', // classic dark-mode selection blue (VS Code dark default); light fgs stay readable
   bashMessageBackgroundColor: 'rgb(65, 60, 65)',
