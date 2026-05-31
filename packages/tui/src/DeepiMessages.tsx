@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { Box, Text, useInput } from '@deepicode/ink';
 import type { ChatMessage } from '@deepicode/core';
-import type { ToolStatus } from './bridge.js';
+import type { ToolStatus, ToolCallRecord } from './bridge.js';
 
 interface DeepiMessagesProps {
   messages: ChatMessage[];
   activeTools: Map<string, ToolStatus>;
+  toolHistory: ToolCallRecord[];
   isLoading: boolean;
   streamingText: string | null;
   reasoningText?: string | null;
@@ -13,6 +14,7 @@ interface DeepiMessagesProps {
 }
 
 const TRUNCATE_LEN = 200;
+const OUTPUT_MAX_LINES = 20;
 
 interface ContentPart {
   type: 'text' | 'code';
@@ -70,7 +72,7 @@ function MessageContent({ text, isStreaming = false }: { text: string; isStreami
   );
 }
 
-export function DeepiMessages({ messages, activeTools, isLoading, streamingText, reasoningText }: DeepiMessagesProps) {
+export function DeepiMessages({ messages, activeTools, toolHistory, isLoading, streamingText, reasoningText }: DeepiMessagesProps) {
   const [reasoningOpen, setReasoningOpen] = useState(false);
 
   useInput((_input, key) => {
@@ -148,18 +150,55 @@ export function DeepiMessages({ messages, activeTools, isLoading, streamingText,
           );
         }
 
-        if (msg.role === 'tool') {
-          return (
-            <Box key={key} paddingLeft={2} marginBottom={1}>
-              <Text color="warning">{'\u23BA'}</Text>
-              <Text> [{msg.name ?? 'tool'}]</Text>
-              <Text dimColor> {msg.content ? (msg.content.length > TRUNCATE_LEN ? msg.content.slice(0, TRUNCATE_LEN) + '...' : msg.content) : ''}</Text>
-            </Box>
-          );
-        }
-
         return null;
       })}
+
+      {toolHistory.length > 0 && (
+        <Box backgroundColor="codeBlockBackground" paddingX={1} paddingY={1} marginBottom={1} flexDirection="column">
+          {toolHistory.map((tc, i) => {
+            const isBash = tc.name === 'bash' || tc.name === 'shell' || tc.name === 'shell_exec';
+            const lines = tc.output.split('\n');
+            const truncated = lines.length > OUTPUT_MAX_LINES;
+            const displayOutput = truncated ? lines.slice(0, OUTPUT_MAX_LINES).join('\n') : tc.output;
+            return (
+              <Box key={i} flexDirection="column" marginTop={i > 0 ? 1 : 0}>
+                {isBash ? (
+                  <>
+                    {tc.command && (
+                      <Box paddingLeft={1}>
+                        <Text dimColor>$ {tc.command}</Text>
+                      </Box>
+                    )}
+                    {displayOutput && (
+                      <Box paddingLeft={1} marginTop={tc.command ? 0 : undefined}>
+                        <Text wrap="wrap">{displayOutput}</Text>
+                      </Box>
+                    )}
+                    {truncated && (
+                      <Box paddingLeft={1}>
+                        <Text dimColor>... +{lines.length - OUTPUT_MAX_LINES} lines</Text>
+                      </Box>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Box flexDirection="row" paddingLeft={1}>
+                      <Text bold>{tc.name}</Text>
+                    </Box>
+                    {tc.output && (
+                      <Box paddingLeft={1} marginTop={1}>
+                        <Text dimColor wrap="wrap">
+                          {tc.output.length > TRUNCATE_LEN ? tc.output.slice(0, TRUNCATE_LEN) + '...' : tc.output}
+                        </Text>
+                      </Box>
+                    )}
+                  </>
+                )}
+              </Box>
+            );
+          })}
+        </Box>
+      )}
 
       {isLoading && activeTools.size > 0 && (
         <Box flexDirection="column" paddingLeft={1} marginTop={1}>

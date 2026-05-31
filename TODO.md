@@ -49,30 +49,17 @@
 
 ---
 
-### Existing: Bash 确认 UI（已实现核心机制，TUI 交互有 Bug）
+### Existing: Bash 确认 UI ✅
 
 **已完成**：
 - `permission.ts`：exec tier → `"ask"`，deny 规则先拦截危险命令
-- `engine.ts`：`pendingPermission` + `respondPermission()` + `requestPermission` callback
+- `engine.ts`：`pendingPermission` + `respondPermission(allow, alwaysAllow?)` + `requestPermission` callback
 - `streaming-executor.ts`：权限"ask"逻辑移到 `executeToolCall`（async generator），yield `permission_ask` 事件 + await 用户响应
 - `interface.ts`：新增 `permission_ask` role
-- `bridge.tsx`：`permissionPrompt` 状态字段，`permission_ask` → 设置提示
-- `App.tsx`：`handleSubmit` 拦截 permission prompt，输入 y → `respondPermission(true)`
-
-**已知 Bug**：
-
-| # | 问题 | 症状 | 根因分析 |
-|---|------|------|---------|
-| U1 | 输入 y 无反应 | 用户看到 `🔐 Allow bash? [y/n]` 提示后，输入 y 回车，bash 不执行 | `DeepiPromptInput` 的 `useInput` 在 `isLoading=true` 时可能不处理输入；或者 `permissionPrompt` 状态的 React 渲染时序导致 `handleSubmit` 收到的 `bridgeState.permissionPrompt` 为 null（闭包陈旧） |
-| U2 | 光标不在对话框 | 显示确认提示时，输入焦点丢失 | `permission_ask` 事件到达时，bridge 的 `finally` 块可能已将 `isLoading` 设为 false 并 reset 了状态，但光标恢复逻辑可能因 Ink 的渲染时序而异常 |
-| U3 | 确认 UI 显示时机 | 提示出现后可能被后续渲染覆盖 | `permission_ask` yield 后，`finally` 块中 `reasoningText: null` 等状态重置可能与 prompt 渲染竞争 |
-| U4 | Fail-open 静默穿透 | hook 返回 undefined 且无 requestPermission 时，权限检查穿透直接执行工具 | `if (hookDecision !== "allow" && this.requestPermission)` 这行之后无 else deny，当两个条件都不满足时 fall through 到工具执行 |
-
-**修复方向**：
-- U1：`handleSubmit` 中 `bridgeState.permissionPrompt` 需要用 ref 而非 state，避免闭包陈旧问题
-- U2：确认模式下强制 focus 输入框，或用独立的 useInput handler
-- U3：`finally` 块检查 `permissionPrompt` 状态，有 pending 时不 reset
-- U4：`executeToolCall` 的 ask 分支末尾加 `else { deny }`：hook 未显式 allow 且无 requestPermission 时拒绝执行
+- `bridge.tsx`：`permissionPrompt: { toolName, args }` 结构化对象，`permission_ask` → 设置提示
+- `App.tsx`：渲染 `PermissionPrompt` 组件，方向键选择+回车确认，权限期间禁用输入框
+- `PermissionPrompt.tsx`：↑↓ 导航，Enter/Esc 确认，三选项（允许/始终允许/拒绝），圆角边框+命令详情
+- `engine.ts`：`respondPermission(allow, alwaysAllow?)` — 始终允许时自动添加 AllowRule
 
 ---
 ## 二、Bug 修复（来自 ADVICE）
@@ -167,6 +154,7 @@
 | ADVICE 审计修复 38 项 + P0-P3 批量修复 32 项 | ✅ DONE.md |
 | TT1-TT3 测试 | ✅ DONE.md |
 | TUI Phase 1（气泡 + 主题 + 可折叠思考 + 思考持久化 + 回答消失修复） | ✅ |
+| TUI 权限确认 UI（方向键选择 + 始终允许 + 结构化状态） | ✅ |
 | TUI Phase 2（多行输入 + 命令补全） | ⬜ |
 | TUI Phase 3（中英文切换） | ⬜ |
 | TUI Phase 4（语法高亮 + 虚拟列表 + 搜索） | ⬜ |

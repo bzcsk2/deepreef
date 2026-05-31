@@ -321,7 +321,7 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 | 测试回归修复 | B1: hooks.ts afterToolCall try-catch 隔离；B2: McpAuth.set() stub `"stored"` → `"not_implemented"` |
 | **第二十四轮** | **S1-S15 简单（15项）+ M7/M8/M11/M14/M15 中等（5项）+ 源码补齐 isAllowed/isDenied/fromJSON；总计 561 pass / 3 skip / 0 fail** |
 | **第二十五轮** | **M1-M6 Context/Session + M9 SessionWriter + M12 WebFetch + M13 WebSearch + M16 Task 全流程（9项中等）；总计 580 pass / 3 skip / 0 fail；中等等级 15/18 ✅，剩余 M10 write_file 权限继承** |
-| **TUI 重设计** | **Phase 1 完成：气泡消息+主题扩展+可折叠思考+思考持久化+助手回答消失修复** |
+| **TUI 重设计** | **Phase 1 完成：气泡消息+主题扩展+可折叠思考+思考持久化+助手回答消失修复；Phase 2：权限确认方向键选择 UI** |
 
 ---
 
@@ -338,6 +338,25 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 | T5d | 思考区块位置错误（在所有消息之后） | Thinking 作为独立 section 渲染在 messages.map 之后 | `DeepiMessages.tsx` | 移入最后一条 assistant 消息的独立 wrapper Box 中，位于内容之前 |
 | T5e | 折叠态无操作提示 | 无 | `DeepiMessages.tsx` | 折叠时显示 "ctrl+o open" 提示文本 |
 | — | `finally` 兜底保护 | 防御性设计 | `bridge.tsx` | `finally` 中检查 `activeAssistantMsg` + `streamingText/assistantContent`，未 finalize 时兜底复制到消息 |
+
+### 权限确认 UI 重设计（2026-05-31）
+
+| 文件 | 改动 |
+|------|------|
+| `PermissionPrompt.tsx` (新) | 方向键选择组件：↑↓ 导航，Enter 确认，Esc 拒绝；圆角边框 + 工具名/命令详情 + 操作提示；三选项：允许 / 始终允许 / 拒绝 |
+| `bridge.tsx` | `permissionPrompt` 从 `string` 改为 `{ toolName, args }` 结构化对象 |
+| `engine.ts` | `respondPermission(allow, alwaysAllow?)` — 始终允许时自动添加 AllowRule 到 PermissionEngine |
+| `interface.ts` | `respondPermission` 签名更新 |
+| `App.tsx` | 渲染 `PermissionPrompt` 替代纯文本，权限确认期间禁用输入框 |
+
+### 工具调用历史持久化 + 结构化展示（2026-05-31）
+
+| 问题 | 根因 | 文件 | 改动 |
+|------|------|------|------|
+| 工具调用结果在加载完成后消失 | bridge 的 `"tool"` 事件仅更新 `activeTools`（临时 Map），从未写入持久化存储 | `bridge.tsx` | 新增 `toolHistory: ToolCallRecord[]` 数组，`"tool"` 事件追加记录；`tool_start` 从 assistant 的 `tool_calls` 提取命令参数 |
+| 工具结果以 JSON 原始格式展示 | 未按工具类型解析格式化 | `DeepiMessages.tsx` | 参考 Claude Code `BashToolResultMessage` + `OutputLine` 设计：bash 显示 `$ 命令` + 输出（截断 20 行）；其他工具显示名称 + 摘要 |
+| 每个工具调用一个气泡，碎片化 | 工具消息逐条追加到 messages 数组 | `bridge.tsx` + `DeepiMessages.tsx` | 不再往 `messages` 追加 tool 消息；所有工具调用合并到一个 `codeBlockBackground` 气泡中渲染 |
+| toolCallArgs Map 类型不匹配 | number key vs string key | `bridge.tsx` + `DeepiMessages.tsx` | 移除 `toolCallArgs` Map，改用 `toolHistory` 数组 |
 
 ---
 

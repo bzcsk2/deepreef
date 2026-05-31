@@ -84,6 +84,7 @@ const initialState: BridgeState = {
   streamingText: null,
   reasoningText: null,
   activeTools: new Map(),
+  toolHistory: [],
   tokens: { input: 0, output: 0, cacheHit: 0, cacheMiss: 0 },
   contextUsage: 0,
   warnings: [],
@@ -271,6 +272,7 @@ export function App({ engine, config }: AppProps) {
       <DeepiMessages
         messages={bridgeState.messages}
         activeTools={bridgeState.activeTools}
+        toolHistory={bridgeState.toolHistory}
         isLoading={bridgeState.isLoading}
         streamingText={bridgeState.streamingText}
         reasoningText={bridgeState.reasoningText}

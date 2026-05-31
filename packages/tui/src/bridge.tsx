@@ -9,12 +9,20 @@ export interface ToolStatus {
   output?: string;
 }
 
+export interface ToolCallRecord {
+  name: string;
+  command: string;
+  output: string;
+  isError: boolean;
+}
+
 export interface BridgeState {
   messages: ChatMessage[];
   isLoading: boolean;
   streamingText: string | null;
   reasoningText: string | null;
   activeTools: Map<string, ToolStatus>;
+  toolHistory: ToolCallRecord[];
   tokens: { input: number; output: number; cacheHit: number; cacheMiss: number };
   contextUsage: number;
   warnings: string[];
@@ -41,6 +49,7 @@ export function createBridge(
       isLoading: true,
       streamingText: null,
       reasoningText: null,
+      toolHistory: [],
       error: null,
       warnings: [],
       permissionPrompt: null,
@@ -91,7 +100,7 @@ export function createBridge(
             setState(prev => ({ ...prev, reasoningText: reasoningContent }));
             break;
 
-          case "tool_start":
+          case "tool_start": {
             setState(prev => {
               const newTools = new Map(prev.activeTools);
               const key = `tool_${event.toolCallIndex ?? crypto.randomUUID()}`;
@@ -99,9 +108,25 @@ export function createBridge(
                 name: event.toolName ?? 'unknown',
                 status: 'running',
               });
+              // Capture command from assistant's tool_calls
+              let command = '';
+              for (let i = prev.messages.length - 1; i >= 0; i--) {
+                const m = prev.messages[i];
+                if (m.role === 'assistant' && m.tool_calls?.[event.toolCallIndex ?? 0]) {
+                  const tc = m.tool_calls[event.toolCallIndex ?? 0];
+                  try {
+                    const args = JSON.parse(tc.function.arguments);
+                    command = args.command ?? args.cmd ?? args.path ?? '';
+                    if (typeof command !== 'string') command = JSON.stringify(command);
+                  } catch {}
+                  break;
+                }
+              }
+              newTools.set(key, { name: event.toolName ?? 'unknown', status: 'running', input: { command } });
               return { ...prev, activeTools: newTools };
             });
             break;
+          }
 
           case "tool_progress":
             setState(prev => {
@@ -119,7 +144,7 @@ export function createBridge(
           case "tool_call_delta":
             break;
 
-          case "tool":
+          case "tool": {
             setState(prev => {
               const newTools = new Map(prev.activeTools);
               const key = `tool_${event.toolCallIndex}`;
@@ -127,9 +152,21 @@ export function createBridge(
               if (existing) {
                 newTools.set(key, { ...existing, status: 'done', output: event.content });
               }
-              return { ...prev, activeTools: newTools };
+              // Add to toolHistory as a single merged record
+              const record: ToolCallRecord = {
+                name: event.toolName ?? existing?.name ?? 'tool',
+                command: existing?.input?.command ? String(existing.input.command) : '',
+                output: event.content ?? '',
+                isError: event.severity === 'error',
+              };
+              return {
+                ...prev,
+                activeTools: newTools,
+                toolHistory: [...prev.toolHistory, record],
+              };
             });
             break;
+          }
 
           case "usage": {
             const addInput = typeof event.metadata?.input === 'number' ? event.metadata.input : 0;
