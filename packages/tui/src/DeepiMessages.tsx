@@ -14,21 +14,7 @@ interface DeepiMessagesProps {
   scrollRef?: React.RefObject<any>;
 }
 
-const TRUNCATE_LEN = 200;
 const MAX_LINES = 3;
-
-function tryFormatJson(line: string): string {
-  try {
-    return JSON.stringify(JSON.parse(line), null, 2);
-  } catch {
-    return line;
-  }
-}
-
-function tryJsonFormatContent(content: string): string {
-  if (content.length > 10_000) return content;
-  return content.split('\n').map(tryFormatJson).join('\n');
-}
 
 function formatToolOutput(tc: ToolCallRecord): { header: string; body: string } {
   let parsed: Record<string, unknown> | null = null;
@@ -63,49 +49,105 @@ function formatToolOutput(tc: ToolCallRecord): { header: string; body: string } 
   return { header: tc.name, body: tc.output };
 }
 
-interface ContentPart {
-  type: 'text' | 'code';
-  lang?: string;
-  content: string;
+function formatActiveTool(tool: ToolStatus): string {
+  const isBash = tool.name === 'bash' || tool.name === 'shell' || tool.name === 'shell_exec';
+  if (isBash && tool.args?.command) return `$ ${tool.args.command}`;
+  if (tool.args) {
+    const keys = Object.keys(tool.args);
+    if (keys.length <= 2) return `${tool.name} ${keys.map(k => `${k}=${JSON.stringify(tool.args![k])}`).join(' ')}`;
+  }
+  return tool.name;
 }
 
-function parseCodeBlocks(text: string): ContentPart[] {
-  const parts: ContentPart[] = [];
-  const regex = /```(\w*)\n([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
+function ThinkingBubble({ text, isOpen }: { text: string; isOpen: boolean }) {
+  return (
+    <Box backgroundColor="reasoningBackground" paddingX={1} paddingY={1} marginBottom={1} flexDirection="column">
+      <Box flexDirection="row">
+        <Text color="warning">{isOpen ? '\u25BC' : '\u25B6'}</Text>
+        <Box marginLeft={1}>
+          <Text bold color="warning">Thinking</Text>
+        </Box>
+      </Box>
+      {isOpen ? (
+        <Box marginTop={1} paddingLeft={2}>
+          <Text dimColor color="warning" wrap="wrap">{text}</Text>
+        </Box>
+      ) : (
+        <Box paddingLeft={2} marginTop={1}>
+          <Text dimColor>ctrl+o open</Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
 
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ type: 'text', content: text.slice(lastIndex, match.index) });
+function ToolUseBubble({ activeTools, toolHistory, isOpen }: {
+  activeTools: Map<string, ToolStatus>;
+  toolHistory: ToolCallRecord[];
+  isOpen: boolean;
+}) {
+  const hasContent = activeTools.size > 0 || toolHistory.length > 0;
+  if (!hasContent) return null;
+
+  // Collect all commands (running + completed)
+  const commands: { text: string; isError?: boolean }[] = [];
+
+  // Running tools
+  Array.from(activeTools.values()).forEach(tool => {
+    commands.push({ text: formatActiveTool(tool) });
+  });
+
+  // Completed tools: show command only (skip successful results, show errors)
+  toolHistory.forEach(tc => {
+    if (tc.isError) {
+      // Show error output
+      const { header, body } = formatToolOutput(tc);
+      commands.push({ text: header, isError: true });
+      if (body) commands.push({ text: body, isError: true });
+    } else {
+      // Show command only
+      const { header } = formatToolOutput(tc);
+      commands.push({ text: header });
     }
-    parts.push({ type: 'code', lang: match[1] || undefined, content: match[2] });
-    lastIndex = match.index + match[0].length;
-  }
+  });
 
-  if (lastIndex < text.length) {
-    parts.push({ type: 'text', content: text.slice(lastIndex) });
-  }
-
-  return parts;
+  return (
+    <Box backgroundColor="reasoningBackground" paddingX={1} paddingY={1} marginBottom={1} flexDirection="column">
+      <Box flexDirection="row">
+        <Text color="warning">{isOpen ? '\u25BC' : '\u25B6'}</Text>
+        <Box marginLeft={1}>
+          <Text bold color="warning">Tool use</Text>
+        </Box>
+      </Box>
+      {isOpen ? (
+        <Box marginTop={1} flexDirection="column">
+          {commands.map((cmd, i) => (
+            <Box key={i} paddingLeft={1}>
+              <Text wrap="wrap" color={cmd.isError ? 'error' : undefined}>{cmd.text}</Text>
+            </Box>
+          ))}
+        </Box>
+      ) : (
+        <Box paddingLeft={2} marginTop={1}>
+          <Text dimColor>ctrl+o open</Text>
+        </Box>
+      )}
+    </Box>
+  );
 }
 
 function MessageContent({ text, isStreaming = false }: { text: string; isStreaming?: boolean }) {
   if (!text) return null;
-
-  if (isStreaming) {
-    return <Text wrap="wrap">{text}</Text>;
-  }
-
+  if (isStreaming) return <Text wrap="wrap">{text}</Text>;
   return <Markdown>{text}</Markdown>;
 }
 
 export function DeepiMessages({ messages, activeTools, toolHistory, isLoading, streamingText, reasoningText }: DeepiMessagesProps) {
-  const [reasoningOpen, setReasoningOpen] = useState(false);
+  const [openSection, setOpenSection] = useState<'thinking' | 'tools' | null>(null);
 
   useInput((_input, key) => {
     if (_input === '\x0f' || (key.ctrl && _input === 'o')) {
-      setReasoningOpen(prev => !prev);
+      setOpenSection(prev => prev === 'thinking' ? null : 'thinking');
     }
   });
 
@@ -127,53 +169,26 @@ export function DeepiMessages({ messages, activeTools, toolHistory, isLoading, s
         }
 
         if (msg.role === 'assistant') {
+          const hasThinking = isLast && !!reasoningText;
+          const hasTools = isLast && (activeTools.size > 0 || toolHistory.length > 0);
+          const showText = isLast ? (streamingText !== null || msg.content) : msg.content;
+
           return (
             <Box key={key} flexDirection="column">
-              {isLast && reasoningText && (
-                <Box backgroundColor="reasoningBackground" paddingX={1} paddingY={1} marginBottom={1} flexDirection="column">
-                  <Box flexDirection="row">
-                    <Text color="warning">{reasoningOpen ? '\u25BC' : '\u25B6'}</Text>
-                    <Box marginLeft={1}>
-                      <Text bold color="warning">Thinking</Text>
+              {hasThinking && <ThinkingBubble text={reasoningText!} isOpen={openSection === 'thinking'} />}
+              {hasTools && <ToolUseBubble activeTools={activeTools} toolHistory={toolHistory} isOpen={openSection === 'tools'} />}
+              {showText && (
+                <Box paddingX={1} marginBottom={1}>
+                  {isLast && streamingText !== null ? (
+                    <Box>
+                      <Text wrap="wrap">{streamingText}</Text>
+                      <Text color="success">{'\u258A'}</Text>
                     </Box>
-                  </Box>
-                  {!reasoningOpen && (
-                    <Box paddingLeft={2} marginTop={1}>
-                      <Text dimColor>ctrl+o open</Text>
-                    </Box>
-                  )}
-                  {reasoningOpen && (
-                    <Box marginTop={1} paddingLeft={2}>
-                      <Text dimColor color="warning" wrap="wrap">{reasoningText}</Text>
-                    </Box>
+                  ) : (
+                    <MessageContent text={msg.content ?? ''} />
                   )}
                 </Box>
               )}
-              <Box backgroundColor="assistantMessageBackground" paddingX={1} paddingY={1} marginBottom={1} flexDirection="column">
-              <Box flexDirection="row" marginBottom={1}>
-                <Text color="claude">{'\u25CF'}</Text>
-                <Box marginLeft={1}>
-                  <Text bold color="briefLabelClaude">Assistant</Text>
-                </Box>
-              </Box>
-              {isLast && streamingText !== null ? (
-                <Box>
-                  <Text wrap="wrap">{streamingText}</Text>
-                  <Text color="success">{'\u258A'}</Text>
-                </Box>
-              ) : (
-                <MessageContent text={msg.content ?? ''} />
-              )}
-              {msg.tool_calls && msg.tool_calls.length > 0 && (
-                <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                  {msg.tool_calls.map((tc: any, j: number) => (
-                    <Box key={j}>
-                      <Text dimColor>  [{tc.function.name}]</Text>
-                    </Box>
-                  ))}
-                </Box>
-              )}
-            </Box>
             </Box>
           );
         }
@@ -181,45 +196,7 @@ export function DeepiMessages({ messages, activeTools, toolHistory, isLoading, s
         return null;
       })}
 
-      {toolHistory.length > 0 && (
-        <Box backgroundColor="codeBlockBackground" paddingX={1} paddingY={1} marginBottom={1} flexDirection="column">
-          {toolHistory.map((tc, i) => {
-            const { header, body } = formatToolOutput(tc);
-            const lines = tryJsonFormatContent(body).split('\n');
-            const overflows = lines.length > MAX_LINES;
-            const displayLines = overflows ? lines.slice(0, MAX_LINES) : lines;
-            return (
-              <Box key={i} flexDirection="column" marginTop={i > 0 ? 1 : 0}>
-                <Box flexDirection="row" paddingLeft={1}>
-                  <Text bold color={tc.isError ? 'error' : undefined}>{header}</Text>
-                </Box>
-                {displayLines.map((line, j) => (
-                  <Box key={j} paddingLeft={1}>
-                    <Text wrap="wrap" color={tc.isError ? 'error' : undefined}>{line}</Text>
-                  </Box>
-                ))}
-                {overflows && (
-                  <Box paddingLeft={1}>
-                    <Text dimColor>... +{lines.length - MAX_LINES} lines</Text>
-                  </Box>
-                )}
-              </Box>
-            );
-          })}
-        </Box>
-      )}
-
-      {isLoading && activeTools.size > 0 && (
-        <Box flexDirection="column" paddingLeft={1} marginTop={1}>
-          {Array.from(activeTools.entries()).map(([key, tool]) => (
-            <Box key={key}>
-              <Text>{tool.status === 'running' ? '\u23BA' : tool.status === 'done' ? '\u2713' : '\u2717'} [{tool.name}]</Text>
-            </Box>
-          ))}
-        </Box>
-      )}
-
-      {isLoading && streamingText === null && activeTools.size === 0 && !reasoningText && (
+      {isLoading && activeTools.size === 0 && toolHistory.length === 0 && !reasoningText && (
         <Box>
           <Text color="success">{'\u280B'} \u601D\u8003\u4E2D...</Text>
         </Box>

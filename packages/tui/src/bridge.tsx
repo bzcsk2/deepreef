@@ -5,7 +5,7 @@ import { setTUIState } from './App.js';
 export interface ToolStatus {
   name: string;
   status: 'running' | 'done' | 'error';
-  input?: Record<string, unknown>;
+  args?: Record<string, unknown>;
   output?: string;
 }
 
@@ -40,6 +40,7 @@ export function createBridge(
   let assistantContent = "";
   let reasoningContent = "";
   let activeAssistantMsg: ChatMessage | null = null;
+  const toolCallArgsAccum = new Map<number, string>();
 
   const submit = async (text: string) => {
     setTUIState('loading');
@@ -58,6 +59,7 @@ export function createBridge(
     assistantContent = "";
     reasoningContent = "";
     activeAssistantMsg = null;
+    toolCallArgsAccum.clear();
 
     try {
       for await (const event of engine.submit(text)) {
@@ -104,25 +106,19 @@ export function createBridge(
             setState(prev => {
               const newTools = new Map(prev.activeTools);
               const key = `tool_${event.toolCallIndex ?? crypto.randomUUID()}`;
+              // Parse args from accumulated tool_call_delta data
+              let args: Record<string, unknown> = {};
+              const idx = event.toolCallIndex ?? 0;
+              const raw = toolCallArgsAccum.get(idx);
+              if (raw) {
+                try { args = JSON.parse(raw); } catch {}
+                toolCallArgsAccum.delete(idx);
+              }
               newTools.set(key, {
                 name: event.toolName ?? 'unknown',
                 status: 'running',
+                args,
               });
-              // Capture command from assistant's tool_calls
-              let command = '';
-              for (let i = prev.messages.length - 1; i >= 0; i--) {
-                const m = prev.messages[i];
-                if (m.role === 'assistant' && m.tool_calls?.[event.toolCallIndex ?? 0]) {
-                  const tc = m.tool_calls[event.toolCallIndex ?? 0];
-                  try {
-                    const args = JSON.parse(tc.function.arguments);
-                    command = args.command ?? args.cmd ?? args.path ?? '';
-                    if (typeof command !== 'string') command = JSON.stringify(command);
-                  } catch {}
-                  break;
-                }
-              }
-              newTools.set(key, { name: event.toolName ?? 'unknown', status: 'running', input: { command } });
               return { ...prev, activeTools: newTools };
             });
             break;
@@ -142,6 +138,10 @@ export function createBridge(
             break;
 
           case "tool_call_delta":
+            // Accumulate arguments JSON from streaming delta
+            if (event.toolCallIndex !== undefined && event.content) {
+              toolCallArgsAccum.set(event.toolCallIndex, event.content);
+            }
             break;
 
           case "tool": {
@@ -155,7 +155,7 @@ export function createBridge(
               // Add to toolHistory as a single merged record
               const record: ToolCallRecord = {
                 name: event.toolName ?? existing?.name ?? 'tool',
-                command: existing?.input?.command ? String(existing.input.command) : '',
+                command: existing?.args?.command ? String(existing.args.command) : '',
                 output: event.content ?? '',
                 isError: event.severity === 'error',
               };
@@ -187,12 +187,31 @@ export function createBridge(
             break;
           }
 
-          case "error":
-            setState(prev => ({
-              ...prev,
-              error: event.content ?? 'Unknown error',
-            }));
+          case "error": {
+            if (event.toolCallIndex !== undefined) {
+              // Tool-related error: add to toolHistory
+              setState(prev => {
+                const toolKey = `tool_${event.toolCallIndex}`;
+                const existing = prev.activeTools.get(toolKey);
+                const record: ToolCallRecord = {
+                  name: event.toolName ?? existing?.name ?? 'tool',
+                  command: existing?.args?.command ? String(existing.args.command) : '',
+                  output: event.content ?? 'Unknown error',
+                  isError: true,
+                };
+                return {
+                  ...prev,
+                  toolHistory: [...prev.toolHistory, record],
+                };
+              });
+            } else {
+              setState(prev => ({
+                ...prev,
+                error: event.content ?? 'Unknown error',
+              }));
+            }
             break;
+          }
 
           case "warning":
             setState(prev => ({
