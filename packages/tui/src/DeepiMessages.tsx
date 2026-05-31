@@ -14,7 +14,54 @@ interface DeepiMessagesProps {
 }
 
 const TRUNCATE_LEN = 200;
-const OUTPUT_MAX_LINES = 20;
+const MAX_LINES = 3;
+
+function tryFormatJson(line: string): string {
+  try {
+    const parsed = JSON.parse(line);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return line;
+  }
+}
+
+function tryJsonFormatContent(content: string): string {
+  if (content.length > 10_000) return content;
+  return content.split('\n').map(tryFormatJson).join('\n');
+}
+
+function formatToolOutput(tc: ToolCallRecord): { header: string; body: string } {
+  let parsed: Record<string, unknown> | null = null;
+  try { parsed = JSON.parse(tc.output); } catch {}
+
+  if (tc.name === 'bash' || tc.name === 'shell' || tc.name === 'shell_exec') {
+    if (parsed) {
+      const stdout = String(parsed.stdout ?? '');
+      const stderr = String(parsed.stderr ?? '');
+      return { header: tc.command ? `$ ${tc.command}` : tc.name, body: stdout + (stderr.trim() ? '\n' + stderr : '') };
+    }
+    return { header: tc.name, body: tc.output };
+  }
+
+  if (tc.name === 'list_dir' && parsed) {
+    const items = parsed.items as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(items)) {
+      const list = items.map(item => {
+        const name = String(item.name ?? '');
+        return item.type === 'dir' ? `${name}/` : name;
+      }).join('\n');
+      return { header: `ls ${parsed.path ?? '.'}`, body: list };
+    }
+  }
+
+  if (parsed) {
+    const msg = parsed.message ?? parsed.error ?? parsed.content;
+    if (typeof msg === 'string') return { header: tc.name, body: msg };
+    return { header: tc.name, body: JSON.stringify(parsed, null, 2) };
+  }
+
+  return { header: tc.name, body: tc.output };
+}
 
 interface ContentPart {
   type: 'text' | 'code';
@@ -156,43 +203,24 @@ export function DeepiMessages({ messages, activeTools, toolHistory, isLoading, s
       {toolHistory.length > 0 && (
         <Box backgroundColor="codeBlockBackground" paddingX={1} paddingY={1} marginBottom={1} flexDirection="column">
           {toolHistory.map((tc, i) => {
-            const isBash = tc.name === 'bash' || tc.name === 'shell' || tc.name === 'shell_exec';
-            const lines = tc.output.split('\n');
-            const truncated = lines.length > OUTPUT_MAX_LINES;
-            const displayOutput = truncated ? lines.slice(0, OUTPUT_MAX_LINES).join('\n') : tc.output;
+            const { header, body } = formatToolOutput(tc);
+            const lines = tryJsonFormatContent(body).split('\n');
+            const overflows = lines.length > MAX_LINES;
+            const displayLines = overflows ? lines.slice(0, MAX_LINES) : lines;
             return (
               <Box key={i} flexDirection="column" marginTop={i > 0 ? 1 : 0}>
-                {isBash ? (
-                  <>
-                    {tc.command && (
-                      <Box paddingLeft={1}>
-                        <Text dimColor>$ {tc.command}</Text>
-                      </Box>
-                    )}
-                    {displayOutput && (
-                      <Box paddingLeft={1} marginTop={tc.command ? 0 : undefined}>
-                        <Text wrap="wrap">{displayOutput}</Text>
-                      </Box>
-                    )}
-                    {truncated && (
-                      <Box paddingLeft={1}>
-                        <Text dimColor>... +{lines.length - OUTPUT_MAX_LINES} lines</Text>
-                      </Box>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <Box flexDirection="row" paddingLeft={1}>
-                      <Text bold>{tc.name}</Text>
-                    </Box>
-                    {tc.output && (
-                      <Box paddingLeft={1} marginTop={1}>
-                        <Text dimColor wrap="wrap">
-                          {tc.output.length > TRUNCATE_LEN ? tc.output.slice(0, TRUNCATE_LEN) + '...' : tc.output}
-                        </Text>
-                      </Box>
-                    )}
-                  </>
+                <Box flexDirection="row" paddingLeft={1}>
+                  <Text bold color={tc.isError ? 'error' : undefined}>{header}</Text>
+                </Box>
+                {displayLines.map((line, j) => (
+                  <Box key={j} paddingLeft={1}>
+                    <Text wrap="wrap" color={tc.isError ? 'error' : undefined}>{line}</Text>
+                  </Box>
+                ))}
+                {overflows && (
+                  <Box paddingLeft={1}>
+                    <Text dimColor>... +{lines.length - MAX_LINES} lines</Text>
+                  </Box>
                 )}
               </Box>
             );
