@@ -111,8 +111,10 @@ function PlainMessage({ message }: { message: ChatMessage }) {
   if (message.role === 'assistant') {
     return (
       <Card>
-        <CardHeader glyph="\u25CF" tone={TONE.ok} title="Assistant" />
-        <Box paddingLeft={1}><MessageContent text={message.content ?? ''} /></Box>
+        <Box flexDirection="column" backgroundColor={SURFACE.bgAssistant} paddingX={1} paddingY={1}>
+          <CardHeader glyph="\u25CF" tone={TONE.ok} title="Assistant" />
+          <Box paddingLeft={1}><MessageContent text={message.content ?? ''} /></Box>
+        </Box>
       </Card>
     );
   }
@@ -128,16 +130,18 @@ function Turn({ turn, detailsOpen }: { turn: TurnView; detailsOpen: boolean }) {
       <ToolUseSection tools={turn.tools} isOpen={showDetails} />
       {(turn.streamingText !== null || turn.assistantText) && (
         <Card>
-          <CardHeader
-            glyph="\u25CF"
-            tone={TONE.ok}
-            title="Assistant"
-            right={turn.streamingText !== null ? <Spinner kind="braille" color={TONE.brand} bold /> : undefined}
-          />
-          <Box paddingLeft={1}>
-            {turn.streamingText !== null
-              ? <Text wrap="wrap">{turn.streamingText}<Text color={TONE.ok}>{'\u258A'}</Text></Text>
-              : <MessageContent text={turn.assistantText} />}
+          <Box flexDirection="column" backgroundColor={SURFACE.bgAssistant} paddingX={1} paddingY={1}>
+            <CardHeader
+              glyph="\u25CF"
+              tone={TONE.ok}
+              title="Assistant"
+              right={turn.streamingText !== null ? <Spinner kind="braille" color={TONE.brand} bold /> : undefined}
+            />
+            <Box paddingLeft={1}>
+              {turn.streamingText !== null
+                ? <Text wrap="wrap">{turn.streamingText}<Text color={TONE.ok}>{'\u258A'}</Text></Text>
+                : <MessageContent text={turn.assistantText} />}
+            </Box>
           </Box>
         </Card>
       )}

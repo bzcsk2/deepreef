@@ -5,13 +5,14 @@
 export interface ThemeTokens {
   fg: { strong: string; body: string; sub: string; meta: string; faint: string };
   tone: { brand: string; accent: string; ok: string; warn: string; err: string; info: string };
-  surface: { bg: string; bgInput: string; bgCode: string; bgElev: string };
+  surface: { bg: string; bgInput: string; bgCode: string; bgElev: string; bgAssistant: string };
 }
 
 const dark: ThemeTokens = {
-  fg: { strong: '#f4f7fb', body: '#d8dee9', sub: '#a7b1c2', meta: '#778294', faint: '#4d5666' },
-  tone: { brand: '#7dd3fc', accent: '#c084fc', ok: '#86efac', warn: '#fbbf24', err: '#f87171', info: '#60a5fa' },
-  surface: { bg: '#0b1020', bgInput: '#0f172a', bgCode: '#080c16', bgElev: '#151d2f' },
+  // Cool refined palette — cold white, blue-grey neutrals, muted tones for production terminal UI
+  fg: { strong: '#e8eaf0', body: '#cfd3dc', sub: '#9ca3af', meta: '#7b8493', faint: '#535b68' },
+  tone: { brand: '#7dd3fc', accent: '#d38adf', ok: '#7ee787', warn: '#e5c07b', err: '#ff6b7a', info: '#61afef' },
+  surface: { bg: '#111318', bgInput: '#161922', bgCode: '#0b0d12', bgElev: '#1b1f2a', bgAssistant: '#151922' },
 };
 
 let activeTheme: ThemeTokens = dark;
