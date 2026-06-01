@@ -1,9 +1,49 @@
 # Deepicode Bug 跟踪与修复指南
 
-**最后更新**: 2026-05-31（N1-N14 修复完成）
+**最后更新**: 2026-06-01（新增中途指令与工具执行可靠性实施约束）
 
 > **历史审计记录，不是当前开发队列。** 多个条目已经失效。开始开发前以 `TODO.md` 为唯一入口，并核对 `DONE.md`。
 > 已修复项 → `DONE.md` ｜ 当前待办与暂缓项 → `TODO.md`
+
+---
+
+## 2026-06-01 专项设计审查：中途指令与工具执行可靠性
+
+详细实施规范见 [`Deepicode-Full-Implementation-Plan.md`](Deepicode-Full-Implementation-Plan.md)。该文件已经按当前仓库接口重写，可直接用于分阶段开发。
+
+### 结论
+
+旧稿方向合理，但不能直接实施。旧稿混用了过时接口、重复队列和共享 AbortController 方案，容易破坏现有 TUI 串行提交与 Core 中断生命周期。新稿将专项拆为：
+
+1. 工具结果恰好写入一次。
+2. Core 中途指令队列与 loop 安全点。
+3. TUI 注入优先路由与原有 `messageQueue` fallback。
+4. 独立可选的结果溢出持久化。
+5. 独立可选的 Hook 可观测性增强。
+
+### 必须遵守的决策
+
+| 主题 | 决策 |
+|------|------|
+| LoopEvent | 保留 `{ role, content?, metadata? }`，不要改成 `{ type: ... }` 联合类型 |
+| runLoop | 保留 `LoopOptions` 对象参数 |
+| AbortController | 保留每次 `submit()` 独立 controller；禁止跨请求共享 |
+| Core 队列 | 新增 `pendingInstructionQueue`，只负责同一 submit 内的安全点注入 |
+| TUI 队列 | 保留 `bridge.tsx` 的 `messageQueue`，只负责后续独立 submit |
+| 注入消息 | 写入普通 user message；禁止伪装 `<system-reminder>` 或修改 prefix |
+| submit 消费 | 禁止 Core 尾递归 `submit()` |
+| 工具结果 | executor 负责每个 tool call 恰好追加一个 ToolResult；loop 禁止整批盲补 |
+| 工具并发 | 保持静态 `shared/exclusive`；暂不根据 bash 文本动态判断 |
+| 级联取消 | 暂不增加 bash 名称特判；需要时设计通用 dependency group 或 `failFast` 元数据 |
+| 结果摘要 | 默认不调用 LLM；先实现确定性截断与安全落盘 |
+
+### 为什么先修工具结果
+
+当前 `loop.ts` 在 executor 抛错后会给整批 tool calls 盲目追加中断结果。若部分工具已经完成，可能生成重复 tool result。另一方面，shared batch 权限拒绝路径也可能没有向上下文补写错误结果。中途指令只能在 tool results 完整后安全写入，因此必须先完成 executor settled 跟踪。
+
+### Agent 领取规则
+
+每次只领取实施规范中的一个 Phase。先写失败测试，再做最小实现。完成后运行目标测试、`bun run typecheck`、`bun test`、`git diff --check`，并把结果记录到 `DONE.md`。不得顺手实现暂缓项。
 
 ---
 
