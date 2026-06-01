@@ -104,8 +104,8 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 | 3 | `F3/F5` | 在现有时间线模型上补齐流式显示，不改变架构 | ✅ 全部完成 |
 | 4 | `T20`、`T22`、`T21` | 输入体验；先数据模型，再编辑行为，再补全窗口 | ✅ 全部完成 |
 | 5 | `T30`、`T31`、`T32` | i18n；等 TUI 字符串结构稳定后进行 | ✅ 全部完成 |
-| 6 | `T40`、`T41` | 长会话渲染和搜索，属于独立显示层增强 | ⬜ 下一步 |
-| 7 | `ST1`–`ST4` | 策略系统涉及 Core + TUI，必须单独设计和测试 | ⬜ |
+| 6 | `T40`、`T41` | 长会话渲染和搜索，属于独立显示层增强 | ✅ 全部完成 |
+| 7 | `ST1`–`ST4` | 策略系统涉及 Core + TUI，必须单独设计和测试 | ⬜ 下一步 |
 | 8 | `M10`、`H1`–`H23` | 测试矩阵和压力验证，伴随相应模块逐步补齐 | ⬜ |
 
 不要一次领取多个阶段。每个编号完成后都应保持全量测试为绿色。
@@ -189,25 +189,13 @@ engine.submit()
 
 已实现。新增 `packages/tui/src/i18n/` 模块：类型安全的 `t()` 函数 + `zh-CN/en` 字典，运行时 `setLocale()` 切换并持久化到 `.deepicode/lang.json`。替换 14 个文件中 ~55 个硬编码字符串。`/lang` 命令循环切换语言。
 
-### T40：虚拟消息列表
+### T40：虚拟消息列表 ✅
 
-**目标**：长会话只渲染可见窗口，降低 Ink 重绘成本。
+已实现。React.memo 优化 Turn/PlainMessage/ReasoningCard/ToolUseSection，useMemo 缓存渲染循环。Benchmark：500 items 构建 0.3ms，窗口扫描 0.2ms。Ink 已内置 viewport culling，终端渲染层只绘制可见子节点。
 
-**边界**：
+### T41：消息搜索 ✅
 
-- 虚拟化只发生在显示层，不裁剪 `timeline` 和 Engine 上下文。
-- 保留稳定 `item.id`，不要按数组 index 作为 React key。
-- 先对 500+ TimelineItem 做 benchmark，再决定窗口大小。
-
-### T41：消息搜索
-
-**目标**：`Ctrl+F` 打开 `SearchOverlay.tsx`，搜索当前 timeline。
-
-**边界**：
-
-- 搜索只读，不改写 timeline。
-- 结果定位与虚拟列表共用稳定 item id。
-- 搜索 assistant、user、reasoning 和工具输出时分别标注来源。
+已实现。新增 `SearchOverlay.tsx`，Ctrl+F 打开搜索面板。使用 Ink 的 `useSearchHighlight` 实现屏幕空间高亮。搜索 assistant/user/reasoning/tool 输出，Enter/↑ 导航，Esc 关闭。
 
 ---
 

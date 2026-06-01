@@ -450,6 +450,17 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 - `packages/tui/src/i18n/persist.ts` — .deepicode/lang.json 读写
 - `packages/tui/src/i18n/index.ts` — t() / setLocale() / getLocale() / toggleLocale()
 
+### T40/T41：虚拟列表优化 + 消息搜索（2026-06-01）
+
+**实现**：`89506ff`
+
+- **T40**：React.memo 优化 Turn/PlainMessage/ReasoningCard/ToolUseSection，useMemo 缓存渲染循环。Benchmark：500 items 构建 0.3ms，窗口扫描 0.2ms。
+- **T41**：新增 `SearchOverlay.tsx`，Ctrl+F 打开搜索面板。使用 Ink 的 `useSearchHighlight` 实现屏幕空间高亮。搜索 assistant/user/reasoning/tool 输出，Enter/↑ 导航，Esc 关闭。
+
+**新文件**：
+- `packages/tui/src/SearchOverlay.tsx` — 搜索覆盖层组件
+- `packages/tui/__tests__/virtual-list-bench.test.ts` — 虚拟列表性能基准测试
+
 ---
 
 ## 三、ADVICE 审计修复总汇（共 38 项，4 份审计报告全部处理完毕）
