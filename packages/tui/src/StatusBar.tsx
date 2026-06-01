@@ -13,6 +13,7 @@ interface StatusBarProps {
   contextTotal: number;
   pendingInstructionCount?: number;
   statusMessage?: string | null;
+  thinkingMode?: string;
 }
 
 function fmt(n: number): string {
@@ -27,7 +28,7 @@ function cacheRate(hit: number, miss: number): string {
   return `${Math.round((hit / total) * 100)}%`;
 }
 
-export function StatusBar({ model, provider, agent, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens, contextUsed, contextTotal, pendingInstructionCount, statusMessage }: StatusBarProps) {
+export function StatusBar({ model, provider, agent, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens, contextUsed, contextTotal, pendingInstructionCount, statusMessage, thinkingMode }: StatusBarProps) {
   const rate = cacheRate(cacheHitTokens, cacheMissTokens);
   return (
     <Box width="100%" flexDirection="column">
@@ -39,6 +40,11 @@ export function StatusBar({ model, provider, agent, inputTokens, outputTokens, c
       {pendingInstructionCount ? (
         <Box>
           <Text inverse color="success">{` 📥 ${t().pendingTasks}${pendingInstructionCount} `}</Text>
+        </Box>
+      ) : null}
+      {thinkingMode && thinkingMode !== 'off' ? (
+        <Box>
+          <Text inverse color="success">{` 🧠 Thinking: ${thinkingMode} `}</Text>
         </Box>
       ) : null}
       <Box width="100%" flexDirection="row">

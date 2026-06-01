@@ -89,6 +89,7 @@ const initialState: BridgeState = {
   warnings: [],
   error: null,
   permissionPrompt: null,
+  thinkingMode: 'off',
 };
 
 export function getProviderLabel(provider: string): string {
@@ -347,6 +348,7 @@ export function App({ engine, config }: AppProps) {
         contextTotal={contextTotal}
         pendingInstructionCount={bridgeState.pendingInstructionCount}
         statusMessage={statusMessage}
+        thinkingMode={bridgeState.thinkingMode}
       />
     </Box>
   );

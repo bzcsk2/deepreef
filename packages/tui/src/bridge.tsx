@@ -38,6 +38,7 @@ export interface BridgeState {
   warnings: string[];
   error: string | null;
   permissionPrompt: { toolName: string; args: Record<string, unknown> } | null;
+  thinkingMode: string;
 }
 
 export function timelineFromMessages(messages: ChatMessage[]): TimelineItem[] {
@@ -281,6 +282,10 @@ export function createBridge(
               // P3: Update injection count from Core metadata
               const queueLen = typeof event.metadata.queueLength === 'number' ? event.metadata.queueLength : 0;
               setState(prev => ({ ...prev, pendingInstructionCount: queueLen }));
+            } else if (event.content === 'thinking_mode_switch') {
+              // AS4: Update thinking mode from auto-switch
+              const to = event.metadata?.to as string;
+              if (to) setState(prev => ({ ...prev, thinkingMode: to }));
             } else if (event.content && event.content !== 'interrupted' && event.content !== 'tools_completed') {
               setState(prev => ({ ...prev, warnings: [...prev.warnings, event.content!] }));
             }
