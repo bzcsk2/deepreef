@@ -274,3 +274,233 @@ describe("ReasonixEngine tool loop regressions", () => {
     expect(doneEvent).toBeDefined()
   })
 })
+
+describe("P2: Mid-session instruction queue", () => {
+  it("P2-1: idle enqueue returns idle, context unchanged", () => {
+    const engine = makeEngine()
+    const result = engine.enqueueInstruction("follow-up question")
+    expect(result.status).toBe("idle")
+    expect(result.queueLength).toBe(0)
+    const msgs = engine.getContextManager().log.messages
+    expect(msgs.some(m => m.role === "user" && m.content === "follow-up question")).toBe(false)
+  })
+
+  it("P2-2: enqueue during tool execution — instruction appended after tool results", async () => {
+    mockClient.setGenerators([
+      (async function* () {
+        yield { type: "tool_call_end", toolCallIndex: 0, id: "tc-1", name: "ok", arguments: "{}" }
+        yield { type: "usage", usage: { promptTokens: 5, completionTokens: 3, totalTokens: 8 } }
+        yield { type: "done", finishReason: "tool_calls" }
+      })(),
+      (async function* () {
+        yield { type: "text_delta", delta: "done" }
+        yield { type: "usage", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+    ])
+    const engine = makeEngine()
+    engine.registerTool({ name: "ok", description: "ok", parameters: { type: "object", properties: {} }, concurrency: "shared", approval: "read", async execute() { return { content: "ok", isError: false } } })
+
+    const gen = engine.submit("start")
+    // Pull first event to start the generator (isSubmitting = true)
+    const first = await gen.next()
+    expect(first.value?.role).toBe("tool_call_delta")
+
+    // Enqueue while tool is executing
+    const result = engine.enqueueInstruction("what about this?")
+    expect(result.status).toBe("queued")
+    expect(result.queueLength).toBe(1)
+
+    // Drain generator
+    const events: LoopEvent[] = [first.value!]
+    for await (const e of gen) events.push(e)
+
+    // instruction_injected status should appear after tool completion
+    const injected = events.filter((e: any) => e.role === "status" && e.content === "instruction_injected")
+    expect(injected).toHaveLength(1)
+
+    // Context should contain: user(start), assistant(tool_calls), tool(ok), user(what about this?), assistant(done)
+    const msgs = engine.getContextManager().log.messages
+    const userMsgs = msgs.filter(m => m.role === "user")
+    expect(userMsgs.map(m => m.content)).toEqual(["start", "what about this?"])
+  })
+
+  it("P2-3: enqueue during final answer — instruction consumed before done, extra turn", async () => {
+    mockClient.setGenerators([
+      (async function* () {
+        yield { type: "text_delta", delta: "answer" }
+        yield { type: "usage", usage: { promptTokens: 5, completionTokens: 3, totalTokens: 8 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+      (async function* () {
+        yield { type: "text_delta", delta: "second" }
+        yield { type: "usage", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+    ])
+    const engine = makeEngine()
+
+    const gen = engine.submit("hi")
+    // Pull first event to start the generator (isSubmitting = true)
+    const first = await gen.next()
+
+    // Enqueue during active submit
+    const result = engine.enqueueInstruction("follow-up")
+    expect(result.status).toBe("queued")
+
+    // Drain generator — engine should do 2 turns
+    const events: LoopEvent[] = [first.value!]
+    for await (const e of gen) events.push(e)
+
+    // Should have instruction_injected status
+    const injected = events.filter((e: any) => e.role === "status" && e.content === "instruction_injected")
+    expect(injected).toHaveLength(1)
+
+    // Should have 1 done event (turn 2 is final)
+    const doneEvents = events.filter((e: any) => e.role === "done")
+    expect(doneEvents).toHaveLength(1)
+
+    // Context: user(hi), assistant(answer), user(follow-up), assistant(second)
+    const msgs = engine.getContextManager().log.messages
+    const userMsgs = msgs.filter(m => m.role === "user")
+    expect(userMsgs.map(m => m.content)).toEqual(["hi", "follow-up"])
+  })
+
+  it("P2-4: enqueue 3 in sequence — consumed one per turn in order", async () => {
+    // Need 3 turns after initial: each turn consumes one instruction
+    mockClient.setGenerators([
+      (async function* () {
+        yield { type: "text_delta", delta: "a" }
+        yield { type: "usage", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+      (async function* () {
+        yield { type: "text_delta", delta: "b" }
+        yield { type: "usage", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+      (async function* () {
+        yield { type: "text_delta", delta: "c" }
+        yield { type: "usage", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+      (async function* () {
+        yield { type: "text_delta", delta: "final" }
+        yield { type: "usage", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+    ])
+    const engine = makeEngine()
+
+    const gen = engine.submit("go")
+    // Pull first event to start the generator (isSubmitting = true)
+    const first = await gen.next()
+
+    // Enqueue 3 during active submit
+    engine.enqueueInstruction("first")
+    engine.enqueueInstruction("second")
+    engine.enqueueInstruction("third")
+
+    // Drain generator
+    const events: LoopEvent[] = [first.value!]
+    for await (const e of gen) events.push(e)
+
+    const injected = events.filter((e: any) => e.role === "status" && e.content === "instruction_injected")
+    expect(injected).toHaveLength(3)
+
+    const msgs = engine.getContextManager().log.messages
+    const userMsgs = msgs.filter(m => m.role === "user")
+    expect(userMsgs.map(m => m.content)).toEqual(["go", "first", "second", "third"])
+  })
+
+  it("P2-5: enqueue 11 — 11th returns full, first 10 preserved", async () => {
+    // Need an active submit to fill the queue
+    mockClient.setGenerators([
+      (async function* () {
+        // Never yields done — keeps the generator alive
+        yield { type: "text_delta", delta: "waiting" }
+        await new Promise(() => {}) // hang forever
+      })(),
+    ])
+    const engine = makeEngine()
+    const gen = engine.submit("start")
+
+    // Pull first event to start the generator (isSubmitting = true)
+    const first = await gen.next()
+
+    // First 10 should queue
+    for (let i = 0; i < 10; i++) {
+      const r = engine.enqueueInstruction(`msg-${i}`)
+      expect(r.status).toBe("queued")
+      expect(r.queueLength).toBe(i + 1)
+    }
+
+    // 11th should be rejected
+    const r = engine.enqueueInstruction("overflow")
+    expect(r.status).toBe("full")
+    expect(r.queueLength).toBe(10)
+
+    // Clean up
+    engine.interrupt()
+  })
+
+  it("P2-6: enqueue then interrupt — queue cleared, new submit normal", async () => {
+    mockClient.setGenerators([
+      (async function* () {
+        yield { type: "text_delta", delta: "ok" }
+        yield { type: "usage", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+    ])
+    const engine = makeEngine()
+
+    // Queue some instructions
+    engine.enqueueInstruction("pending-1")
+    engine.enqueueInstruction("pending-2")
+
+    // Interrupt clears queue
+    engine.interrupt()
+
+    // Enqueue after interrupt — idle because not submitting
+    const r = engine.enqueueInstruction("after-interrupt")
+    expect(r.status).toBe("idle")
+  })
+
+  it("P2-7: session persistence — injected message appears in context messages", async () => {
+    mockClient.setGenerators([
+      (async function* () {
+        yield { type: "text_delta", delta: "response" }
+        yield { type: "usage", usage: { promptTokens: 5, completionTokens: 3, totalTokens: 8 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+      (async function* () {
+        yield { type: "text_delta", delta: "ok" }
+        yield { type: "usage", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+        yield { type: "done", finishReason: "stop" }
+      })(),
+    ])
+    const engine = makeEngine()
+
+    const gen = engine.submit("initial")
+    // Pull first event to start the generator (isSubmitting = true)
+    const first = await gen.next()
+
+    // Enqueue during active submit
+    engine.enqueueInstruction("injected instruction")
+
+    // Drain generator
+    const events: LoopEvent[] = [first.value!]
+    for await (const e of gen) events.push(e)
+
+    // Injected instruction should appear in context messages
+    const msgs = engine.getContextManager().log.messages
+    const injected = msgs.find(m => m.role === "user" && m.content === "injected instruction")
+    expect(injected).toBeDefined()
+  })
+
+  it("P2-8: enqueue empty string — returns ignored", () => {
+    const engine = makeEngine()
+    const r = engine.enqueueInstruction("  ")
+    expect(r.status).toBe("ignored")
+  })
+})

@@ -17,6 +17,11 @@ function normalizeToolCallId(rawId: string | undefined, toolName: string): strin
   return `${toolName}-${++toolCallSeq}-${Date.now()}`
 }
 
+export interface PendingInstruction {
+  content: string
+  remaining: number
+}
+
 export interface LoopOptions {
   ctx: ContextManager
   client: DeepSeekClient
@@ -34,13 +39,32 @@ export interface LoopOptions {
   stats: SessionStats
   isInterrupted: () => boolean
   appendToolResult: (tc: ToolCall, result: ToolResult) => void
+  takePendingInstruction?: () => PendingInstruction | null
   maxTurns?: number
 }
 
 const DEFAULT_MAX_TURNS = 100
 
 export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
-  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult, maxTurns = DEFAULT_MAX_TURNS } = opts
+  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult, takePendingInstruction, maxTurns = DEFAULT_MAX_TURNS } = opts
+
+  // P2: Safe-point helper — consume one pending instruction from the queue.
+  // Returns a status event if an instruction was injected, null otherwise.
+  const appendPendingInstruction = (): LoopEvent | null => {
+    const pending = takePendingInstruction?.()
+    if (!pending) return null
+    ctx.log.append({ role: "user", content: pending.content })
+    sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
+    return {
+      role: "status",
+      content: "instruction_injected",
+      metadata: {
+        kind: "instruction_injected",
+        queueLength: pending.remaining,
+        turnCount,
+      },
+    }
+  }
 
   const contextWindow = ctx.getContextWindow()
 
@@ -165,10 +189,25 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             }
             yield { role: "status", content: "tools_completed" }
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
+
+            // P2: Safe point 1 — consume one pending instruction after tool batch
+            const injectedAfterTools = appendPendingInstruction()
+            if (injectedAfterTools) {
+              yield injectedAfterTools
+            }
           } else if (finishedWithToolUse) {
             // defensive: second done after tool use
           } else {
             ctx.log.append({ role: "assistant", content: fullContent })
+
+            // P2: Safe point 2 — check for pending instructions before ending turn
+            const injectedBeforeDone = appendPendingInstruction()
+            if (injectedBeforeDone) {
+              yield injectedBeforeDone
+              // Don't yield done — continue the loop to process the injected instruction
+              break
+            }
+
             yield { role: "done", metadata: { reason } as Record<string, unknown> }
             sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "done", metadata: { reason } } })

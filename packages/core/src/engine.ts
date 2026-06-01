@@ -3,7 +3,7 @@ import { resolve } from "node:path"
 import type { DeepicodeConfig } from "./config.js"
 import { ContextManager } from "./context/manager.js"
 import type { ToolCall, ToolSpec, ChatMessage } from "./types.js"
-import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolResult } from "./interface.js"
+import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolResult, EnqueueInstructionResult } from "./interface.js"
 import { DeepSeekClient } from "./client.js"
 import { StreamingToolExecutor } from "./streaming-executor.js"
 import { AsyncSessionWriter, SessionLoader } from "./session.js"
@@ -63,6 +63,11 @@ export class ReasonixEngine implements CoreEngine {
   /** exec 工具权限确认：pending Promise 由 TUI 响应 resolve */
   private pendingPermission: { resolve: (v: boolean) => void; toolName: string; args: Record<string, unknown> } | null = null
 
+  /** P2: Mid-session instruction queue — consumed by loop at safe points */
+  private pendingInstructionQueue: string[] = []
+  private isSubmitting = false
+  private static readonly MAX_PENDING_INSTRUCTIONS = 10
+
   /** 流式执行器内部调用，等待 TUI 返回确认结果 */
   private requestPermission = async (toolName: string, args: Record<string, unknown>): Promise<boolean> => {
     return new Promise(resolve => { this.pendingPermission = { resolve, toolName, args } })
@@ -77,6 +82,22 @@ export class ReasonixEngine implements CoreEngine {
       this.pendingPermission.resolve(allow)
       this.pendingPermission = null
     }
+  }
+
+  /** P2: Enqueue a mid-session instruction for consumption at the next safe point */
+  enqueueInstruction(instruction: string): EnqueueInstructionResult {
+    const trimmed = instruction.trim()
+    if (!trimmed) {
+      return { status: "ignored", queueLength: this.pendingInstructionQueue.length }
+    }
+    if (!this.isSubmitting) {
+      return { status: "idle", queueLength: 0 }
+    }
+    if (this.pendingInstructionQueue.length >= ReasonixEngine.MAX_PENDING_INSTRUCTIONS) {
+      return { status: "full", queueLength: this.pendingInstructionQueue.length }
+    }
+    this.pendingInstructionQueue.push(trimmed)
+    return { status: "queued", queueLength: this.pendingInstructionQueue.length }
   }
 
   constructor(config: DeepicodeConfig, onStart?: () => void, sessionId?: string, customClient?: DeepSeekClient) {
@@ -152,6 +173,7 @@ export class ReasonixEngine implements CoreEngine {
   /** 标记中断，终止当前正在进行的请求和工具执行 */
   interrupt(): void {
     this._interrupted = true
+    this.pendingInstructionQueue = []
     this.activeAbortController?.abort()
   }
 
@@ -200,6 +222,7 @@ export class ReasonixEngine implements CoreEngine {
 
   async *submit(userInput: string, agentConfig?: AgentConfig): AsyncGenerator<LoopEvent> {
     this._interrupted = false
+    this.isSubmitting = true
     const abortController = new AbortController()
     this.activeAbortController = abortController
 
@@ -250,6 +273,11 @@ export class ReasonixEngine implements CoreEngine {
         stats: this.stats,
         isInterrupted: () => this._interrupted,
         appendToolResult: (tc, result) => this.appendToolResult(tc, result),
+        takePendingInstruction: () => {
+          const content = this.pendingInstructionQueue.shift()
+          if (!content) return null
+          return { content, remaining: this.pendingInstructionQueue.length }
+        },
       }
 
       for await (const event of runLoop(loopOpts)) {
@@ -257,6 +285,7 @@ export class ReasonixEngine implements CoreEngine {
         try { this.hookManager.runOnLoopEvent(event as unknown as Record<string, unknown>) } catch { /* hook error — fire-and-forget */ }
       }
     } finally {
+      this.isSubmitting = false
       if (this.activeAbortController === abortController) {
         this.activeAbortController = undefined
       }

@@ -485,6 +485,21 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 - `loop.ts`：移除 catch 块中的盲 batch 补写（`appendToolResult(tc, { content: "tool execution interrupted" })`），该逻辑由 executor 内部处理
 - 测试更新：P0-4 改为验证 no duplicates（不再要求 slow 工具返回 error，因其 execute 不检查 signal）；pre-aborted signal 测试改为 expect error
 
+### P2：Core 中途指令队列（2026-06-01）
+
+**实现**：pendingInstructionQueue + LoopOptions.takePendingInstruction + loop.ts 安全点注入
+
+- `interface.ts`：新增 `EnqueueInstructionResult` 类型（queued/idle/ignored/full）和 `CoreEngine.enqueueInstruction()` 方法
+- `engine.ts`：新增 `pendingInstructionQueue: string[]`、`isSubmitting`、`MAX_PENDING_INSTRUCTIONS = 10`
+- `engine.ts`：`enqueueInstruction()` 实现 trim/空检查/非 submitting 返回 idle/上限返回 full/入队返回 queued
+- `engine.ts`：`submit()` 设置 `isSubmitting = true`，`finally` 恢复为 false
+- `engine.ts`：`interrupt()` 清空队列
+- `engine.ts`：`loopOpts.takePendingInstruction` 从队列 shift 一条返回
+- `loop.ts`：新增 `PendingInstruction` 接口和 `LoopOptions.takePendingInstruction`
+- `loop.ts`：`appendPendingInstruction` 局部 helper，消费一条指令追加为 user 消息 + 持久化 + yield status
+- `loop.ts`：安全点 1（工具执行后）和安全点 2（非 tool-use done 前）调用 helper
+- 测试：P2-1 至 P2-8 全部通过（idle/tool execution/final answer/sequential/full/interrupt/persistence/empty）
+
 ---
 
 ## 三、ADVICE 审计修复总汇（共 38 项，4 份审计报告全部处理完毕）

@@ -88,6 +88,12 @@ export interface SessionStats {
 
 /* ── CoreEngine — the central engine interface ── */
 
+export type EnqueueInstructionResult =
+  | { status: "queued"; queueLength: number }
+  | { status: "idle"; queueLength: 0 }
+  | { status: "ignored"; queueLength: number }
+  | { status: "full"; queueLength: number }
+
 export interface CoreEngine {
   submit(userInput: string, agentConfig?: AgentConfig): AsyncGenerator<LoopEvent>
   getState(isStreaming?: boolean, streamingMessage?: string, pendingToolCalls?: Array<{ name: string; args: string }>): AgentState
@@ -97,6 +103,7 @@ export interface CoreEngine {
   getAgentName(): string
   resolveTierDecision(tier: string): void
   respondPermission(allow: boolean, alwaysAllow?: boolean): void
+  enqueueInstruction(instruction: string): EnqueueInstructionResult
 }
 
 export interface AgentConfig {
