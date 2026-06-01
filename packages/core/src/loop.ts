@@ -160,10 +160,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
               // persist messages with tool results for crash recovery
               sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
             } catch {
-              // append error results for all tool calls if execution is interrupted
-              for (const tc of toolCalls) {
-                appendToolResult(tc, { content: JSON.stringify({ error: "tool execution interrupted" }), isError: true })
-              }
+              // P1: StreamingToolExecutor handles settling remaining tools internally.
+              // No blind batch补写 here — it would duplicate results for already-completed tools.
             }
             yield { role: "status", content: "tools_completed" }
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })

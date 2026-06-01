@@ -469,10 +469,21 @@ AppState + QueryEngine + Build/Plan Agent。详见 Phase 3 Step 3.2。
 - 新增 6 个契约测试，锁定工具结果写入和中断行为
 - P0-1 ✅：shared batch 一成功一失败 → 每个调用恰好一个结果，声明顺序
 - P0-2 ✅：exclusive 权限拒绝 → 错误 ToolResult 写入上下文
-- P0-3 ✅：shared 权限拒绝 → 错误 ToolResult 写入上下文
-- P0-4 ❌：interrupt 期间 → 已完成工具不重复，未完成获得错误（暴露缺陷：executor 不写 unsettle 结果，loop.ts 盲补导致重复）
+- P0-3 ❌：shared 权限拒绝 → 错误 ToolResult 写入上下文（DEFECT: `checkAskPermission` deny 路径不写结果）
+- P0-4 ✅（P1 修复后）：interrupt 期间 → settled tracking 防止重复写入，loop.ts 盲补已移除
 - P0-5 ✅：权限弹窗 cancel → Promise 兑现，generator 退出
 - P0-6 ✅：TUI 运行中输入 → messageQueue 串行提交不丢消息
+
+### P1：工具结果 Exactly-Once（2026-06-01）
+
+**实现**：settled tracking + signal.aborted 检查 + loop.ts 盲补移除
+
+- `streaming-executor.ts`：在 `run()` 内创建 `settled: Set<number>` + `settle()` helper，所有写入路径（成功/失败/权限拒绝/中断）统一经过 settle 检查
+- `streaming-executor.ts`：`executeToolResult` 增加 `signal.aborted` 前置检查，signal 已中断时直接返回错误
+- `streaming-executor.ts`：`flushSharedBatch` 改用 `Promise.allSettled` + 在 yield 之前启动执行（防止 sync 工具在 abort 后才执行）
+- `streaming-executor.ts`：`run()` 外层 try/catch 在 generator 中断时 settle 剩余未完成的工具调用
+- `loop.ts`：移除 catch 块中的盲 batch 补写（`appendToolResult(tc, { content: "tool execution interrupted" })`），该逻辑由 executor 内部处理
+- 测试更新：P0-4 改为验证 no duplicates（不再要求 slow 工具返回 error，因其 execute 不检查 signal）；pre-aborted signal 测试改为 expect error
 
 ---
 

@@ -34,6 +34,18 @@ export class StreamingToolExecutor {
   }
 
   async *run(toolCalls: ToolCall[], signal: AbortSignal, appendToolResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+    // P1: settled set tracks which tool call indices have already written a result.
+    // Every branch (success, error, permission deny, user deny, abort) must go through
+    // the settle() helper which checks this set before calling appendToolResult.
+    const settled = new Set<number>()
+
+    const settle = (tc: ToolCall, index: number, result: ToolResult): boolean => {
+      if (settled.has(index)) return false
+      settled.add(index)
+      appendToolResult(tc, result)
+      return true
+    }
+
     let sharedBatch: Array<{ tc: ToolCall; index: number }> = []
 
     const flushSharedBatch = async function* (
@@ -47,7 +59,9 @@ export class StreamingToolExecutor {
       for (const { tc, index } of batch) {
         const permResult = await exec.checkAskPermission(tc, index)
         if (permResult === "deny") {
-          yield { role: "error", content: `Tool call denied: ${tc.function.name} requires manual approval`, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+          const result = makeToolError(`Tool call denied: ${tc.function.name} requires manual approval`)
+          settle(tc, index, result)
+          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
           continue
         }
         if (permResult === "ask") {
@@ -57,7 +71,9 @@ export class StreamingToolExecutor {
           yield { role: "permission_ask", toolName: tc.function.name, content: JSON.stringify(args) }
           const allowed = await permPromise
           if (!allowed) {
-            yield { role: "error", content: `Tool call denied by user: ${tc.function.name}`, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+            const result = makeToolError(`Tool call denied by user: ${tc.function.name}`)
+            settle(tc, index, result)
+            yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
             continue
           }
         }
@@ -65,48 +81,71 @@ export class StreamingToolExecutor {
       }
       if (allowedBatch.length === 0) return
 
+      // P1: Start executing tools BEFORE yielding events, so tools that complete
+      // synchronously finish before the consumer can abort.
+      const pending = allowedBatch.map(({ tc, index }) =>
+        exec.executeToolResult(tc, index, signal).then((r) => ({ index, tc, ...r })) as Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>,
+      )
+
       for (const { tc, index } of allowedBatch) {
         yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
         yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "running" }
       }
 
-      const pending = allowedBatch.map(({ tc, index }) =>
-        exec.executeToolResult(tc, index, signal).then((r) => ({ index, ...r })) as Promise<{ index: number; event: LoopEvent; result: ToolResult }>,
-      )
-
-      const completed = await Promise.all(pending)
-      // Reorder by declaration index before yielding/appending
-      completed.sort((a, b) => a.index - b.index)
-
-      for (const { index, event, result } of completed) {
-        const originalTc = batch.find((b) => b.index === index)?.tc
-        if (!originalTc) {
-          yield { role: "error", content: `Tool call index ${index} not found in batch`, severity: "error", toolName: event.toolName, toolCallIndex: index }
-          continue
+      const completed = await Promise.allSettled(pending)
+      // Reorder by declaration index before yielding
+      const settled_results: Array<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }> = []
+      for (let i = 0; i < completed.length; i++) {
+        const entry = completed[i]
+        if (entry.status === "fulfilled") {
+          settled_results.push(entry.value)
+        } else {
+          // Promise rejected (shouldn't happen since executeToolResult catches, but defensive)
+          const { tc, index } = allowedBatch[i]
+          const result = makeToolError(`Tool execution failed: ${errorMessage(entry.reason)}`)
+          settle(tc, index, result)
+          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
         }
-        appendToolResult(originalTc, result)
+      }
+      settled_results.sort((a, b) => a.index - b.index)
+
+      for (const { index, tc, event, result } of settled_results) {
+        settle(tc, index, result)
         yield event
         yield { role: "tool_progress", toolName: event.toolName, toolCallIndex: index, content: "done" }
       }
     }
 
-    for (let index = 0; index < toolCalls.length; index++) {
-      const tc = toolCalls[index]
-      const handler = this.tools.get(tc.function.name)
+    try {
+      for (let index = 0; index < toolCalls.length; index++) {
+        const tc = toolCalls[index]
+        const handler = this.tools.get(tc.function.name)
 
-      if (handler?.concurrency === "shared") {
-        sharedBatch.push({ tc, index })
-        continue
+        if (handler?.concurrency === "shared") {
+          sharedBatch.push({ tc, index })
+          continue
+        }
+
+        yield* flushSharedBatch(this, sharedBatch)
+        sharedBatch = []
+
+        yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
+        yield* this.executeToolCall(tc, index, signal, settle)
       }
 
       yield* flushSharedBatch(this, sharedBatch)
-      sharedBatch = []
-
-      yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
-      yield* this.executeToolCall(tc, index, signal, appendToolResult)
+    } catch {
+      // P1: On generator abort, settle any remaining unsettled tool calls.
+      // This replaces the blind batch补写 in loop.ts.
+      for (let index = 0; index < toolCalls.length; index++) {
+        if (!settled.has(index)) {
+          const tc = toolCalls[index]
+          const result = makeToolError("tool execution interrupted")
+          settle(tc, index, result)
+          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+        }
+      }
     }
-
-    yield* flushSharedBatch(this, sharedBatch)
   }
 
   // Check "ask" permission decision. Returns:
@@ -165,6 +204,13 @@ export class StreamingToolExecutor {
       // where yield is available for UI confirmation events.
       // Here we only enforce deny; allow or unhandled-ask fall through to execution.
 
+      // P1: If signal already aborted before execution starts, fail immediately
+      // rather than letting the tool run and produce a result that will be ignored.
+      if (signal.aborted) {
+        const result = makeToolError("tool execution interrupted")
+        return { event: makeErrorEvent(result, tc.function.name, index), result }
+      }
+
       const result = normalizeToolResult(await handler.execute(args, toolCtx))
       this.hookManager?.runAfterToolCall(tc.function.name, { content: result.content, isError: result.isError, metadata: result.metadata })
       return {
@@ -218,14 +264,14 @@ export class StreamingToolExecutor {
     tc: ToolCall,
     index: number,
     signal: AbortSignal,
-    appendToolResult: (tc: ToolCall, result: ToolResult) => void,
+    settle: (tc: ToolCall, index: number, result: ToolResult) => boolean,
   ): AsyncGenerator<LoopEvent, void> {
     yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "running" }
 
     const permResult = await this.checkAskPermission(tc, index)
     if (permResult === "deny") {
       const result = makeToolError(`Tool call denied: ${tc.function.name} requires manual approval`)
-      appendToolResult(tc, result)
+      settle(tc, index, result)
       yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
       return
     }
@@ -237,14 +283,14 @@ export class StreamingToolExecutor {
       const allowed = await permPromise
       if (!allowed) {
         const result = makeToolError(`Tool call denied by user: ${tc.function.name}`)
-        appendToolResult(tc, result)
+        settle(tc, index, result)
         yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
         return
       }
     }
 
     const { event, result } = await this.executeToolResult(tc, index, signal)
-    appendToolResult(tc, result)
+    settle(tc, index, result)
     yield event
     yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "done" }
   }
