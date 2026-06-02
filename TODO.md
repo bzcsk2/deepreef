@@ -312,3 +312,70 @@ engine.submit()
 - 动态 bash 并发判断
 - bash 特判级联取消
 - 默认 LLM 摘要不进入首轮实现
+
+---
+
+## 10. ADVICE.md Bug 修复待办
+
+### 10.1 AUD-02 (P1)：结果溢出持久化配额闭环
+
+**目标**：实现 per-session 配额核算、拒绝后 preview fallback、旧文件清理。
+
+**涉及文件**：
+- `packages/core/src/result-persistence.ts`
+
+**要求**：
+- 实现确定性的 per-session 配额核算
+- 拒绝后 preview fallback
+- 旧文件清理
+- 并发写入测试
+
+### 10.2 AUD-03 (P1)：上下文预算 force 分支硬边界
+
+**目标**：增加 token 预算下的机械 fallback。
+
+**涉及文件**：
+- `packages/core/src/context/manager.ts`
+- `packages/core/src/loop.ts`
+
+**要求**：
+- 保留 tool-call/tool-result 原子组和 system prefix
+- 增加 token 预算下的机械 fallback
+- 不要切断工具消息组
+
+### 10.3 AUD-05 (P1)：编辑 fallback 歧义保护
+
+**目标**：对每个会写文件的匹配路径统一执行唯一性校验。
+
+**涉及文件**：
+- `packages/tools/src/fuzzy-edit.ts`
+- `packages/tools/src/edit.ts`
+
+**要求**：
+- 对每个会写文件的匹配路径统一执行唯一性校验
+- 重新审视"替换首个重复项"的测试语义
+
+### 10.4 AUD-07 (P2)：Hook 失败可观测性
+
+**目标**：在日志专项中接线 Hook 失败事件。
+
+**涉及文件**：
+- `packages/security/src/hooks.ts`
+- `packages/core/src/engine.ts`
+
+**要求**：
+- 记录 phase 和错误，不记录敏感参数
+- 保持 before hook 失败时 deny
+- after/loop hook 失败时不阻断主流程
+
+### 10.5 AUD-08 (P2)：repair.ts storm() 安全性
+
+**目标**：限制 storm() 只在可证明只有一个 KV 的场景下执行。
+
+**涉及文件**：
+- `packages/core/src/context/repair.ts`
+
+**要求**：
+- 限制为可证明只有一个 KV 的场景
+- 或返回 partial 状态并拒绝直接执行
+- 增加多参数残缺输入测试
