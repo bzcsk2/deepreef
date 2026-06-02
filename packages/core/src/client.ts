@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto"
 import type { ChatMessage, ToolSpec } from "./types.js"
 import type { ChatClient } from "./interface.js"
+import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
 
 export type DeepSeekStreamEvent =
   | { type: "text_delta"; delta: string }
@@ -29,6 +31,7 @@ export interface DeepSeekClientOptions {
   tools?: ToolSpec[]
   thinking?: { type: "enabled" | "disabled" }
   reasoningEffort?: "low" | "medium" | "high" | "max"
+  traceContext?: Record<string, unknown>
 }
 
 type ToolCallDelta = {
@@ -63,7 +66,14 @@ type SSEChunk = {
 }
 
 export class DeepSeekClient implements ChatClient {
+  constructor(private readonly logger: RuntimeLogger = noopRuntimeLogger) {}
+
   async *chatCompletionsStream(messages: ChatMessage[], opts: DeepSeekClientOptions): AsyncGenerator<DeepSeekStreamEvent> {
+    const diagnosticsEnabled = this.logger.isEnabled("error")
+    const startedAt = diagnosticsEnabled ? Date.now() : 0
+    const requestLogger = diagnosticsEnabled
+      ? this.logger.child({ ...opts.traceContext, requestId: randomUUID() })
+      : this.logger
     const url = `${ensureBaseUrl(opts.baseUrl)}chat/completions`
     const headers: Record<string, string> = {
       Authorization: `Bearer ${opts.apiKey}`,
@@ -106,6 +116,16 @@ export class DeepSeekClient implements ChatClient {
     }
     if (opts.thinking) body.thinking = opts.thinking
     if (opts.reasoningEffort) body.reasoning_effort = opts.reasoningEffort
+    if (diagnosticsEnabled) {
+      requestLogger.info("api.request.start", {
+        url,
+        model: opts.model,
+        messageCount: messages.length,
+        toolSpecCount: opts.tools?.length ?? 0,
+        thinking: opts.thinking?.type,
+        reasoningEffort: opts.reasoningEffort,
+      })
+    }
 
     const maxRetries = 3
     const retryableStatuses = new Set([429, 500, 502, 503])
@@ -120,27 +140,33 @@ export class DeepSeekClient implements ChatClient {
         const status = resp.status
         if (!retryableStatuses.has(status) || attempt > maxRetries) {
           const text = await safeReadText(resp)
+          if (diagnosticsEnabled) requestLogger.warn("api.request.http_error", { status, attempt, durationMs: Date.now() - startedAt })
           yield { type: "error", status, message: `HTTP ${status}`, body: text }
           return
         }
         const delay = Math.min(1000 * 2 ** (attempt - 1) + Math.random() * 500, 10_000)
+        if (diagnosticsEnabled) requestLogger.warn("api.request.retry", { status, attempt, delayMs: Math.round(delay) })
         await sleep(delay, opts.signal)
         continue
       } catch (e) {
         if (attempt > maxRetries || isAbortError(e)) {
+          if (diagnosticsEnabled) requestLogger.error("api.request.fetch_error", e, { attempt, durationMs: Date.now() - startedAt })
           yield { type: "error", message: errorMessage(e) }
           return
         }
         const delay = Math.min(1000 * 2 ** (attempt - 1) + Math.random() * 500, 10_000)
+        if (diagnosticsEnabled) requestLogger.warn("api.request.retry", { attempt, delayMs: Math.round(delay), reason: errorMessage(e) })
         await sleep(delay, opts.signal)
         continue
       }
     }
 
     if (!resp.body) {
+      if (diagnosticsEnabled) requestLogger.error("api.response.body_missing", undefined, { status: resp.status, durationMs: Date.now() - startedAt })
       yield { type: "error", message: "Response body missing" }
       return
     }
+    if (diagnosticsEnabled) requestLogger.info("api.response.open", { status: resp.status, attempt, durationMs: Date.now() - startedAt })
 
     const reader = resp.body.getReader()
     try {
@@ -150,6 +176,8 @@ export class DeepSeekClient implements ChatClient {
       const toolState = new Map<number, { id?: string; name?: string; args: string }>()
       const finalized = new Set<number>()
       let finishReasonYielded = false
+      let ttftMs: number | undefined
+      let firstEventYielded = false
 
       const WATCHDOG_MS = 60_000
       let watchdog: ReturnType<typeof setTimeout> | undefined
@@ -158,6 +186,14 @@ export class DeepSeekClient implements ChatClient {
         watchdog = setTimeout(() => { reader.cancel("SSE stall").catch(() => {}) }, WATCHDOG_MS)
       }
       resetWatchdog()
+
+      const yieldFirstEvent = (type: string) => {
+        if (!firstEventYielded) {
+          firstEventYielded = true
+          ttftMs = Date.now() - startedAt
+          if (diagnosticsEnabled) requestLogger.debug("api.stream.first_event", { ttftMs, eventType: type })
+        }
+      }
 
       while (true) {
         const { value, done } = await reader.read()
@@ -194,6 +230,7 @@ export class DeepSeekClient implements ChatClient {
             if (!finishReasonYielded) {
               yield { type: "done", finishReason: null }
             }
+            if (diagnosticsEnabled) requestLogger.info("api.stream.done", { finishReason: null, durationMs: Date.now() - startedAt })
             return
           }
 
@@ -206,12 +243,14 @@ export class DeepSeekClient implements ChatClient {
             if (process.env.DEEPICODE_DEBUG) {
               console.debug("[SSE] JSON parse failed:", payload.slice(0, 200))
             }
+            if (diagnosticsEnabled) requestLogger.debug("api.sse.parse_error", { payloadLength: payload.length })
             continue
           }
 
           if (json.error) {
             const err = json.error
             const msg = err.message ?? `API error ${err.code ?? 'unknown'}`
+            if (diagnosticsEnabled) requestLogger.warn("api.stream.provider_error", { code: err.code, message: msg, durationMs: Date.now() - startedAt })
             yield { type: "error", message: msg }
             return
           }
@@ -219,9 +258,11 @@ export class DeepSeekClient implements ChatClient {
           const choice = json.choices?.[0]
           const delta = choice?.delta
           if (delta?.reasoning_content) {
+            yieldFirstEvent("reasoning_delta")
             yield { type: "reasoning_delta", delta: delta.reasoning_content }
           }
           if (delta?.content) {
+            yieldFirstEvent("text_delta")
             yield { type: "text_delta", delta: delta.content }
           }
 
@@ -235,6 +276,7 @@ export class DeepSeekClient implements ChatClient {
               if (fn?.arguments) state.args += fn.arguments
               toolState.set(index, state)
 
+              yieldFirstEvent("tool_call_delta")
               yield {
                 type: "tool_call_delta",
                 toolCallIndex: index,
@@ -256,6 +298,14 @@ export class DeepSeekClient implements ChatClient {
           }
 
           if (json.usage) {
+            if (diagnosticsEnabled) {
+              requestLogger.info("api.usage", {
+                promptTokens: json.usage.prompt_tokens,
+                completionTokens: json.usage.completion_tokens,
+                cacheHitTokens: json.usage.prompt_cache_hit_tokens,
+                cacheMissTokens: json.usage.prompt_cache_miss_tokens,
+              })
+            }
             yield {
               type: "usage",
               usage: {
@@ -278,6 +328,7 @@ export class DeepSeekClient implements ChatClient {
       if (!finishReasonYielded) {
         yield { type: "done", finishReason: null }
       }
+      if (diagnosticsEnabled) requestLogger.info("api.stream.done", { finishReason: null, durationMs: Date.now() - startedAt, ttftMs })
     } finally {
       reader.releaseLock()
     }
@@ -329,4 +380,3 @@ async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     signal?.addEventListener("abort", onAbort, { once: true })
   })
 }
-

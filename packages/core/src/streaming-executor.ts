@@ -3,6 +3,7 @@ import type { ToolCall } from "./types.js"
 import { repairToolArguments } from "./context/repair.js"
 import type { PermissionEngine, HookManager, PermissionDecision } from "@deepicode/security"
 import { maybePersistResult, type ResultPersistenceConfig } from "./result-persistence.js"
+import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
 
 export class StreamingToolExecutor {
   private tools: Map<string, AgentTool>
@@ -14,6 +15,7 @@ export class StreamingToolExecutor {
   private delegateTask?: (task: string, agentType: "build" | "plan", files: string[]) => Promise<string>
   private switchAgent?: (name: "build" | "plan") => string
   private resultPersistenceConfig?: ResultPersistenceConfig
+  private logger: RuntimeLogger
 
   constructor(
     tools: Map<string, AgentTool>,
@@ -25,6 +27,7 @@ export class StreamingToolExecutor {
     delegateTask?: (task: string, agentType: "build" | "plan", files: string[]) => Promise<string>,
     switchAgent?: (name: "build" | "plan") => string,
     resultPersistenceConfig?: ResultPersistenceConfig,
+    logger: RuntimeLogger = noopRuntimeLogger,
   ) {
     this.tools = tools
     this.sessionId = sessionId
@@ -35,9 +38,13 @@ export class StreamingToolExecutor {
     this.delegateTask = delegateTask
     this.switchAgent = switchAgent
     this.resultPersistenceConfig = resultPersistenceConfig
+    this.logger = logger
   }
 
-  async *run(toolCalls: ToolCall[], signal: AbortSignal, appendToolResult: (tc: ToolCall, result: ToolResult) => void): AsyncGenerator<LoopEvent> {
+  async *run(toolCalls: ToolCall[], signal: AbortSignal, appendToolResult: (tc: ToolCall, result: ToolResult) => void, traceContext?: Record<string, unknown>): AsyncGenerator<LoopEvent> {
+    const logger = traceContext && this.logger.isEnabled("error")
+      ? this.logger.child(traceContext)
+      : this.logger
     // P1: settled set tracks which tool call indices have already written a result.
     // Every branch (success, error, permission deny, user deny, abort) must go through
     // the settle() helper which checks this set before calling appendToolResult.
@@ -57,6 +64,12 @@ export class StreamingToolExecutor {
       batch: Array<{ tc: ToolCall; index: number }>,
     ): AsyncGenerator<LoopEvent> {
       if (batch.length === 0) return
+      const diagnosticsEnabled = logger.isEnabled("error")
+      const batchStartedAt = diagnosticsEnabled ? Date.now() : 0
+      if (diagnosticsEnabled) {
+        const sharedCount = batch.filter(({ tc }) => exec.tools.get(tc.function.name)?.concurrency === "shared").length
+        logger.debug("tool.batch.start", { count: batch.length, sharedCount, exclusiveCount: batch.length - sharedCount })
+      }
 
       // Permission check for all tools in batch (must run before dispatching)
       const allowedBatch: Array<{ tc: ToolCall; index: number }> = []
@@ -77,6 +90,7 @@ export class StreamingToolExecutor {
           if (!allowed) {
             const result = makeToolError(`Tool call denied by user: ${tc.function.name}`)
             settle(tc, index, result)
+            if (diagnosticsEnabled) logger.warn("tool.execute.denied", { permissionSource: "user", durationMs: Date.now() - batchStartedAt })
             yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
             continue
           }
@@ -88,7 +102,7 @@ export class StreamingToolExecutor {
       // P1: Start executing tools BEFORE yielding events, so tools that complete
       // synchronously finish before the consumer can abort.
       const pending = allowedBatch.map(({ tc, index }) =>
-        exec.executeToolResult(tc, index, signal).then((r) => ({ index, tc, ...r })) as Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>,
+        exec.executeToolResult(tc, index, signal, logger).then((r) => ({ index, tc, ...r })) as Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>,
       )
 
       for (const { tc, index } of allowedBatch) {
@@ -118,6 +132,10 @@ export class StreamingToolExecutor {
         yield event
         yield { role: "tool_progress", toolName: event.toolName, toolCallIndex: index, content: "done" }
       }
+      if (diagnosticsEnabled) {
+        const errorCount = settled_results.filter(r => r.result.isError).length
+        logger.debug("tool.batch.done", { durationMs: Date.now() - batchStartedAt, errorCount })
+      }
     }
 
     try {
@@ -134,7 +152,7 @@ export class StreamingToolExecutor {
         sharedBatch = []
 
         yield { role: "tool_start", toolName: tc.function.name, toolCallIndex: index }
-        yield* this.executeToolCall(tc, index, signal, settle)
+        yield* this.executeToolCall(tc, index, signal, settle, logger)
       }
 
       yield* flushSharedBatch(this, sharedBatch)
@@ -177,14 +195,21 @@ export class StreamingToolExecutor {
   }
 
   // Execute tool and return result without appending to context
-  private async executeToolResult(tc: ToolCall, index: number, signal: AbortSignal): Promise<{ event: LoopEvent; result: ToolResult }> {
+  private async executeToolResult(tc: ToolCall, index: number, signal: AbortSignal, baseLogger = this.logger): Promise<{ event: LoopEvent; result: ToolResult }> {
+    const diagnosticsEnabled = baseLogger.isEnabled("error")
+    const startedAt = diagnosticsEnabled ? Date.now() : 0
+    const logger = diagnosticsEnabled
+      ? baseLogger.child({ toolCallId: tc.id, toolName: tc.function.name, toolCallIndex: index })
+      : baseLogger
     const handler = this.tools.get(tc.function.name)
     const toolCtx = this.createToolContext(signal, [tc.function.name])
 
     if (!handler) {
       const result = makeToolError(`Unknown tool: ${tc.function.name}`)
+      if (diagnosticsEnabled) logger.warn("tool.execute.unknown", { durationMs: Date.now() - startedAt })
       return { event: makeErrorEvent(result, tc.function.name, index), result }
     }
+    if (diagnosticsEnabled) logger.info("tool.execute.start", { concurrency: handler.concurrency, approval: handler.approval })
 
     let args: Record<string, unknown>
     try {
@@ -193,15 +218,18 @@ export class StreamingToolExecutor {
       const repaired = repairToolArguments(tc.function.arguments)
       if (!repaired.success) {
         const result = makeToolError(`Invalid arguments for ${tc.function.name}: failed all repair stages`)
+        if (diagnosticsEnabled) logger.warn("tool.arguments.invalid", { durationMs: Date.now() - startedAt })
         return { event: makeErrorEvent(result, tc.function.name, index), result }
       }
       args = repaired.args
+      if (diagnosticsEnabled) logger.warn("tool.arguments.repaired")
     }
 
     try {
       const check = this.permissionEngine?.decide(tc.function.name, args, handler.approval)
       if (check?.decision === "deny") {
         const result = makeToolError(check.reason ?? "Permission denied")
+        if (diagnosticsEnabled) logger.warn("tool.execute.denied", { durationMs: Date.now() - startedAt })
         return { event: makeErrorEvent(result, tc.function.name, index), result }
       }
       // "ask" decisions are handled upstream in executeToolCall (async generator)
@@ -212,6 +240,7 @@ export class StreamingToolExecutor {
       // rather than letting the tool run and produce a result that will be ignored.
       if (signal.aborted) {
         const result = makeToolError("tool execution interrupted")
+        if (diagnosticsEnabled) logger.warn("tool.execute.aborted", { durationMs: Date.now() - startedAt })
         return { event: makeErrorEvent(result, tc.function.name, index), result }
       }
 
@@ -237,6 +266,7 @@ export class StreamingToolExecutor {
       }
 
       this.hookManager?.runAfterToolCall(tc.function.name, { content: result.content, isError: result.isError, metadata: result.metadata })
+      if (diagnosticsEnabled) logger.info("tool.execute.done", { durationMs: Date.now() - startedAt, isError: result.isError })
       return {
         event: {
           role: result.isError ? "error" : "tool",
@@ -251,6 +281,7 @@ export class StreamingToolExecutor {
     } catch (e) {
       const result = makeToolError(errorMessage(e))
       this.hookManager?.runAfterToolCall(tc.function.name, { content: result.content, isError: true, metadata: result.metadata })
+      if (diagnosticsEnabled) logger.error("tool.execute.error", e, { durationMs: Date.now() - startedAt })
       return { event: makeErrorEvent(result, tc.function.name, index), result }
     }
   }
@@ -289,6 +320,7 @@ export class StreamingToolExecutor {
     index: number,
     signal: AbortSignal,
     settle: (tc: ToolCall, index: number, result: ToolResult) => boolean,
+    logger: RuntimeLogger,
   ): AsyncGenerator<LoopEvent, void> {
     yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "running" }
 
@@ -313,7 +345,7 @@ export class StreamingToolExecutor {
       }
     }
 
-    const { event, result } = await this.executeToolResult(tc, index, signal)
+    const { event, result } = await this.executeToolResult(tc, index, signal, logger)
     settle(tc, index, result)
     yield event
     yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "done" }

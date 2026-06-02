@@ -14,6 +14,7 @@ import type { ModeStats } from "./mode-stats.js"
 import { logModeSwitch } from "./mode-stats.js"
 import { calculateCost } from "./pricing.js"
 import { randomUUID } from "node:crypto"
+import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
 
 let toolCallSeq = 0
 
@@ -50,12 +51,15 @@ export interface LoopOptions {
   thinkingMode?: ThinkingMode
   modeSelectorState?: ModeSelectorState
   modeStats?: ModeStats
+  logger?: RuntimeLogger
+  submitId?: string
 }
 
 const DEFAULT_MAX_TURNS = 100
 
 export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
-  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult, takePendingInstruction, maxTurns = DEFAULT_MAX_TURNS, thinkingMode = "off", modeSelectorState, modeStats } = opts
+  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult, takePendingInstruction, maxTurns = DEFAULT_MAX_TURNS, thinkingMode = "off", modeSelectorState, modeStats, logger = noopRuntimeLogger, submitId } = opts
+  const diagnosticsEnabled = logger.isEnabled("error")
 
   // P2: Safe-point helper — consume one pending instruction from the queue.
   // Returns a status event if an instruction was injected, null otherwise.
@@ -99,6 +103,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
 
   while (turnCount < maxTurns) {
     turnCount++
+    if (diagnosticsEnabled) logger.debug("loop.turn.start", { turnCount, thinkingMode: currentMode })
     toolCallSeq = 0  // Reset per-turn sequence for ID normalization
     if (isInterrupted()) {
       yield { role: "status", content: "interrupted" }
@@ -120,6 +125,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       signal,
       tools: toolSpecs.length > 0 ? toolSpecs : undefined,
       ...createDeepSeekCapabilities().mapMode(currentMode),
+      traceContext: diagnosticsEnabled ? { submitId, turnCount } : undefined,
     })) {
       if (isInterrupted()) {
         yield { role: "status", content: "interrupted" }
@@ -190,7 +196,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             totalToolCalls += toolCalls.length
 
             try {
-              for await (const toolEvent of toolExecutor.run(toolCalls, signal, appendToolResult)) {
+              for await (const toolEvent of toolExecutor.run(toolCalls, signal, appendToolResult, diagnosticsEnabled ? { submitId, turnCount } : undefined)) {
                 yield toolEvent
                 sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: toolEvent })
               }
@@ -239,6 +245,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
               if (decision.action === "switch") {
                 currentMode = decision.target
                 modeSelectorState.lastSwitchTime = Date.now()
+                if (diagnosticsEnabled) logger.info("reasoning.mode.switch", { from: signalBundle.currentMode, to: currentMode, reason: decision.reason })
                 yield { role: "status", content: "thinking_mode_switch", metadata: { from: signalBundle.currentMode, to: currentMode, reason: decision.reason } }
               }
             }
@@ -271,6 +278,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         currentMode = decision.target
         modeSelectorState.lastSwitchTime = Date.now()
         if (modeStats) logModeSwitch(modeStats, from, currentMode, decision.reason)
+        if (diagnosticsEnabled) logger.info("reasoning.mode.switch", { from, to: currentMode, reason: decision.reason })
         yield { role: "status", content: "thinking_mode_switch", metadata: { from, to: currentMode, reason: decision.reason } }
       }
     }
@@ -284,6 +292,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         ctx.log.append({ role: "assistant", content: fullContent })
       }
       consecutiveErrors++
+      if (diagnosticsEnabled) logger.warn("loop.stream.retry", { consecutiveErrors, turnCount })
       if (consecutiveErrors >= 3) {
         yield { role: "error", content: `Stream failed after ${consecutiveErrors} consecutive attempts`, severity: "error" as const }
         return
@@ -293,6 +302,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     consecutiveErrors = 0
   }
 
+  if (diagnosticsEnabled) logger.warn("loop.max_turns", { maxTurns })
   yield { role: "warning", content: `Reached maximum tool loop count (${maxTurns}).`, severity: "warning" as const }
   yield { role: "done", metadata: { reason: "maxTurns" } }
 }
