@@ -589,6 +589,26 @@ DEEPICODE_TRACE=1
 - 所有工具保持现有返回格式不变。
 - 验收：typecheck 通过 + 774/774 测试通过。
 
+### CL-50：StreamingToolExecutor 渐进提取
+
+- 新增 `packages/core/src/executor-helpers.ts`，提取 4 个纯函数：
+  - `evaluatePermission()`：权限决策逻辑（allow/deny/ask）
+  - `createSettleLedger()`：工具调用结算账本（settled set + settle closure）
+  - `createProgressQueue()`：有界进度缓冲队列（push/flush/length）
+  - `applyResultPersistence()`：结果溢出持久化适配器
+- `streaming-executor.ts` 改为调用上述 helper，内部逻辑不变。
+- 验收：typecheck 通过 + 774/774 测试通过。
+
+### CL-51：runLoop() 渐进提取
+
+- 新增 `packages/core/src/loop-helpers.ts`，提取 4 个纯函数：
+  - `normalizeToolCallId()` + `resetToolCallSeq()`：工具调用 ID 规范化
+  - `createDuplicateDetector()`：重复工具调用检测器（3+ 次相同 tool+args 告警）
+  - `evaluateModeSwitchForTurn()`：思维模式切换信号构造与评估
+  - `injectPendingInstruction()`：待注入指令安全点 helper
+- `loop.ts` 改为调用上述 helper，主控制流不变。
+- 验收：typecheck 通过 + 774/774 测试通过。
+
 ---
 
 ## 6. 文档维护规则

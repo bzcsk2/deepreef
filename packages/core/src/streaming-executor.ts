@@ -1,9 +1,10 @@
 import type { AgentTool, LoopEvent, ToolContext, ToolResult, ToolProgressUpdate } from "./interface.js"
 import type { ToolCall } from "./types.js"
 import { repairToolArguments } from "./context/repair.js"
-import type { PermissionEngine, HookManager, PermissionDecision } from "@deepicode/security"
-import { maybePersistResult, type ResultPersistenceConfig } from "./result-persistence.js"
+import type { PermissionEngine, HookManager } from "@deepicode/security"
+import { type ResultPersistenceConfig } from "./result-persistence.js"
 import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
+import { evaluatePermission, createSettleLedger, createProgressQueue, applyResultPersistence } from "./executor-helpers.js"
 
 export class StreamingToolExecutor {
   private tools: Map<string, AgentTool>
@@ -49,17 +50,8 @@ export class StreamingToolExecutor {
     const logger = traceContext && this.logger.isEnabled("error")
       ? this.logger.child(traceContext)
       : this.logger
-    // P1: settled set tracks which tool call indices have already written a result.
-    // Every branch (success, error, permission deny, user deny, abort) must go through
-    // the settle() helper which checks this set before calling appendToolResult.
-    const settled = new Set<number>()
-
-    const settle = (tc: ToolCall, index: number, result: ToolResult): boolean => {
-      if (settled.has(index)) return false
-      settled.add(index)
-      appendToolResult(tc, result)
-      return true
-    }
+    // CL-50: Settled set tracks which tool call indices have already written a result.
+    const { settle, isSettled } = createSettleLedger(appendToolResult)
 
     let sharedBatch: Array<{ tc: ToolCall; index: number }> = []
 
@@ -78,7 +70,7 @@ export class StreamingToolExecutor {
       // Permission check for all tools in batch (must run before dispatching)
       const allowedBatch: Array<{ tc: ToolCall; index: number }> = []
       for (const { tc, index } of batch) {
-        const permResult = await exec.checkAskPermission(tc, index)
+        const permResult = await evaluatePermission(tc, exec.tools, exec.permissionEngine, exec.hookManager, exec.requestPermission)
         if (permResult === "deny") {
           const result = makeToolError(`Tool call denied: ${tc.function.name} requires manual approval`)
           settle(tc, index, result)
@@ -105,12 +97,12 @@ export class StreamingToolExecutor {
 
       // P1: Start executing tools BEFORE yielding events, so tools that complete
       // synchronously finish before the consumer can abort.
-      // P5.5/CL-20: Collect progress from shared tools via per-tool buffers
-      const progressBuffers = new Map<number, ToolProgressUpdate[]>()
+      // CL-50: Collect progress from shared tools via per-tool progress queues
+      const progressQueues = new Map<number, ReturnType<typeof createProgressQueue>>()
       const pending = allowedBatch.map(({ tc, index }) => {
-        const buf: ToolProgressUpdate[] = []
-        progressBuffers.set(index, buf)
-        return exec.executeToolResult(tc, index, signal, logger, (update) => { buf.push(update) }).then((r) => ({ index, tc, ...r })) as Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>
+        const q = createProgressQueue()
+        progressQueues.set(index, q)
+        return exec.executeToolResult(tc, index, signal, logger, q.push).then((r) => ({ index, tc, ...r })) as Promise<{ index: number; tc: ToolCall; event: LoopEvent; result: ToolResult }>
       })
 
       for (const { tc, index } of allowedBatch) {
@@ -135,11 +127,11 @@ export class StreamingToolExecutor {
       }
       settled_results.sort((a, b) => a.index - b.index)
 
-      // CL-20: Flush progress buffers before final events
+      // CL-50: Flush progress queues before final events
       for (const { index } of settled_results) {
-        const buf = progressBuffers.get(index)
-        if (buf) {
-          for (const p of buf) {
+        const q = progressQueues.get(index)
+        if (q) {
+          for (const p of q.flush()) {
             yield { role: "tool_progress", toolName: "", toolCallIndex: index, content: p.content, metadata: p.metadata }
           }
         }
@@ -175,10 +167,9 @@ export class StreamingToolExecutor {
 
       yield* flushSharedBatch(this, sharedBatch)
     } catch {
-      // P1: On generator abort, settle any remaining unsettled tool calls.
-      // This replaces the blind batch补写 in loop.ts.
+      // CL-50: On generator abort, settle any remaining unsettled tool calls.
       for (let index = 0; index < toolCalls.length; index++) {
-        if (!settled.has(index)) {
+        if (!isSettled(index)) {
           const tc = toolCalls[index]
           const result = makeToolError("tool execution interrupted")
           settle(tc, index, result)
@@ -188,28 +179,9 @@ export class StreamingToolExecutor {
     }
   }
 
-  // Check "ask" permission decision. Returns:
-  //   "allow" — hook allowed or no "ask" decision
-  //   "deny"  — hook denied or no confirmation channel
-  //   "ask"   — need to yield permission_ask event and await user response
+  // CL-50: Permission check delegated to evaluatePermission helper
   private async checkAskPermission(tc: ToolCall, _index: number): Promise<"allow" | "deny" | "ask"> {
-    const handler = this.tools.get(tc.function.name)
-    if (!handler || !this.permissionEngine) return "allow"
-    let args: Record<string, unknown>
-    try { args = parseToolArguments(tc.function.arguments) } catch { args = {} }
-    const check = this.permissionEngine.decide(tc.function.name, args, handler.approval)
-    if (check?.decision !== "ask") return "allow"
-    let hookDecision: PermissionDecision | void
-    try {
-      hookDecision = await this.hookManager?.runBeforeToolCall({
-        toolName: tc.function.name, args, tier: handler.approval,
-        permissionDecision: "ask", permissionReason: check.reason,
-      })
-    } catch { hookDecision = "deny" }
-    if (hookDecision === "allow") return "allow"
-    if (hookDecision === "deny") return "deny"
-    if (this.requestPermission) return "ask"
-    return "deny" // no confirmation channel
+    return evaluatePermission(tc, this.tools, this.permissionEngine, this.hookManager, this.requestPermission)
   }
 
   // Execute tool and return result without appending to context
@@ -270,24 +242,10 @@ export class StreamingToolExecutor {
 
       const rawResult = normalizeToolResult(await handler.execute(args, toolCtx))
 
-      // P4: Check if result needs overflow persistence
+      // CL-50: Apply overflow persistence via adapter
       let result = rawResult
       if (!rawResult.isError && this.resultPersistenceConfig) {
-        const persisted = await maybePersistResult(
-          rawResult.content,
-          this.sessionId,
-          tc.function.name,
-          this.resultPersistenceConfig,
-          logger,
-        )
-        result = { ...rawResult, content: persisted.content }
-        if (persisted.persisted) {
-          result.metadata = { ...result.metadata, ...persisted.persisted }
-        }
-        if (persisted.warning) {
-          // Emit warning via hook (non-blocking)
-          this.hookManager?.runAfterToolCall(tc.function.name, { content: persisted.warning, isError: false, metadata: { warning: true } })
-        }
+        result = await applyResultPersistence(rawResult, this.sessionId, tc.function.name, this.resultPersistenceConfig, this.hookManager, logger)
       }
 
       this.hookManager?.runAfterToolCall(tc.function.name, { content: result.content, isError: result.isError, metadata: result.metadata })
@@ -350,11 +308,8 @@ export class StreamingToolExecutor {
   ): AsyncGenerator<LoopEvent, void> {
     yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: "running" }
 
-    // P5.5: Progress buffer — tools push updates via reportProgress, flushed after execution
-    const progressBuffer: ToolProgressUpdate[] = []
-    const reportProgress = (update: ToolProgressUpdate) => {
-      progressBuffer.push(update)
-    }
+    // CL-50: Progress queue — tools push updates via reportProgress, flushed after execution
+    const progressQueue = createProgressQueue()
 
     const permResult = await this.checkAskPermission(tc, index)
     if (permResult === "deny") {
@@ -377,10 +332,10 @@ export class StreamingToolExecutor {
       }
     }
 
-    const { event, result } = await this.executeToolResult(tc, index, signal, logger, reportProgress)
+    const { event, result } = await this.executeToolResult(tc, index, signal, logger, progressQueue.push)
     settle(tc, index, result)
-    // P5.5: Flush buffered progress before "done"
-    for (const p of progressBuffer) {
+    // CL-50: Flush buffered progress before "done"
+    for (const p of progressQueue.flush()) {
       yield { role: "tool_progress", toolName: tc.function.name, toolCallIndex: index, content: p.content, metadata: p.metadata }
     }
     yield event

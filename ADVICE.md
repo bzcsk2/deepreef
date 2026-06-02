@@ -527,7 +527,7 @@ os: [ubuntu-latest, macos-latest, windows-latest]
 
 只有 Phase 0-5 完成且行为测试稳定后，才进入本阶段。
 
-### CL-50 `StreamingToolExecutor` 渐进提取
+### ✅ CL-50 `StreamingToolExecutor` 渐进提取
 
 可提取：
 
@@ -542,7 +542,7 @@ os: [ubuntu-latest, macos-latest, windows-latest]
 - 引入 RxJS、Effect TS 或新的并发库；
 - 改变 `AsyncGenerator<LoopEvent>` 接口。
 
-### CL-51 `runLoop()` 渐进提取
+### ✅ CL-51 `runLoop()` 渐进提取
 
 只提取纯逻辑：
 

@@ -6,25 +6,21 @@ import type { ContextManager } from "./context/manager.js"
 import type { StreamingToolExecutor } from "./streaming-executor.js"
 import type { AsyncSessionWriter } from "./session.js"
 import type { FoldDecision } from "./context/token-estimator.js"
-import type { ModeSelectorState, SwitchSignal } from "./mode-selector.js"
+import type { ModeSelectorState } from "./mode-selector.js"
 import type { ThinkingMode } from "./provider-thinking.js"
-import { evaluateModeSwitch } from "./mode-selector.js"
 import { createDeepSeekCapabilities } from "./provider-thinking.js"
 import type { StrategyTier } from "./strategy/tiers.js"
-import { logModeSwitch } from "./mode-stats.js"
 import type { ModeStats } from "./mode-stats.js"
+import { logModeSwitch } from "./mode-stats.js"
 import { calculateCost } from "./pricing.js"
-import { recommendTier, type TierRecommendation } from "./strategy/recommender.js"
-import { randomUUID } from "node:crypto"
+import { recommendTier } from "./strategy/recommender.js"
 import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
-
-let toolCallSeq = 0
-
-/** Normalize tool call ID: ensure non-empty, stable, unique per turn. */
-function normalizeToolCallId(rawId: string | undefined, toolName: string): string {
-  if (rawId && rawId.trim()) return rawId.trim()
-  return `${toolName}-${++toolCallSeq}-${randomUUID()}`
-}
+import {
+  normalizeToolCallId, resetToolCallSeq,
+  createDuplicateDetector,
+  evaluateModeSwitchForTurn,
+  injectPendingInstruction,
+} from "./loop-helpers.js"
 
 export interface PendingInstruction {
   content: string
@@ -76,22 +72,9 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     if (tier.temperature !== null) config.temperature = tier.temperature
   }
 
-  // P2: Safe-point helper — consume one pending instruction from the queue.
-  // Returns a status event if an instruction was injected, null otherwise.
+  // CL-51: Safe-point helper — consume one pending instruction from the queue.
   const appendPendingInstruction = (): LoopEvent | null => {
-    const pending = takePendingInstruction?.()
-    if (!pending) return null
-    ctx.log.append({ role: "user", content: pending.content })
-    sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
-    return {
-      role: "status",
-      content: "instruction_injected",
-      metadata: {
-        kind: "instruction_injected",
-        queueLength: pending.remaining,
-        turnCount,
-      },
-    }
+    return injectPendingInstruction(takePendingInstruction, ctx, sessionWriter, turnCount)
   }
 
   const contextWindow = ctx.getContextWindow()
@@ -112,14 +95,14 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
 
   let turnCount = 0
   let consecutiveErrors = 0
-  const recentToolCalls = new Map<string, number>()
+  const recentToolCalls = createDuplicateDetector()
   let currentMode: ThinkingMode = thinkingMode
   let totalToolCalls = 0
 
   while (turnCount < maxTurns) {
     turnCount++
     if (diagnosticsEnabled) logger.debug("loop.turn.start", { turnCount, thinkingMode: currentMode })
-    toolCallSeq = 0  // Reset per-turn sequence for ID normalization
+    resetToolCallSeq()  // Reset per-turn sequence for ID normalization
     if (isInterrupted()) {
       yield { role: "status", content: "interrupted" }
       return
@@ -199,13 +182,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
               yield { role: "warning", content: "API returned tool_calls finish_reason but no tool calls found", severity: "warning" as const }
               break
             }
-            // duplicate tool call detection: reject if same tool+args called 3+ times
+            // CL-51: duplicate tool call detection
             for (const tc of toolCalls) {
-              const key = `${tc.function.name}:${tc.function.arguments}`
-              const count = (recentToolCalls.get(key) ?? 0) + 1
-              recentToolCalls.set(key, count)
-              if (count >= 3) {
-                yield { role: "warning", content: `Tool call loop detected: ${tc.function.name} called ${count} times with identical arguments`, severity: "warning" as const }
+              const { warning } = recentToolCalls.check(tc)
+              if (warning) {
+                yield { role: "warning", content: warning, severity: "warning" as const }
               }
             }
 
@@ -274,22 +255,14 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "done", metadata: { reason } } })
 
-            // AS3: Evaluate thinking mode switch before returning
+            // CL-51: Evaluate thinking mode switch before returning
             if (modeSelectorState && !signal.aborted) {
-              const signalBundle: SwitchSignal = {
-                currentMode,
-                toolCallCount: totalToolCalls,
-                textLength: fullContent.length,
-                loopCount: turnCount,
-                retryCount: consecutiveErrors,
-                hasError: !!streamError,
-              }
-              const decision = evaluateModeSwitch(modeSelectorState, signalBundle)
-              if (decision.action === "switch") {
-                currentMode = decision.target
+              const switchResult = evaluateModeSwitchForTurn(modeSelectorState, currentMode, totalToolCalls, fullContent.length, turnCount, consecutiveErrors, !!streamError)
+              if (switchResult.switched) {
+                currentMode = switchResult.to!
                 modeSelectorState.lastSwitchTime = Date.now()
-                if (diagnosticsEnabled) logger.info("reasoning.mode.switch", { from: signalBundle.currentMode, to: currentMode, reason: decision.reason })
-                yield { role: "status", content: "thinking_mode_switch", metadata: { from: signalBundle.currentMode, to: currentMode, reason: decision.reason } }
+                if (diagnosticsEnabled) logger.info("reasoning.mode.switch", { from: switchResult.from, to: currentMode, reason: switchResult.reason })
+                yield { role: "status", content: "thinking_mode_switch", metadata: { from: switchResult.from, to: currentMode, reason: switchResult.reason } }
               }
             }
             return
@@ -305,24 +278,15 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       }
     }
 
-    // AS3: Evaluate thinking mode switch after each turn
+    // CL-51: Evaluate thinking mode switch after each turn
     if (modeSelectorState && !signal.aborted) {
-      const signalBundle: SwitchSignal = {
-        currentMode,
-        toolCallCount: totalToolCalls,
-        textLength: fullContent.length,
-        loopCount: turnCount,
-        retryCount: consecutiveErrors,
-        hasError: !!streamError,
-      }
-      const decision = evaluateModeSwitch(modeSelectorState, signalBundle)
-      if (decision.action === "switch") {
-        const from = signalBundle.currentMode
-        currentMode = decision.target
+      const switchResult = evaluateModeSwitchForTurn(modeSelectorState, currentMode, totalToolCalls, fullContent.length, turnCount, consecutiveErrors, !!streamError)
+      if (switchResult.switched) {
+        currentMode = switchResult.to!
         modeSelectorState.lastSwitchTime = Date.now()
-        if (modeStats) logModeSwitch(modeStats, from, currentMode, decision.reason)
-        if (diagnosticsEnabled) logger.info("reasoning.mode.switch", { from, to: currentMode, reason: decision.reason })
-        yield { role: "status", content: "thinking_mode_switch", metadata: { from, to: currentMode, reason: decision.reason } }
+        if (modeStats && switchResult.from && switchResult.reason) logModeSwitch(modeStats, switchResult.from, currentMode, switchResult.reason)
+        if (diagnosticsEnabled) logger.info("reasoning.mode.switch", { from: switchResult.from, to: currentMode, reason: switchResult.reason })
+        yield { role: "status", content: "thinking_mode_switch", metadata: { from: switchResult.from, to: currentMode, reason: switchResult.reason } }
       }
     }
 
