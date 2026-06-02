@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { access, mkdir, readFile, rm } from "node:fs/promises"
+import { access, mkdir, readFile, rm, lstat } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { RuntimeLogger, createRuntimeLoggerFromEnv } from "../src/runtime-logger.js"
+import { RuntimeLogger, createRuntimeLoggerFromEnv, parseDebugArgs, registerCleanup, runCleanupFunctions, registerShutdownFlush } from "../src/runtime-logger.js"
 
 describe("RuntimeLogger", () => {
   let tmpDir: string
@@ -140,5 +140,43 @@ describe("RuntimeLogger", () => {
     expect(record.sessionId).toBe("s1")
     expect(record.submitId).toBe("sub1")
     expect(record.extra).toBe("data")
+  })
+
+  it("LOG2: event filter excludes non-matching events", async () => {
+    const logger = new RuntimeLogger({ filePath: logPath, filter: "api" })
+    logger.info("api.request.start", { url: "test" })
+    logger.info("tool.execute.done", { tool: "test" })
+    await logger.flush()
+
+    const exists = await access(logPath).then(() => true).catch(() => false)
+    if (exists) {
+      const records = (await readFile(logPath, "utf-8")).trim().split("\n").map(r => JSON.parse(r))
+      expect(records.every(r => r.event.includes("api"))).toBe(true)
+    }
+  })
+
+  it("LOG2: parseDebugArgs parses --debug flag", () => {
+    expect(parseDebugArgs(["--debug"])).toEqual({ level: "debug" })
+    expect(parseDebugArgs(["-d"])).toEqual({ level: "debug" })
+    expect(parseDebugArgs(["--debug=api,tool"])).toEqual({ level: "debug", filter: "api,tool" })
+    expect(parseDebugArgs(["--debug-file=/tmp/test.jsonl"])).toEqual({ file: "/tmp/test.jsonl" })
+  })
+
+  it("LOG2: cleanup registry registers and runs functions", async () => {
+    let called = false
+    const unregister = registerCleanup(async () => { called = true })
+    await runCleanupFunctions()
+    expect(called).toBe(true)
+    unregister()
+  })
+
+  it("LOG2: symlink created when createSymlink is true", async () => {
+    const symlinkPath = join(tmpDir, "latest.jsonl")
+    const logger = new RuntimeLogger({ filePath: logPath, createSymlink: true })
+    logger.info("test.event")
+    await logger.flush()
+
+    const stat = await lstat(symlinkPath).catch(() => null)
+    expect(stat).not.toBeNull()
   })
 })
