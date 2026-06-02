@@ -16,6 +16,13 @@ import { PermissionPrompt } from './PermissionPrompt.js';
 import { CommandAutocomplete } from './CommandAutocomplete.js';
 import { SearchOverlay } from './SearchOverlay.js';
 import { t, setLocale, toggleLocale, getLocale } from './i18n/index.js';
+import {
+  buildHelpText,
+  formatSkillList,
+  parseSlashCommand,
+  toggleAgent,
+  validateThinkingMode,
+} from './commands.js';
 
 // ---- Module-level interrupt state (shared by SIGINT handler + useInput \x03 handler) ----
 
@@ -166,36 +173,34 @@ export function App({ engine, config }: AppProps) {
 
   const handleSubmit = useCallback((text: string) => {
     setShowAutocomplete(false);
-    if (text === '/exit' || text === '/bye') {
+    const command = parseSlashCommand(text);
+    if (command?.name === 'exit') {
       exitPending = true;
       engineRef.current.interrupt();
       appendMessage({ role: 'assistant' as const, content: t().shuttingDown });
       cleanupTerminal();
       process.exit(0);
     }
-    if (text === '/help') {
-      const agentList = Object.values(AGENTS).map(a => `${a.name} — ${a.label}`).join('\n');
-      const s = t();
+    if (command?.name === 'help') {
       appendMessage({
         role: 'assistant' as const,
-        content: `Commands:\n  /exit, /bye  — ${s.cmdExit}\n  /help        — ${s.cmdHelp}\n  /model       — ${s.cmdModel}\n  /sessions    — ${s.cmdSessions}\n  /agent       — ${s.cmdAgent}\n  /skill       — ${s.cmdSkill}\n  /lang        — ${s.cmdLang}\n  /thinking    — set thinking mode\n\nAgents:\n${agentList}\n\nCurrent: ${AGENTS[activeAgent]?.label ?? activeAgent}`,
+        content: buildHelpText(activeAgent, t()),
       });
       return;
     }
-    if (text === '/model') {
+    if (command?.name === 'model') {
       setShowModelPicker(true);
       return;
     }
-    if (text === '/sessions') {
+    if (command?.name === 'sessions') {
       setShowSessionPicker(true);
       return;
     }
-    if (text === '/skill') {
+    if (command?.name === 'skill') {
       import("@deepicode/tools").then(async ({ createSkillTool }) => {
         const tool = createSkillTool()
         const result = await tool.execute({ command: "list" }, { cwd: process.cwd(), sessionId: "" })
-        let msg: string
-        try { const d = JSON.parse(result.content); msg = `${t().loadedSkills(d.count)}${d.skills.slice(0, 20).map((s: any) => `  ${s.name} — ${s.description}`).join("\n")}${d.count > 20 ? `\n  ... and ${d.count - 20} more` : ""}` } catch { msg = result.content }
+        const msg = formatSkillList(result.content, t().loadedSkills)
         appendMessage({ role: 'assistant' as const, content: msg })
       }).catch(e => {
         const msg = e instanceof Error ? e.message : String(e)
@@ -203,27 +208,25 @@ export function App({ engine, config }: AppProps) {
       })
       return
     }
-    if (text === '/agent') {
-      const next = activeAgent === 'build' ? 'plan' : 'build';
+    if (command?.name === 'agent') {
+      const { next } = toggleAgent(activeAgent);
       const label = engineRef.current.switchAgent(next);
       setActiveAgent(next);
       appendMessage({ role: 'assistant' as const, content: t().switchedTo(label) });
       return;
     }
-    if (text.startsWith('/thinking')) {
-      const parts = text.split(/\s+/);
-      const mode = parts[1];
-      const validModes = ['off', 'low', 'medium', 'high', 'max'];
-      if (!mode || !validModes.includes(mode)) {
-        appendMessage({ role: 'assistant' as const, content: `Usage: /thinking <mode>\nModes: ${validModes.join(', ')}\nCurrent: ${bridgeState.thinkingMode}` });
+    if (command?.name === 'thinking') {
+      const error = validateThinkingMode(command.mode);
+      if (error) {
+        appendMessage({ role: 'assistant' as const, content: `${error}\nCurrent: ${bridgeState.thinkingMode}` });
         return;
       }
-      engineRef.current.setThinkingMode(mode as any);
-      setBridgeState(prev => ({ ...prev, thinkingMode: mode }));
-      appendMessage({ role: 'assistant' as const, content: `Thinking mode set to: ${mode}` });
+      engineRef.current.setThinkingMode(command.mode as any);
+      setBridgeState(prev => ({ ...prev, thinkingMode: command.mode }));
+      appendMessage({ role: 'assistant' as const, content: `Thinking mode set to: ${command.mode}` });
       return;
     }
-    if (text === '/lang') {
+    if (command?.name === 'lang') {
       const next = toggleLocale();
       setLocale(next);
       appendMessage({ role: 'assistant' as const, content: t().switchedLang(next) });

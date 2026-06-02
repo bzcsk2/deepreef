@@ -37,7 +37,7 @@
 | ~~CC-06~~ | ~~P2~~ | ~~Context 硬预算需要补齐剩余边界~~ | ~~`packages/core/src/context/manager.ts`~~ | ~~✅ CL-30 DONE~~ |
 | ~~CC-07~~ | ~~P2~~ | ~~Result persistence 配额只在内存中计数~~ | ~~`packages/core/src/result-persistence.ts`~~ | ~~✅ CL-31 DONE~~ |
 | ~~CC-08~~ | ~~P2~~ | ~~包边界被源码相对路径穿透~~ | `packages/mcp/src/*.ts`、`packages/tools/src/*.ts`、`packages/cli/src/tui.ts` | ~~✅ CL-40 DONE：62 个跨包相对路径 import 已替换为包名 import~~ |
-| CC-09 | P3 | 长任务仍有同步子进程阻塞 | `packages/tools/src/grep.ts`、`packages/tools/src/web-browser.ts`、`packages/tools/src/cron.ts` | `spawnSync` 会阻塞 TUI spinner、日志 flush 和中断响应。优先改可能长时间运行的 `grep` 和浏览器调用。 |
+| ~~CC-09~~ | ~~P3~~ | ~~长任务仍有同步子进程阻塞~~ | ~~`packages/tools/src/grep.ts`、`packages/tools/src/web-browser.ts`、`packages/tools/src/cron.ts`~~ | ~~✅ CL-42 DONE~~ |
 | ~~CC-10~~ | ~~P3~~ | ~~Session writer 和 logger 的 best-effort 失败缺少可见性~~ | ~~`packages/core/src/session.ts`、`packages/core/src/runtime-logger.ts`~~ | ~~✅ CL-32 DONE~~ |
 | OS-01 | P1 | Shell 执行器只会启动 `bash` | `packages/tools/src/shell-exec.ts` | Windows 原生环境通常没有 `bash`。需要平台 backend 和进程树终止策略。 |
 | OS-02 | P1 | `glob` 的目录边界判断硬编码 `/` | `packages/tools/src/glob.ts` | `realBase + "/"` 在 Windows 路径上不可靠。需要使用 `relative()` 判断是否越界。 |
@@ -523,9 +523,11 @@ os: [ubuntu-latest, macos-latest, windows-latest]
 - 保持现有工具返回格式。
 - 启动配置和小型 locale 文件允许保留同步 I/O。
 
-## Phase 6：受测试保护的可维护性重构
+## ✅ Phase 6：受测试保护的可维护性重构 ✅
 
 只有 Phase 0-5 完成且行为测试稳定后，才进入本阶段。
+
+当前状态说明：CL-50/51/52 已在测试保护下提前完成，但 Phase 4 平台适配仍未完成。下一步仍应回到 OS-00、OS-10，不要把 Phase 6 完成误解为 Windows/macOS 已可发布。
 
 ### ✅ CL-50 `StreamingToolExecutor` 渐进提取
 
@@ -555,7 +557,7 @@ os: [ubuntu-latest, macos-latest, windows-latest]
 
 - API stream 消费、yield 顺序和 session enqueue 的主控制流仍集中在 `runLoop()`。
 
-### CL-52 TUI command routing 收敛
+### ✅ CL-52 TUI command routing 收敛
 
 范围：
 
@@ -567,6 +569,12 @@ os: [ubuntu-latest, macos-latest, windows-latest]
 - 将 slash command 解析和 handler 映射提取为可测试逻辑。
 - 保留 React state 所有权，避免一次性拆散输入、权限确认、session 切换和流式渲染。
 - 为菜单上下键、历史记录、slash completion、permission prompt 增加最小交互回归测试。
+
+完成边界：
+
+- `packages/tui/src/commands.ts` 提取命令解析、thinking 校验、Agent 切换、帮助文本和 Skill 列表格式化。
+- `App.tsx` 保留 React state、异步副作用和 bridge submit，只调用纯 helper。
+- 新增 6 个纯逻辑测试。真实菜单上下键、历史记录、slash completion 和 permission prompt 的终端体验继续按 `TEST.md` 的 `G1` 与 `H` 轨验收。
 
 ## 4. 日志系统后续原则
 
@@ -650,4 +658,4 @@ bun test
 结果：
 
 - `bun run typecheck` 最终通过。复核期间并行开发曾短暂引入 `ModeStats` 导入和 `turnsElapsed` 作用域错误，均已由并行修改解决；因此 Phase 0 仍需作为持续门禁。
-- `bun test` 通过：`724 pass / 0 fail`，共运行 54 个测试文件，足以证明“项目没有测试”是误判。后续仍需根据上述高风险路径补专项回归测试。
+- `bun test` 通过：`780 pass / 0 fail`，共运行 55 个测试文件，足以证明“项目没有测试”是误判。后续仍需根据上述高风险路径补专项回归测试。

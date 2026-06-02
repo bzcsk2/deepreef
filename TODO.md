@@ -61,6 +61,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 |------|------|------|
 | 1 | ~~`P5.5`~~ | 已完成 |
 | 2 | ~~`ST2–ST4`~~ | 已完成 |
+| 3 | `OS-00`、`OS-10` | 建立集中式平台能力层，为 Windows/macOS 原生适配提供稳定契约。 |
 
 不要一次领取多个任务。每个编号完成后都应保持全量测试为绿色。
 
@@ -91,10 +92,12 @@ bun run typecheck
   通过
 
 bun test
-  774 pass / 0 fail
+  780 pass / 0 fail
 ```
 
-P5.5、AUD-02/03/05/07/08、T21-R、P3-R、S1/S2、ST2/ST3/ST4、CL-10/11/12/20/21/30/31/32/40 均已完成。全量 774 测试通过，0 失败。
+P5.5、AUD-02/03/05/07/08、T21-R、P3-R、S1/S2、ST2/ST3/ST4、CL-10/11/12/20/21/30/31/32/40/41/42/50/51/52 均已完成。全量 780 测试通过，0 失败，共 55 个测试文件。
+
+下一步从 [ADVICE.md](ADVICE.md) Phase 4 领取 `OS-00`、`OS-10`，先建立平台能力层。不要绕过平台契约直接在各工具中散落 Windows/macOS 分支。
 
 ---
 

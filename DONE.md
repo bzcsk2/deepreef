@@ -21,8 +21,7 @@ bun test
 | 检查项 | 状态 |
 |--------|------|
 | TypeScript | `bun run typecheck` 通过 |
-| 测试 | `688 pass / 6 fail`，共 `694` tests |
-| 失败范围 | 见 TODO.md 第 7 节 |
+| 测试 | `780 pass / 0 fail`，共 `55` 个测试文件 |
 
 ---
 
@@ -30,7 +29,7 @@ bun test
 
 ```text
 packages/cli/src/tui.ts
-  └─ 注册 34 个静态 Agent Tool
+  └─ createDefaultTools() 注册 29 个内置工具 + 5 个 MCP bridge 工具
      └─ ReasonixEngine.submit()
         └─ runLoop(LoopOptions)
            └─ StreamingToolExecutor.run()
@@ -608,6 +607,18 @@ DEEPICODE_TRACE=1
   - `injectPendingInstruction()`：待注入指令安全点 helper
 - `loop.ts` 改为调用上述 helper，主控制流不变。
 - 验收：typecheck 通过 + 774/774 测试通过。
+
+### CL-52：TUI command routing 收敛
+
+- 新增 `packages/tui/src/commands.ts`，提取 slash command 纯逻辑：
+  - `parseSlashCommand()`：解析 `/exit`、`/bye`、`/help`、`/model`、`/sessions`、`/skill`、`/agent`、`/thinking`、`/lang`
+  - `validateThinkingMode()` + `getThinkingModes()`：思考模式校验
+  - `toggleAgent()`：Build / Plan Agent 切换
+  - `buildHelpText()`：帮助文本构造
+  - `formatSkillList()`：Skill 列表格式化和 malformed JSON fallback
+- `packages/tui/src/App.tsx` 的 `handleSubmit()` 改用上述 helper；React state、异步 Skill 加载、退出和 bridge submit 行为保持在组件内。
+- 新增 `packages/tui/__tests__/commands.test.ts`，覆盖命令别名、未知输入、thinking 校验、Agent 切换、help 文本、Skill 截断和 malformed fallback。
+- 验收：CL-52 专项 `6 pass / 0 fail`；typecheck 通过；全量 `780 pass / 0 fail`，共 `55` 个测试文件。
 
 ---
 

@@ -41,8 +41,8 @@
 
 ```text
 bun run typecheck: PASS
-bun test: 774 pass / 0 fail
-测试文件: 54
+bun test: 780 pass / 0 fail
+测试文件: 55
 ```
 
 以下模块已有较完整回归覆盖。系统验收时只需运行一次总门禁，不要重新设计同类单元测试：
