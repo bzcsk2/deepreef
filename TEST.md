@@ -250,6 +250,48 @@ bun run packages/cli/src/index.ts --help
 - 输出包含用法和 slash command 提示。
 - 不创建运行时日志文件，不请求网络。
 
+### G0-03 Plugin 加载验收
+
+执行：
+
+```bash
+# 创建测试插件目录
+mkdir -p /tmp/plugin-test/.deepicode
+mkdir -p /tmp/plugin-test/plugins
+
+# 创建测试插件
+cat > /tmp/plugin-test/plugins/hello.ts << 'EOF'
+export default {
+  id: "hello",
+  server: () => ({
+    greet: async (args: { name: string }) => `Hello, ${args.name}!`
+  })
+}
+EOF
+
+# 创建配置文件
+echo '["./plugins/hello.ts"]' > /tmp/plugin-test/.deepicode/plugins.json
+
+# 测试插件加载
+cd /tmp/plugin-test && bun -e "
+import { PluginRuntime } from '@deepicode/plugin'
+const runtime = new PluginRuntime({ workspaceRoot: process.cwd() })
+await runtime.init()
+const status = runtime.getStatus()
+console.log('Loaded plugins:', status.loadedPlugins)
+console.log('Tools:', status.tools)
+console.log('Errors:', status.errors.length)
+process.exit(status.loadedPlugins.includes('hello') && status.tools.includes('hello.greet') ? 0 : 1)
+"
+```
+
+通过标准：
+
+- 退出码为 `0`。
+- 输出显示 `Loaded plugins: ['hello']`。
+- 输出显示 `Tools: ['hello.greet']`。
+- 无错误。
+
 ## 6. G1：Linux CLI/TUI 系统链路
 
 本阶段必须在 Linux 原生 PTY 中执行。除 `G1-01` 外，优先自动化；无法自动化时保存终端录屏或逐步截图。

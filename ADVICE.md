@@ -1209,12 +1209,14 @@ RuntimeLogger 增加事件：
 
 ### PLG-60：文档和验收
 
-目标：
+**状态：✅ 已完成（2026-06-03）**
 
-- 更新 README plugin 配置说明。
-- 增加 `examples/plugins/hello.ts`。
-- 增加 `examples/plugins/audit.ts`。
-- 更新 TEST.md 的 plugin 验收项。
+实现内容：
+
+- 更新 README plugin 配置说明
+- 增加 `examples/plugins/hello.ts`
+- 增加 `examples/plugins/audit.ts`
+- 更新 TEST.md 的 plugin 验收项（G0-03）
 
 测试：
 

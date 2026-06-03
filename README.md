@@ -355,6 +355,50 @@ deepicode/packages/
 
 ---
 
+## 插件系统
+
+deepicode 支持通过插件扩展功能。
+
+### 配置
+
+在项目根目录创建 `.deepicode/plugins.json`：
+
+```json
+[
+  "./path/to/my-plugin.ts"
+]
+```
+
+### 插件格式
+
+插件必须导出 `default` 对象，包含 `id` 和 `server` 函数：
+
+```typescript
+export default {
+  id: "my-plugin",
+  server: () => ({
+    // 工具函数
+    myTool: async (args: { input: string }) => {
+      return `Result: ${args.input}`
+    },
+  }),
+}
+```
+
+### 示例插件
+
+- [`examples/plugins/hello.ts`](./examples/plugins/hello.ts) - 简单问候工具
+- [`examples/plugins/audit.ts`](./examples/plugins/audit.ts) - 审计日志工具
+
+### 工具命名
+
+插件工具会自动添加插件 ID 前缀：
+- 插件 ID: `hello`
+- 工具名: `greet`
+- 完整工具名: `hello.greet`
+
+---
+
 ## 开发
 
 ```bash

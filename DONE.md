@@ -809,6 +809,7 @@ DEEPICODE_TRACE=1
 | PLG-30：tool adapter | ✅ 已完成 | tool-adapter.ts、schema 转换、9 个测试 |
 | PLG-40：hook adapter | ✅ 已完成 | hook-adapter.ts、PluginHookRegistry、10 个测试 |
 | PLG-50：CLI 集成和生命周期 | ✅ 已完成 | runtime.ts、PluginRuntime、7 个测试 |
+| PLG-60：文档和验收 | ✅ 已完成 | README、examples、TEST.md |
 
 ---
 
