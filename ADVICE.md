@@ -1648,9 +1648,12 @@ bun test packages/tui/__tests__/status-format.test.ts
 
 ### STAT-40：文档和验收
 
-目标：
+**状态：✅ 已完成（2026-06-03）**
 
-- README 或 TEST.md 增加 `/status` 说明和验收步骤。
+实现内容：
+
+- README 增加 `/status` 说明和验收步骤。
+- TEST.md 增加 G0-04 /status 命令验收。
 - `TODO.md` 增加/推进 `STAT-*` 当前阶段，完成后移入 `DONE.md`。
 
 手工验收：

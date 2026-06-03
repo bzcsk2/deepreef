@@ -820,6 +820,7 @@ DEEPICODE_TRACE=1
 | STAT-10：Core 状态快照 | ✅ 已完成 | EngineStatusSnapshot、getStatusSnapshot()、8 个测试 |
 | STAT-20：Slash command 接入 | ✅ 已完成 | /status 命令、format.ts、6 个测试 |
 | STAT-30：Codex 风格格式化 | ✅ 已完成 | format.ts 增强、Unicode/ASCII、16 个测试 |
+| STAT-40：文档和验收 | ✅ 已完成 | README、TEST.md、G0-04 |
 
 ---
 

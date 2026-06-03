@@ -61,7 +61,6 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 | 顺序 | 任务 | 原因 |
 |------|------|------|
 | 1 | `OS-12/13-R` macOS/Windows 原生验收 | 代码层面已就绪，需在原生环境验收。 |
-| 2 | `STAT-40` 文档和验收，按 [ADVICE.md](ADVICE.md) 推进 | STAT-30 已完成，需更新 README 和验收步骤。 |
 
 不要一次领取多个任务。每个编号完成后都应保持全量测试为绿色。
 
@@ -176,7 +175,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 ## 3. 当前验证状态
 
 
-下一步：优先执行 `OS-12/13-R` macOS/Windows 原生验收（需人工）；开发专项从 `STAT-40` 开始领取。
+下一步：优先执行 `OS-12/13-R` macOS/Windows 原生验收（需人工）。
 
 ---
 

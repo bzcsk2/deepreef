@@ -399,6 +399,36 @@ export default {
 
 ---
 
+## 斜杠命令
+
+deepicode 支持以下斜杠命令：
+
+| 命令 | 说明 |
+|------|------|
+| `/exit`, `/bye` | 退出程序 |
+| `/help` | 显示帮助 |
+| `/model` | 切换模型 |
+| `/sessions` | 列出会话 |
+| `/agent` | 切换 agent |
+| `/skill` | 列出技能 |
+| `/lang` | 切换语言 |
+| `/thinking` | 设置思考模式 |
+| `/status` | 显示状态 |
+
+### /status 命令
+
+输入 `/status` 可以查看当前状态，包括：
+
+- Session ID
+- 当前 Agent
+- Context 使用情况
+- API 调用统计
+- Token 用量和费用
+
+`/status` 是只读命令，不会触发模型请求或工具执行。
+
+---
+
 ## 开发
 
 ```bash

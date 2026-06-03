@@ -292,6 +292,43 @@ process.exit(status.loadedPlugins.includes('hello') && status.tools.includes('he
 - 输出显示 `Tools: ['hello.greet']`。
 - 无错误。
 
+### G0-04 /status 命令验收
+
+执行：
+
+```bash
+# 测试 /status 命令解析
+cd /tmp/plugin-test && bun -e "
+import { parseSlashCommand } from '@deepicode/tui/commands'
+const result = parseSlashCommand('/status')
+console.log('Command:', result?.name)
+process.exit(result?.name === 'status' ? 0 : 1)
+"
+
+# 测试 status 格式化
+cd /tmp/plugin-test && bun -e "
+import { formatStatusCodex } from '@deepicode/tui/status/format'
+const snapshot = {
+  sessionId: 'test-session-1234567890',
+  context: { prefixTokens: 1000, logTokens: 2000, scratchTokens: 500, totalTokens: 3500, window: 128000, ratio: 0.027 },
+  stats: { promptTokens: 1000, completionTokens: 500, cacheHitTokens: 800, cacheMissTokens: 200, apiCalls: 5, toolCalls: 3, totalCost: 0.0123 },
+  currentAgent: 'build',
+  isSubmitting: false,
+  timestamp: '2026-06-03T12:00:00.000Z'
+}
+const result = formatStatusCodex(snapshot)
+console.log(result)
+process.exit(result.includes('STATUS') && result.includes('Session:') ? 0 : 1)
+"
+```
+
+通过标准：
+
+- 退出码为 `0`。
+- /status 命令解析正确。
+- status 格式化输出包含所有核心字段。
+- 不触发 API 请求。
+
 ## 6. G1：Linux CLI/TUI 系统链路
 
 本阶段必须在 Linux 原生 PTY 中执行。除 `G1-01` 外，优先自动化；无法自动化时保存终端录屏或逐步截图。
