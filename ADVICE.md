@@ -1164,13 +1164,17 @@ RuntimeLogger 增加事件：
 
 ### PLG-40：hook adapter
 
-目标：
+**状态：✅ 已完成（2026-06-03）**
 
-- 映射 `event` 到 `HookManager.onLoopEvent`。
-- 映射 `tool.execute.before` 到 before hook。
-- 映射 `tool.execute.after` 到 after hook。
-- 支持 hook timeout。
-- deactivate/dispose 时移除 hooks。
+实现内容：
+
+- `packages/plugin/src/hook-adapter.ts`：PluginHookRegistry 类
+- 映射 `event` 到 `HookManager.onLoopEvent`
+- 映射 `tool.execute.before` 到 before hook
+- 映射 `tool.execute.after` 到 after hook
+- 支持 hook timeout（默认 5000ms，可配置）
+- deactivate/dispose 时移除 hooks
+- 10 个单元测试覆盖所有场景
 
 测试：
 

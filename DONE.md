@@ -21,7 +21,7 @@ bun test
 | 检查项 | 状态 |
 |--------|------|
 | TypeScript | `bun run typecheck` 通过 |
-| 测试 | `928 pass / 0 fail / 18 skip`，共 `70` 个测试文件 |
+| 测试 | `938 pass / 0 fail / 18 skip`，共 `71` 个测试文件 |
 | 稳定性 | 连续 3 次全绿（TEST-STABILITY-01 已关闭） |
 | CI | ✓ ubuntu-latest ✓ windows-latest ✓ macos-latest（OS-17-R 已关闭） |
 
@@ -807,6 +807,7 @@ DEEPICODE_TRACE=1
 | PLG-10：配置与 spec 解析 | ✅ 已完成 | packages/plugin、config.ts、loader.ts、18 个测试 |
 | PLG-20：loader 与 v1 server plugin shape | ✅ 已完成 | server() 调用、hooks 验证、21 个测试 |
 | PLG-30：tool adapter | ✅ 已完成 | tool-adapter.ts、schema 转换、9 个测试 |
+| PLG-40：hook adapter | ✅ 已完成 | hook-adapter.ts、PluginHookRegistry、10 个测试 |
 
 ---
 

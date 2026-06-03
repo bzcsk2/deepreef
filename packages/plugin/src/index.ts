@@ -6,3 +6,6 @@ export type { PluginModule, PluginServer, PluginHooks, PluginLoaded, PluginLoadE
 
 export { extractToolsFromPlugins, pluginToolsToToolSpecs, executePluginTool } from "./tool-adapter.js"
 export type { PluginTool, PluginToolError, PluginToolResult } from "./tool-adapter.js"
+
+export { PluginHookRegistry } from "./hook-adapter.js"
+export type { PluginHookAdapter, HookAdapterError } from "./hook-adapter.js"
