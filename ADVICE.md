@@ -495,6 +495,14 @@ textDocument/didChange {
 - 单测覆盖 server 复用和 dirty sync。
 - 全量测试无残留 handle。
 
+**状态：✅ 已完成（2026-06-03）**
+
+实现内容：
+
+- `packages/tools/src/lsp/manager.ts`：LspManager 类，支持 server 复用、文档同步、idle timeout 清理
+- `packages/tools/src/lsp/index.ts`：新增 LspManager 导出
+- `packages/tools/__tests__/lsp-manager.test.ts`：12 个单元测试覆盖 server 复用、文档同步、health status、shutdown
+
 ### LSP-40：完整动作集
 
 目标：

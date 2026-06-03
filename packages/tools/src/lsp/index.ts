@@ -28,3 +28,6 @@ export type {
 
 export { LspClient } from "./lsp-client.js"
 export type { LspClientOptions, LspClientHealth, LspServerState } from "./lsp-client.js"
+
+export { LspManager } from "./manager.js"
+export type { LspManagerStatus } from "./manager.js"
