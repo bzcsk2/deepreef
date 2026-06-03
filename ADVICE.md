@@ -457,6 +457,15 @@ textDocument/didChange {
 - fake LSP server 覆盖 initialize、hover、timeout、crash。
 - 无残留子进程。
 
+**状态：✅ 已完成（2026-06-03）**
+
+实现内容：
+
+- `packages/tools/src/lsp/lsp-client.ts`：基于 vscode-jsonrpc 的 LspClient 类
+- `packages/tools/src/lsp/index.ts`：新增 LspClient 导出
+- `packages/tools/__tests__/lsp-client.test.ts`：11 个单元测试覆盖 start、initialize、hover、definition、references、timeout、crash、shutdown、health、concurrent requests
+- `packages/tools/package.json`：新增 vscode-jsonrpc 依赖
+
 ### LSP-30：Manager 和文档同步
 
 目标：

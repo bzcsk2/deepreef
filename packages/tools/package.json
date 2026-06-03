@@ -17,6 +17,7 @@
   },
   "scripts": {},
   "dependencies": {
-    "@deepicode/core": "workspace:*"
+    "@deepicode/core": "workspace:*",
+    "vscode-jsonrpc": "^8.2.1"
   }
 }

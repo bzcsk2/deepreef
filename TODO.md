@@ -61,7 +61,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 | 顺序 | 任务 | 原因 |
 |------|------|------|
 | 1 | `OS-12/13-R` macOS/Windows 原生验收 | 代码层面已就绪，需在原生环境验收。 |
-| 2 | `LSP-20` 协议层和长驻 Client，按 [ADVICE.md](ADVICE.md) 推进 | LSP-10 已完成，需实现 vscode-jsonrpc 协议层和 LspClient 类。 |
+| 2 | `LSP-30` Manager 和文档同步，按 [ADVICE.md](ADVICE.md) 推进 | LSP-20 已完成，需实现 LspManager 和文档同步。 |
 | 3 | `PLG-10` 起步，按 [ADVICE.md](ADVICE.md) 推进 Plugin 兼容实现 | 新增 opencode server plugin 兼容子集，不引入 opencode 前端。 |
 
 不要一次领取多个任务。每个编号完成后都应保持全量测试为绿色。
@@ -101,14 +101,24 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 - 实现：config.ts、language.ts、normalize.ts、lsp.ts 升级、lsp-client.ts 更新。
 - 测试：36 个单元测试 + 17 个集成测试通过。
 
-### LSP-20：协议层和长驻 Client
+### ~~LSP-20：协议层和长驻 Client~~ ✅ DONE
 
 优先级：`P2`。专项设计见 [ADVICE.md](ADVICE.md) 的 `LSP-20`。
 
 当前状态：
 
-- LSP-10 已完成，基础模块就绪。
-- 需要实现 vscode-jsonrpc 协议层和 LspClient 类。
+- ✅ 已完成（2026-06-03）。
+- 实现：vscode-jsonrpc 协议层、LspClient 类。
+- 测试：11 个单元测试通过。
+
+### LSP-30：Manager 和文档同步
+
+优先级：`P2`。专项设计见 [ADVICE.md](ADVICE.md) 的 `LSP-30`。
+
+当前状态：
+
+- LSP-10 和 LSP-20 已完成，基础模块就绪。
+- 需要实现 LspManager 和文档同步。
 
 关闭条件：
 
@@ -136,7 +146,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 ## 3. 当前验证状态
 
 
-下一步：优先执行 `OS-12/13-R` macOS/Windows 原生验收（需人工）；开发专项从 `LSP-20` 或 `PLG-10` 开始领取。
+下一步：优先执行 `OS-12/13-R` macOS/Windows 原生验收（需人工）；开发专项从 `LSP-30` 或 `PLG-10` 开始领取。
 
 ---
 

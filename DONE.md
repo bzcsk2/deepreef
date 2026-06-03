@@ -21,7 +21,7 @@ bun test
 | 检查项 | 状态 |
 |--------|------|
 | TypeScript | `bun run typecheck` 通过 |
-| 测试 | `835 pass / 0 fail`，共 `63` 个测试文件 |
+| 测试 | `846 pass / 0 fail`，共 `64` 个测试文件 |
 | 稳定性 | 连续 3 次全绿（TEST-STABILITY-01 已关闭） |
 | CI | ✓ ubuntu-latest ✓ windows-latest ✓ macos-latest（OS-17-R 已关闭） |
 
@@ -781,7 +781,7 @@ DEEPICODE_TRACE=1
 | 阶段 | 状态 | 说明 |
 |------|------|------|
 | LSP-10：配置、语言识别、返回格式 | ✅ 已完成 | config.ts、language.ts、normalize.ts、lsp.ts 升级 |
-| LSP-20：协议层和长驻 Client | 待领取 | |
+| LSP-20：协议层和长驻 Client | ✅ 已完成 | vscode-jsonrpc 协议层、LspClient 类、11 个测试 |
 | LSP-30：Manager 和文档同步 | 待领取 | |
 | LSP-40：完整动作集 | 待领取 | |
 | LSP-50：真实语言服务器 smoke | 待领取 | |

@@ -22,4 +22,9 @@ export type {
   NormalizedCompletion,
   NormalizedSymbol,
   NormalizedItem,
+  NormalizedSignature,
+  NormalizedRenameEdit,
 } from "./normalize.js"
+
+export { LspClient } from "./lsp-client.js"
+export type { LspClientOptions, LspClientHealth, LspServerState } from "./lsp-client.js"
