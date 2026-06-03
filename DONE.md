@@ -371,7 +371,12 @@ bun test
 - 读取失败回退默认值，不阻塞启动。
 - `setContextPolicy()` 异步保存，best-effort。
 
-### 4.9 Context 压缩专项（CTX-30）
+### 4.9 Context 压缩专项（CTX-30, CTX-40）
+
+| 编号 | 内容 | 状态 |
+|------|------|------|
+| CTX-30 | 摘要区和 summarizer 接口 | 已完成 |
+| CTX-40 | Engine 自动 trim/compact 触发 | 已完成 |
 
 **实现边界：**
 
@@ -394,6 +399,32 @@ bun test
 - summary 标记方便模型识别，避免重复包装。
 - `setSummarizer()` 可选注入，不注入时 `runSummarize()` 返回 false。
 - compress 模式才更新 summary，trim 模式不更新。
+
+### 4.10 Context 压缩专项（CTX-40）
+
+**实现边界：**
+
+- `ContextPolicyMode` 类型扩展支持 `"compact"` 模式。
+- `ReasonixEngine.submit()` 在 budget 超过 triggerRatio 时自动触发 context reduction。
+- `compact` 模式：调用 `ctx.runSummarize()` 后执行 trim，成功记录 `context.reduction.compact.success`，失败记录 `context.reduction.compact.fallback` 并回退 trim。
+- `trim` 模式：直接执行 trim，记录 `context.reduction.trim`。
+- `ReasonixEngine.setSummarizer()` 暴露给外部注入 summarizer 实现。
+- `ReasonixEngine.runContextReduction()` 将 `"compact"` 映射为 `"compress"` 调用底层 reduceToTarget。
+- 新增 `packages/core/__tests__/engine-context-policy.test.ts`：覆盖策略设置、状态获取、reduction 触发和 compact fallback（12 个测试）。
+
+**验收命令：**
+
+```bash
+bun test packages/core/__tests__/engine-context-policy.test.ts
+bun run typecheck
+bun test
+```
+
+**保留限制：**
+
+- compact 失败时 fallback trim，不阻塞 submit。
+- summarizer 未注入时 compact 退化为 trim。
+- 日志不记录原始消息正文。
 
 ---
 

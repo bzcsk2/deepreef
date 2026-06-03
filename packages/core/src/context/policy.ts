@@ -1,6 +1,6 @@
 import type { ContextReductionMode } from "./manager.js"
 
-export type ContextPolicyMode = ContextReductionMode
+export type ContextPolicyMode = ContextReductionMode | "compact"
 
 export interface ContextPolicy {
   mode: ContextPolicyMode
@@ -15,7 +15,7 @@ export const DEFAULT_CONTEXT_POLICY: ContextPolicy = {
 }
 
 export function validateContextPolicy(policy: Partial<ContextPolicy>): boolean {
-  if (policy.mode !== undefined && policy.mode !== "trim" && policy.mode !== "compress") {
+  if (policy.mode !== undefined && policy.mode !== "trim" && policy.mode !== "compress" && policy.mode !== "compact") {
     return false
   }
 

@@ -24,6 +24,7 @@ import type { ContextReductionMode, ContextReductionResult } from "./context/man
 import type { ContextPolicy } from "./context/policy.js"
 import { validateContextPolicy, mergeContextPolicy, DEFAULT_CONTEXT_POLICY } from "./context/policy.js"
 import { ContextPolicyStore } from "./context/policy-store.js"
+import type { ContextSummarizer } from "./context/summarizer.js"
 export type { ContextPolicy } from "./context/policy.js"
 
 export interface ContextPolicyStatus {
@@ -219,6 +220,11 @@ export class ReasonixEngine implements CoreEngine {
     return engine
   }
 
+  /** 设置上下文压缩器 */
+  setSummarizer(summarizer: ContextSummarizer): void {
+    this.ctx.setSummarizer(summarizer)
+  }
+
   /** 加载指定 session 的历史消息到当前引擎上下文 */
   async loadSession(sessionId: string): Promise<ChatMessage[]> {
     if (this.isSubmitting) {
@@ -339,7 +345,8 @@ export class ReasonixEngine implements CoreEngine {
   }
 
   async runContextReduction(mode?: ContextReductionMode): Promise<ContextReductionResult> {
-    return this.ctx.reduceToTarget(mode ?? this.contextPolicy.mode, this.contextPolicy.targetRatio)
+    const effectiveMode = mode ?? (this.contextPolicy.mode === "compact" ? "compress" : this.contextPolicy.mode)
+    return this.ctx.reduceToTarget(effectiveMode, this.contextPolicy.targetRatio)
   }
 
   /** 注册一个工具到引擎 */
@@ -466,9 +473,26 @@ export class ReasonixEngine implements CoreEngine {
     this.ctx.log.append({ role: "user", content: userInput })
     const budget = await this.ctx.getBudget()
     if (budget.ratio >= this.contextPolicy.triggerRatio) {
-      const result = this.ctx.reduceToTarget(this.contextPolicy.mode, this.contextPolicy.targetRatio)
-      if (this.logger.isEnabled("info")) {
-        this.logger.info("context.reduction.done", { ...result })
+      let result
+      if (this.contextPolicy.mode === "compact") {
+        const targetTokens = Math.floor(budget.window * this.contextPolicy.targetRatio)
+        const success = await this.ctx.runSummarize(targetTokens, abortController.signal)
+        if (success) {
+          result = this.ctx.reduceToTarget("trim", this.contextPolicy.targetRatio)
+          if (this.logger.isEnabled("info")) {
+            this.logger.info("context.reduction.compact.success", { ...result })
+          }
+        } else {
+          result = this.ctx.reduceToTarget("trim", this.contextPolicy.targetRatio)
+          if (this.logger.isEnabled("info")) {
+            this.logger.info("context.reduction.compact.fallback", { ...result })
+          }
+        }
+      } else {
+        result = this.ctx.reduceToTarget("trim", this.contextPolicy.targetRatio)
+        if (this.logger.isEnabled("info")) {
+          this.logger.info("context.reduction.trim", { ...result })
+        }
       }
     }
     this.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })

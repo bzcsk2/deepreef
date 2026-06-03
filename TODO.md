@@ -60,7 +60,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 
 | 顺序 | 任务 | 原因 |
 |------|------|------|
-| 1 | `CTX-40` Engine 自动 trim/compact 触发 | CTX-30 已完成，按 ADVICE.md 顺序继续。 |
+| 1 | `CTX-50` 真实 LLM summarizer | CTX-40 已完成，按 ADVICE.md 顺序继续。 |
 | 2 | `OS-12/13-R` macOS/Windows 原生验收 | 代码层面已就绪，需在原生环境验收。 |
 
 不要一次领取多个任务。每个编号完成后都应保持全量测试为绿色。
@@ -68,6 +68,39 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 ---
 
 ## 2. 后续任务
+
+### CTX-50：真实 LLM summarizer
+
+优先级：`P1`。CTX-40 已完成后执行。
+
+当前状态：
+
+- `ContextSummarizer` 接口已定义。
+- `FakeSummarizer` 和 `MechanicalSummarizer` 已实现。
+- `ReasonixEngine.setSummarizer()` 已暴露。
+
+目标：
+
+- 把 `compact` 从"机械摘要"改成"调用模型做上下文压缩"。
+
+执行要求：
+
+1. 在 `packages/core/src/context/summarizer.ts` 实现真实 summarizer。
+   - 复用现有 provider client。
+   - 低温度，不带 tools。
+   - 只让模型做"摘要"，不要让它执行任务。
+2. 控制输入范围：只传入可压缩的旧消息，保留必要的 summary 作为上下文输入，不把当前轮 input 放进去。
+3. 控制输出长度：`maxTokens` 受 `targetRatio` 约束，输出过长时截断。
+4. 做错误处理：HTTP 错误回退、超时回退、空摘要回退、AbortSignal 生效。
+5. 编写 `packages/core/__tests__/context-summarizer.test.ts` 测试文件。
+
+验收命令：
+
+```bash
+bun test packages/core/__tests__/context-summarizer.test.ts
+bun run typecheck
+bun test
+```
 
 ### CTX-40：Engine 自动 trim/compact 触发
 
@@ -163,9 +196,10 @@ bun test
 
 - CTX-10：策略类型、配置加载和菜单解析 ✅ 已完成
 - CTX-30：摘要区和 summarizer 接口 ✅ 已完成
-- CTX-40：Engine 自动 trim/compact 触发 ⬜ 待开始
+- CTX-40：Engine 自动 trim/compact 触发 ✅ 已完成
+- CTX-50：真实 LLM summarizer ⬜ 待开始
 
-下一步：执行 `CTX-40` Engine 自动 trim/compact 触发。
+下一步：执行 `CTX-50` 真实 LLM summarizer。
 
 ---
 

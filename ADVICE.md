@@ -285,7 +285,7 @@ bun test packages/core/__tests__/context-summary.test.ts
 
 ### CTX-40：Engine 自动 trim/compact 触发
 
-**状态：⬜ 未完成**
+**状态：✅ 已完成**
 
 已完成：
 
@@ -293,10 +293,7 @@ bun test packages/core/__tests__/context-summary.test.ts
 - `submit()` 前会检查 budget。
 - `trim` 时会自动裁剪。
 - 会产生状态事件和 runtime logs。
-
-未完成：
-
-- `compact` 时调用真实 summarizer。
+- `compact` 时调用 summarizer。
 - summarizer 失败后的真实 fallback 链路。
 
 #### 目标
