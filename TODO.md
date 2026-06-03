@@ -61,7 +61,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 | 顺序 | 任务 | 原因 |
 |------|------|------|
 | 1 | `OS-12/13-R` macOS/Windows 原生验收 | 代码层面已就绪，需在原生环境验收。 |
-| 2 | `LSP-50` 真实语言服务器 smoke，按 [ADVICE.md](ADVICE.md) 推进 | LSP-40 已完成，需验证真实语言服务器。 |
+| 2 | `LSP-60` 工具链集成和可观测性，按 [ADVICE.md](ADVICE.md) 推进 | LSP-50 已完成，需实现日志和进度。 |
 | 3 | `PLG-10` 起步，按 [ADVICE.md](ADVICE.md) 推进 Plugin 兼容实现 | 新增 opencode server plugin 兼容子集，不引入 opencode 前端。 |
 
 不要一次领取多个任务。每个编号完成后都应保持全量测试为绿色。

@@ -578,6 +578,16 @@ textDocument/didChange {
 - 至少 TypeScript 真实 server smoke 在本地通过，并记录证据。
 - macOS/Windows 下 server 启动与关闭路径通过。
 
+**状态：✅ 已完成（2026-06-03）**
+
+实现内容：
+
+- `packages/tools/__tests__/lsp-real-servers.test.ts`：真实语言服务器 smoke tests
+- 支持 TypeScript、Python、Go、Rust 四种语言
+- 使用 `DEEPICODE_LSP_REAL=1` 环境变量启用
+- 缺少依赖时自动 skip
+- 14 个测试覆盖 start、hover、definition、diagnostics、shutdown
+
 ### LSP-60：工具链集成和可观测性
 
 目标：
