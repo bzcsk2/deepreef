@@ -1096,14 +1096,17 @@ RuntimeLogger 增加事件：
 
 ### PLG-10：配置与 spec 解析
 
-目标：
+**状态：✅ 已完成（2026-06-03）**
 
-- 新建 `packages/plugin`。
-- 实现 `.deepicode/plugins.json` 读取。
-- 支持 string、tuple、object 三种配置项。
-- 支持相对路径、绝对路径、file URL。
-- npm spec 只解析，不安装。
-- 实现 duplicate spec 和 duplicate id 的错误分类。
+实现内容：
+
+- `packages/plugin`：新建 plugin 包
+- `packages/plugin/src/config.ts`：`.deepicode/plugins.json` 读取
+- 支持 string、tuple、object 三种配置项
+- 支持相对路径、绝对路径、file URL
+- npm spec 只解析，不安装
+- 实现 duplicate spec 和 duplicate id 的错误分类
+- 18 个单元测试覆盖所有配置场景
 
 测试：
 

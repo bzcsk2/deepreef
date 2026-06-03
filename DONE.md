@@ -21,7 +21,7 @@ bun test
 | 检查项 | 状态 |
 |--------|------|
 | TypeScript | `bun run typecheck` 通过 |
-| 测试 | `898 pass / 0 fail / 18 skip`，共 `68` 个测试文件 |
+| 测试 | `916 pass / 0 fail / 18 skip`，共 `69` 个测试文件 |
 | 稳定性 | 连续 3 次全绿（TEST-STABILITY-01 已关闭） |
 | CI | ✓ ubuntu-latest ✓ windows-latest ✓ macos-latest（OS-17-R 已关闭） |
 
@@ -800,7 +800,15 @@ DEEPICODE_TRACE=1
 
 ---
 
-## 7. 文档维护规则
+## 7. Plugin 系统
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| PLG-10：配置与 spec 解析 | ✅ 已完成 | packages/plugin、config.ts、loader.ts、18 个测试 |
+
+---
+
+## 8. 文档维护规则
 
 1. `DONE.md` 只记录已存在且仍然成立的能力。
 2. 未完成事项移入 `TODO.md`，不要在 DONE 中维护第二套待办列表。

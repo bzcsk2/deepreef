@@ -61,7 +61,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 | 顺序 | 任务 | 原因 |
 |------|------|------|
 | 1 | `OS-12/13-R` macOS/Windows 原生验收 | 代码层面已就绪，需在原生环境验收。 |
-| 2 | `PLG-10` 起步，按 [ADVICE.md](ADVICE.md) 推进 Plugin 兼容实现 | 新增 opencode server plugin 兼容子集，不引入 opencode 前端。 |
+| 2 | `PLG-20` loader 与 v1 server plugin shape，按 [ADVICE.md](ADVICE.md) 推进 | PLG-10 已完成，需实现动态 import 和 server plugin 验证。 |
 
 不要一次领取多个任务。每个编号完成后都应保持全量测试为绿色。
 
@@ -155,14 +155,15 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 - 将阶段实现、验证命令和剩余限制写入 `DONE.md`。
 - 从本文更新下一阶段入口。
 
-### PLG-10：Plugin 配置与 spec 解析
+### ~~PLG-10：Plugin 配置与 spec 解析~~ ✅ DONE
 
 优先级：`P2`。专项设计见 [ADVICE.md](ADVICE.md) 的 `PLG-10` 到 `PLG-60`。
 
 当前状态：
 
-- 设计目标是兼容 opencode server plugin 子集。
-- 不引入 opencode 前端、不实现 TUI plugin、不引入 opentui/solid。
+- ✅ 已完成（2026-06-03）。
+- 实现：packages/plugin、config.ts、loader.ts。
+- 测试：18 个单元测试通过。
 
 关闭条件：
 
@@ -175,7 +176,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts packages/mcp/__tests__/mcp-tool
 ## 3. 当前验证状态
 
 
-下一步：优先执行 `OS-12/13-R` macOS/Windows 原生验收（需人工）；开发专项从 `LSP-50` 或 `PLG-10` 开始领取。
+下一步：优先执行 `OS-12/13-R` macOS/Windows 原生验收（需人工）；开发专项从 `PLG-20` 开始领取。
 
 ---
 
