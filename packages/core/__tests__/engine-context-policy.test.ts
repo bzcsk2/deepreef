@@ -61,6 +61,17 @@ vi.mock("../src/runtime-logger.js", () => ({
       isEnabled: () => false,
       info: () => {},
       error: () => {},
+      warn: () => {},
+      debug: () => {},
+      child: () => ({
+        isEnabled: () => false,
+        info: () => {},
+        error: () => {},
+        warn: () => {},
+        debug: () => {},
+        flush: () => Promise.resolve(),
+      }),
+      flush: () => Promise.resolve(),
     }),
     flush: () => Promise.resolve(),
   }),
@@ -73,19 +84,6 @@ vi.mock("../src/client.js", () => ({
       yield { type: "text", content: "test" }
       yield { type: "done" }
     }
-  },
-}))
-
-// Mock SessionLoader
-vi.mock("../src/session.js", () => ({
-  SessionLoader: {
-    validateSessionId: () => true,
-    read: () => Promise.resolve([]),
-  },
-  AsyncSessionWriter: class {
-    init() { return Promise.resolve() }
-    enqueue() {}
-    async drain() {}
   },
 }))
 

@@ -61,6 +61,7 @@ describe("TokenizerPool", () => {
   it("should include reasoning_content in estimate via fallback", async () => {
     const { TokenizerPool } = await import("../src/context/tokenizer-pool.js")
     const pool = new TokenizerPool()
+    ;(pool as any).healthy = false
     const without = await pool.estimate([{ role: "assistant", content: "answer" }])
     const withReasoning = await pool.estimate([
       { role: "assistant", content: "answer", reasoning_content: "deep thinking process" },
