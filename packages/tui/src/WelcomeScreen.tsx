@@ -19,7 +19,7 @@ import figlet from 'figlet';
  * - model: 当前使用的模型名称
  * - provider: 当前使用的提供商名称
  * - agent: 当前使用的 Agent 名称
- * - thinkingMode: 当前推理模式（off/low/medium/high/max）
+ * - thinkingMode: 当前推理模式（auto/off/open/high）
  *
  * 【显示参数】
  * 以下参数控制欢迎界面的视觉样式

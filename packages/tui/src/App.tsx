@@ -504,11 +504,10 @@ export function App({ engine, config }: AppProps) {
         title="Thinking"
         subtitle="选择推理档位"
         items={[
+          { value: "auto", label: "auto", description: "auto switching (AS0-AS6)" },
           { value: "off", label: "off", description: "disable reasoning" },
-          { value: "low", label: "low", description: "light reasoning" },
-          { value: "medium", label: "medium", description: "balanced reasoning" },
-          { value: "high", label: "high", description: "strong reasoning" },
-          { value: "max", label: "max", description: "maximum reasoning" },
+          { value: "open", label: "open", description: "enable reasoning" },
+          { value: "high", label: "high", description: "strong reasoning (DeepSeek)" },
         ]}
         onChoose={handleThinkingChoose}
         onCancel={() => setShowThinkingMenu(false)}
