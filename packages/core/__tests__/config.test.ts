@@ -11,6 +11,8 @@ describe("PROVIDERS", () => {
     expect(zen.defaultKey).toBe("public")
     expect(zen.requiresKey).toBe(false)
     expect(zen.label).toBe("Zen (Free)")
+    expect(zen.model).toBe("deepseek-v4-flash-free")
+    expect(zen.models.map((entry) => entry.model)).toEqual(["deepseek-v4-flash-free", "mimo-v2.5-free"])
   })
 
   it("should have deepseek provider without defaultKey", () => {
@@ -45,6 +47,11 @@ describe("loadConfig - 环境变量", () => {
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "deepicode-config-"))
     vi.spyOn(process, "cwd").mockReturnValue(tmpDir)
+    delete process.env.DEEPICODE_PROVIDER
+    delete process.env.DEEPSEEK_MODEL
+    delete process.env.DEEPSEEK_BASE_URL
+    delete process.env.ZEN_MODEL
+    delete process.env.ZEN_BASE_URL
   })
 
   afterEach(() => {
@@ -81,6 +88,29 @@ describe("loadConfig - 环境变量", () => {
     delete process.env.ZEN_API_KEY
     const cfg = loadConfig()
     expect(cfg.apiKey).toBe("public")
+    expect(cfg.model).toBe("deepseek-v4-flash-free")
+  })
+
+  it("should use provider-specific model and base URL env vars for zen", () => {
+    process.env.DEEPICODE_PROVIDER = "zen"
+    process.env.ZEN_MODEL = "mimo-v2.5-free"
+    process.env.ZEN_BASE_URL = "https://opencode.ai/zen/v1"
+
+    const cfg = loadConfig()
+    expect(cfg.provider).toBe("zen")
+    expect(cfg.model).toBe("mimo-v2.5-free")
+    expect(cfg.baseUrl).toBe("https://opencode.ai/zen/v1")
+  })
+
+  it("should not let legacy DeepSeek env vars override zen", () => {
+    process.env.DEEPICODE_PROVIDER = "zen"
+    process.env.DEEPSEEK_MODEL = "deepseek-v4-flash"
+    process.env.DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+    const cfg = loadConfig()
+    expect(cfg.provider).toBe("zen")
+    expect(cfg.model).toBe("deepseek-v4-flash-free")
+    expect(cfg.baseUrl).toBe("https://opencode.ai/zen/v1")
   })
 
   it("should default to deepseek provider when no env and no last-config", () => {
@@ -100,6 +130,10 @@ describe("saveLastConfig / loadConfig 持久化", () => {
     delete process.env.DEEPICODE_PROVIDER
     delete process.env.DEEPSEEK_API_KEY
     delete process.env.ZEN_API_KEY
+    delete process.env.DEEPSEEK_MODEL
+    delete process.env.DEEPSEEK_BASE_URL
+    delete process.env.ZEN_MODEL
+    delete process.env.ZEN_BASE_URL
   })
 
   afterEach(() => {
@@ -121,6 +155,26 @@ describe("saveLastConfig / loadConfig 持久化", () => {
     expect(cfg.provider).toBe("mimo")
     expect(cfg.model).toBe("mimo-v2.5")
     expect(cfg.baseUrl).toBe("https://api.mimo.ai/v1")
+  })
+
+  it("should normalize stale zen-free last-config model", () => {
+    saveLastConfig({ provider: "zen", model: "zen-free", baseUrl: "https://opencode.ai/zen/v1" })
+
+    const cfg = loadConfig()
+    expect(cfg.provider).toBe("zen")
+    expect(cfg.model).toBe("deepseek-v4-flash-free")
+    expect(cfg.baseUrl).toBe("https://opencode.ai/zen/v1")
+    expect(cfg.apiKey).toBe("public")
+  })
+
+  it("should ignore last-config from a different provider when env provider is set", () => {
+    saveLastConfig({ provider: "deepseek", model: "deepseek-v4-pro", baseUrl: "https://api.deepseek.com" })
+    process.env.DEEPICODE_PROVIDER = "zen"
+
+    const cfg = loadConfig()
+    expect(cfg.provider).toBe("zen")
+    expect(cfg.model).toBe("deepseek-v4-flash-free")
+    expect(cfg.baseUrl).toBe("https://opencode.ai/zen/v1")
   })
 
   it("should return defaults when last-config file does not exist", () => {

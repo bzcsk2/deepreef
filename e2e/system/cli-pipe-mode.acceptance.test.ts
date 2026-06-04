@@ -27,6 +27,7 @@ describe("LIFE-01: CLI pipe mode lifecycle", () => {
     const logPath = join(tmpDir, "runtime.jsonl")
     const env = {
       ...process.env,
+      DEEPICODE_PROVIDER: "deepseek",
       DEEPSEEK_BASE_URL: sse.url,
       DEEPSEEK_API_KEY: "test-key-must-not-appear",
       HOME: tmpDir,

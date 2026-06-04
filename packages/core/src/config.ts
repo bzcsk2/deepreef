@@ -30,7 +30,7 @@ export interface ProviderInfo {
 export const PROVIDERS: Record<string, ProviderInfo> = {
   zen: {
     baseUrl: "https://opencode.ai/zen/v1",
-    model: "zen-free",
+    model: "deepseek-v4-flash-free",
     requiresKey: false,
     label: "Zen (Free)",
     models: [
@@ -63,6 +63,14 @@ export const PROVIDERS: Record<string, ProviderInfo> = {
 
 export function getApiKeyEnvVar(provider: string): string {
   return `${provider.toUpperCase()}_API_KEY`
+}
+
+function getBaseUrlEnvVar(provider: string): string {
+  return `${provider.toUpperCase()}_BASE_URL`
+}
+
+function getModelEnvVar(provider: string): string {
+  return `${provider.toUpperCase()}_MODEL`
 }
 
 const LAST_CONFIG_FILE = ".deepicode/last-config.json"
@@ -119,10 +127,16 @@ export function loadConfig(): DeepicodeConfig {
 
   const provider = process.env.DEEPICODE_PROVIDER ?? last?.provider ?? "deepseek"
   const providerCfg = PROVIDERS[provider]
+  const lastForProvider = last?.provider === provider ? last : null
 
-  const baseUrl = process.env.DEEPSEEK_BASE_URL ?? last?.baseUrl ?? providerCfg?.baseUrl ?? DEEPSEEK_BASE_URL
+  const providerBaseUrlEnv = process.env[getBaseUrlEnvVar(provider)]
+  const legacyDeepSeekBaseUrlEnv = provider === "deepseek" ? process.env.DEEPSEEK_BASE_URL : undefined
+  const baseUrl = providerBaseUrlEnv ?? legacyDeepSeekBaseUrlEnv ?? lastForProvider?.baseUrl ?? providerCfg?.baseUrl ?? DEEPSEEK_BASE_URL
 
-  const model = process.env.DEEPSEEK_MODEL ?? last?.model ?? providerCfg?.model ?? DEEPSEEK_MODEL
+  const providerModelEnv = process.env[getModelEnvVar(provider)]
+  const legacyDeepSeekModelEnv = provider === "deepseek" ? process.env.DEEPSEEK_MODEL : undefined
+  const rawModel = providerModelEnv ?? legacyDeepSeekModelEnv ?? lastForProvider?.model ?? providerCfg?.model ?? DEEPSEEK_MODEL
+  const model = normalizeModelForProvider(providerCfg, rawModel)
 
   const apiKeyEnvVar = getApiKeyEnvVar(provider)
   let apiKey = process.env[apiKeyEnvVar] ?? providerCfg?.defaultKey ?? ""
@@ -140,4 +154,10 @@ export function loadConfig(): DeepicodeConfig {
     contextWindow: 128_000,
     provider,
   }
+}
+
+function normalizeModelForProvider(providerCfg: ProviderInfo | undefined, model: string): string {
+  if (!providerCfg || providerCfg.models.length === 0) return model
+  if (providerCfg.models.some((entry) => entry.model === model)) return model
+  return providerCfg.models[0]?.model ?? providerCfg.model
 }
