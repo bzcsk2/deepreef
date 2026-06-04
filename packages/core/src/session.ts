@@ -1,4 +1,4 @@
-import { mkdir, appendFile, readFile, readdir } from "node:fs/promises"
+import { mkdir, appendFile, readFile, readdir, stat, unlink } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import type { ChatMessage } from "./types.js"
 import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
@@ -145,6 +145,29 @@ export class SessionLoader {
     }
     entries.sort((a, b) => b.ts - a.ts)
     return entries.slice(0, 20)
+  }
+
+  static async cleanup(maxSessions = 50): Promise<number> {
+    let files: string[]
+    try {
+      files = await readdir(this.sessionDir)
+    } catch {
+      return 0
+    }
+    const jsonl = files.filter(f => f.endsWith(".jsonl"))
+    if (jsonl.length <= maxSessions) return 0
+    const withStats = await Promise.all(jsonl.map(async (f) => {
+      const path = resolve(this.sessionDir, f)
+      try { return { f, path, mtime: (await stat(path)).mtimeMs } }
+      catch { return { f, path, mtime: 0 } }
+    }))
+    withStats.sort((a, b) => b.mtime - a.mtime)
+    const toDelete = withStats.slice(maxSessions)
+    let deleted = 0
+    for (const { path } of toDelete) {
+      try { await unlink(path); deleted++ } catch {}
+    }
+    return deleted
   }
 }
 

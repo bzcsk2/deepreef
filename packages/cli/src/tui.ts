@@ -1,7 +1,6 @@
 import { stdin as input, stdout as output, stderr as errorOutput } from "node:process"
 import { writeSync } from "node:fs"
-import { loadConfig } from "@deepicode/core"
-import { ReasonixEngine } from "@deepicode/core"
+import { loadConfig, ReasonixEngine, SessionLoader } from "@deepicode/core"
 import { buildSystemPrompt } from "@deepicode/core"
 import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend } from "@deepicode/tools"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "@deepicode/mcp"
@@ -46,6 +45,7 @@ async function main(): Promise<void> {
   const engine = sessionId
     ? await ReasonixEngine.recover(config, sessionId)
     : new ReasonixEngine(config, clearReadTracker)
+  SessionLoader.cleanup().catch(() => {})
   const platform = normalizePlatform()
   const shellBackend = await resolveShellBackend(platform)
   engine.setSystemPrompt(buildSystemPrompt(process.cwd(), {
