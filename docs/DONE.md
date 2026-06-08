@@ -1530,7 +1530,7 @@ bun test             # 185 pass, 0 fail
 | HookManager tool 后钩子 | ✅ 已完成 | `afterToolCall` → `bridge.onPostToolUse/onPostToolFailure` |
 | Loop 事件钩子 | ⚠️ 已修复 | `onLoopEvent` 已从 `assistant_delta` 改为用户输入真实入口 |
 | mem::context 注入 system prompt | ⚠️ 已修复 | 启动时调用 `mem::context`，内容追加后重新调用 `engine.setSystemPrompt()` |
-| Session 生命周期 | ⚠️ 部分完成 | `onSessionEnd` 已接线；`onSessionStart` 已修复接入；`onGenerationComplete` 未接线；`onPreToolUse` 明确不接入（DONE 已列为限制） |
+| Session 生命周期 | ✅ 已完成 | `onSessionEnd` 已接线；`onSessionStart` 已修复接入；`onGenerationComplete` 已接入（`onLoopEvent` 检测 `role === "done"`）；`onPreToolUse` 明确不接入（DONE 已列为限制） |
 | 故障隔离 | ✅ 已完成 | 所有 bridge 调用 try/catch，初始化失败不阻断启动 |
 | 开关控制 | ✅ 已完成 | `DEEPREEF_MEMORY=false` 环境变量禁用 |
 | hooks/ 死代码清理 | ✅ 已完成 | 独立脚本添加 `@ts-nocheck`，被 bridge 替代 |
@@ -1557,7 +1557,6 @@ tui.ts (CLI)
 ### 16.2 保留限制
 
 - `pre_tool_use` 钩子明确不接入（bridge.onPreToolUse 已实现但未从 HookManager 调用，DONE 已将其列为限制）
-- `onGenerationComplete` 尚未接入（bridge 已实现，CLI 未接线）
 - Subagent start/stop 观察尚未接入
 - 关闭记忆功能后已确认不阻断引擎流程
 

@@ -105,13 +105,15 @@ async function main(): Promise<void> {
       await memoryBridge.onSessionStart(engine.getSessionId()).catch(() => {})
 
       // P0-1: Inject initial memory context into system prompt, then re-set on engine
-      const memContext = await memoryService.trigger("mem::context", { sessionId: engine.getSessionId(), maxChars: 2000 }).catch(() => null)
-      if (memContext && typeof memContext === "object" && "context" in memContext) {
-        const ctx = (memContext as { context: string }).context
-        if (ctx) baseSystemPrompt += `\n\n<deepreef-memory-context>\n${ctx}\n</deepreef-memory-context>`
+      if (memoryInjectContext) {
+        const memContext = await memoryService.trigger("mem::context", { sessionId: engine.getSessionId(), maxChars: 2000 }).catch(() => null)
+        if (memContext && typeof memContext === "object" && "context" in memContext) {
+          const ctx = (memContext as { context: string }).context
+          if (ctx) baseSystemPrompt += `\n\n<deepreef-memory-context>\n${ctx}\n</deepreef-memory-context>`
+        }
+        // P0-1: Re-set system prompt after memory context is appended
+        engine.setSystemPrompt(baseSystemPrompt)
       }
-      // P0-1: Re-set system prompt after memory context is appended
-      engine.setSystemPrompt(baseSystemPrompt)
 
       // Wire bridge hooks into engine's HookManager
       // P0-2: onLoopEvent only handles generation complete (done event)

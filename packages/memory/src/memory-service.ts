@@ -314,7 +314,9 @@ export class MemoryService {
       t.unref(); this.timers.push(t)
     }
     // P1-2: Use userConfig.enableConsolidation with env var fallback
-    const shouldConsolidate = this.userConfig.enableConsolidation ?? isConsolidationEnabled()
+    // Also gate on advancedTools — consolidation pipeline is an advanced feature
+    const shouldConsolidate = (this.userConfig.advancedTools ?? false)
+      && (this.userConfig.enableConsolidation ?? isConsolidationEnabled())
     if (shouldConsolidate) {
       const consolidationMs = parseInt(process.env.CONSOLIDATION_INTERVAL_MS || "7200000", 10)
       const t = setInterval(() => { void this.sdk.trigger({ function_id: "mem::consolidate-pipeline", payload: {} }).catch(() => {}) }, consolidationMs)

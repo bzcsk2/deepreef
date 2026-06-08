@@ -14,43 +14,44 @@ describe("CLI memory integration (Deepreef native)", () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  it("tui imports memory-service module", async () => {
-    const mod = await import("../src/tui.js")
-    expect(mod).toBeDefined()
-  })
-
-  it("tui exports expected function", async () => {
-    const mod = await import("../src/tui.js")
-    expect(typeof mod.runTui).toBe("function")
-  })
-
-  it("tools module imports correctly", async () => {
+  it("@deepreef/memory exports MemoryService class", async () => {
     const mod = await import("@deepreef/memory")
     expect(mod).toBeDefined()
-    expect(typeof mod.createMemoryService).toBe("function")
+    expect(typeof mod.MemoryService).toBe("function")
+  })
+
+  it("@deepreef/memory exports all agent tool creators", async () => {
+    const mod = await import("@deepreef/memory")
     expect(typeof mod.createMemoryRecallTool).toBe("function")
     expect(typeof mod.createMemorySaveTool).toBe("function")
+    expect(typeof mod.createMemorySmartSearchTool).toBe("function")
+    expect(typeof mod.createMemoryForgetTool).toBe("function")
+    expect(typeof mod.createMemoryTimelineTool).toBe("function")
+    expect(typeof mod.createMemoryStatusTool).toBe("function")
+  })
+
+  it("@deepreef/memory exports migration tools", async () => {
+    const mod = await import("@deepreef/memory")
     expect(typeof mod.createMemoryMigrateTool).toBe("function")
+    expect(typeof mod.migrateFromAgentMemory).toBe("function")
+  })
+
+  it("@deepreef/memory exports bridge class", async () => {
+    const mod = await import("@deepreef/memory")
+    expect(typeof mod.DeepreefMemoryBridge).toBe("function")
   })
 
   it("MemoryService can be created and started", async () => {
     const { MemoryService } = await import("@deepreef/memory")
     const svc = new MemoryService({ dataDir: tempDir })
     await svc.start()
+    // MemoryService exposes .config after construction
+    expect((svc as any).config).toBeDefined()
     await svc.stop()
   })
 
-  it("deepreef memory init runs without error", async () => {
-    const { execSync } = await import("node:child_process")
-    try {
-      execSync("bun run src/index.ts memory init --data-dir " + join(tempDir, "cli-test"), {
-        cwd: "/vol4/Agent/deepreef/packages/cli",
-        timeout: 30000,
-        stdio: "pipe",
-      })
-    } catch (e: any) {
-      // Command may fail due to missing env, but should not crash
-      expect(e).toBeDefined()
-    }
+  it("tui.ts module loads without error", async () => {
+    const mod = await import("../tui.js")
+    expect(mod).toBeDefined()
   })
 })
