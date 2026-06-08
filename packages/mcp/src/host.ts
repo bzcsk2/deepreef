@@ -139,6 +139,18 @@ export class McpHost {
     }
   }
 
+  async addSources(sources: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }>): Promise<McpLoadSummary> {
+    const auth = await readAuthStore()
+    const failed: McpLoadSummary["failed"] = []
+    await Promise.all(sources.map(({ name, command, args, env }) =>
+      this.connect(name, { command, args, env: { ...env, ...(auth[name]?.apiKey ? { MCP_API_KEY: auth[name].apiKey, DEEPICODE_MCP_API_KEY: auth[name].apiKey } : {}) } }).catch((error) => {
+        failed.push({ name, error: error instanceof Error ? error.message : String(error) })
+      })
+    ))
+    this.lastLoadSummary = { serverCount: this.lastLoadSummary.serverCount + sources.length, connected: this.clients.size, failed: [...this.lastLoadSummary.failed, ...failed] }
+    return this.getStatus()
+  }
+
   async disconnectAll(): Promise<void> {
     for (const [name, client] of this.clients) {
       await client.disconnect()

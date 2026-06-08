@@ -3,7 +3,7 @@ import { Box, Text, AlternateScreen, instances, SHOW_CURSOR, EXIT_ALT_SCREEN, us
 import { writeSync } from 'node:fs';
 import type { ReasonixEngine } from '@deepicode/core';
 import type { ChatMessage, DeepicodeConfig } from '@deepicode/core';
-import { PROVIDERS, AGENTS, getModelContextWindow, saveLastConfig } from '@deepicode/core';
+import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig } from '@deepicode/core';
 import { createBridge, timelineFromMessages, type BridgeState } from './bridge.js';
 import { DeepiMessages } from './DeepiMessages.js';
 import { DeepiPromptInput, type DeepiPromptInputHandle } from './DeepiPromptInput.js';
@@ -203,7 +203,7 @@ export function App({ engine, config, pluginCount = 0, mcpCount = 0 }: AppProps)
   const persistedThinkingMode = persistedSettings.thinkingMode && !validateThinkingMode(persistedSettings.thinkingMode)
     ? persistedSettings.thinkingMode
     : undefined;
-  const persistedAgent = persistedSettings.agent && AGENTS[persistedSettings.agent]
+  const persistedAgent = persistedSettings.agent && (AGENTS[persistedSettings.agent] || defaultAgentRegistry.get(persistedSettings.agent))
     ? persistedSettings.agent
     : undefined;
   const [bridgeState, setBridgeState] = useState<BridgeState>(() => ({
@@ -509,14 +509,22 @@ export function App({ engine, config, pluginCount = 0, mcpCount = 0 }: AppProps)
 
   // ---- 覆盖层：Agent 切换菜单（当 showAgentMenu 为 true 时显示） ----
   if (showAgentMenu) {
+    const agentItems = defaultAgentRegistry.list().map((a: { name: string; label: string; systemPrompt?: string }) => ({
+      value: a.name,
+      label: a.label,
+      description: a.systemPrompt ? a.systemPrompt.slice(0, 80).replace(/\n/g, " ") : "",
+    }))
+    if (agentItems.length === 0) {
+      agentItems.push(
+        { value: "build", label: "Build Agent", description: "完整读写工具" },
+        { value: "plan", label: "Plan Agent", description: "只读分析" },
+      )
+    }
     return (
       <ChoiceMenu
         title="Agent"
         subtitle="选择切换目标"
-        items={[
-          { value: "build", label: "Build Agent", description: "完整读写工具" },
-          { value: "plan", label: "Plan Agent", description: "只读分析" },
-        ]}
+        items={agentItems}
         onChoose={handleAgentChoose}
         onCancel={() => setShowAgentMenu(false)}
       />
@@ -610,7 +618,7 @@ export function App({ engine, config, pluginCount = 0, mcpCount = 0 }: AppProps)
         <WelcomeScreen
           model={activeModel}
           provider={providerLabel}
-          agent={AGENTS[activeAgent]?.label ?? activeAgent}
+          agent={AGENTS[activeAgent]?.label ?? defaultAgentRegistry.get(activeAgent)?.label ?? activeAgent}
           thinkingMode={bridgeState.thinkingMode}
           contextMode={contextPolicy.mode}
           skillCount={activeSkills.length}
@@ -676,7 +684,7 @@ export function App({ engine, config, pluginCount = 0, mcpCount = 0 }: AppProps)
       <StatusBar
         model={bridgeState.routedModel ?? activeModel}
         provider={providerLabel}
-        agent={AGENTS[activeAgent]?.label ?? activeAgent}
+        agent={AGENTS[activeAgent]?.label ?? defaultAgentRegistry.get(activeAgent)?.label ?? activeAgent}
         inputTokens={bridgeState.tokens.input}
         outputTokens={bridgeState.tokens.output}
         cacheHitTokens={bridgeState.tokens.cacheHit}

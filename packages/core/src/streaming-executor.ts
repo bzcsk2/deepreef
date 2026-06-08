@@ -13,8 +13,8 @@ export class StreamingToolExecutor {
   private permissionEngine?: PermissionEngine
   private hookManager?: HookManager
   private requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>
-  private delegateTask?: (task: string, agentType: "build" | "plan", files: string[]) => Promise<string>
-  private switchAgent?: (name: "build" | "plan") => string
+  private delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>
+  private switchAgent?: (name: string) => string
   private spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>
   private resultPersistenceConfig?: ResultPersistenceConfig
   private logger: RuntimeLogger
@@ -30,8 +30,8 @@ export class StreamingToolExecutor {
     permissionEngine?: PermissionEngine,
     hookManager?: HookManager,
     requestPermission?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>,
-    delegateTask?: (task: string, agentType: "build" | "plan", files: string[]) => Promise<string>,
-    switchAgent?: (name: "build" | "plan") => string,
+    delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>,
+    switchAgent?: (name: string) => string,
     spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>,
     resultPersistenceConfig?: ResultPersistenceConfig,
     logger: RuntimeLogger = noopRuntimeLogger,

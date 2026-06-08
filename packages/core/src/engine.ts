@@ -633,7 +633,7 @@ export class ReasonixEngine implements CoreEngine {
     })
   }
 
-  private async delegateTask(task: string, agentType: "build" | "plan", files: string[]): Promise<string> {
+  private async delegateTask(task: string, agentType: string, files: string[]): Promise<string> {
     const subagentType = agentType === "plan" ? "Plan" : "general-purpose"
     const result = await this.spawnSubagent({
       description: task.split(/\s+/).slice(0, 5).join(" ") + "...",
