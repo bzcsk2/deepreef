@@ -26,14 +26,13 @@ export function loadTuiSettings(): TuiSettings {
     const raw = readFileSync(settingsPath(), 'utf8');
     const parsed = JSON.parse(raw);
     const result = TuiSettingsSchema["~standard"].validate(parsed);
-    // validate can be sync or async in Standard Schema
     if (result && typeof result === 'object' && 'then' in result) {
-      return parsed as TuiSettings
+      return {}
     }
     if ('value' in (result as { value: unknown })) {
-      return (result as { value: TuiSettings }).value
+      return normalizeSettings((result as { value: Partial<TuiSettings> }).value)
     }
-    return parsed as TuiSettings
+    return {}
   } catch {
     return {};
   }
@@ -49,4 +48,20 @@ export function saveTuiSettings(patch: Partial<TuiSettings>): void {
   } catch {
     // TUI settings persistence must not break interaction.
   }
+}
+
+function normalizeSettings(settings: Partial<TuiSettings>): TuiSettings {
+  return {
+    ...(typeof settings.agent === 'string' && settings.agent ? { agent: settings.agent } : {}),
+    ...(typeof settings.thinkingMode === 'string' && settings.thinkingMode ? { thinkingMode: settings.thinkingMode } : {}),
+    ...(Array.isArray(settings.activeSkills) ? { activeSkills: settings.activeSkills.filter(isPersistedSkill).map(s => ({ name: s.name, description: s.description, content: s.content })) } : {}),
+  }
+}
+
+function isPersistedSkill(value: unknown): value is PersistedSkill {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.name === 'string'
+    && typeof record.description === 'string'
+    && typeof record.content === 'string';
 }

@@ -49,6 +49,7 @@
       "dependencies": {
         "@deepicode/core": "workspace:*",
         "@deepicode/mcp": "workspace:*",
+        "@deepicode/plugin": "workspace:*",
         "@deepicode/tools": "workspace:*",
         "@deepicode/tui": "workspace:*",
       },

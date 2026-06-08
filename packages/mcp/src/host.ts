@@ -63,7 +63,7 @@ export class McpHost {
         if ("value" in result) {
           config = result.value as McpConfig
         } else {
-          config = parsed as McpConfig
+          config = {}
         }
         break
       } catch { continue }
@@ -172,7 +172,7 @@ async function readAuthStore(): Promise<Record<string, { apiKey: string }>> {
     if ("value" in result) {
       return result.value as Record<string, { apiKey: string }>
     }
-    return parsed as Record<string, { apiKey: string }>
+    return {}
   } catch {
     return {}
   }

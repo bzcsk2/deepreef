@@ -5,6 +5,7 @@ import { loadConfig, ReasonixEngine, SessionLoader } from "@deepicode/core"
 import { buildSystemPrompt } from "@deepicode/core"
 import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend } from "@deepicode/tools"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "@deepicode/mcp"
+import { PluginRuntime, pluginToolsToAgentTools } from "@deepicode/plugin"
 import React from "react"
 import { wrappedRender as render } from "@deepicode/ink"
 import { App } from "@deepicode/tui"
@@ -53,7 +54,17 @@ async function main(): Promise<void> {
     osPlatform: platform,
     shellBackend: `${shellBackend.id} (${shellBackend.executable})`,
   }))
-  for (const tool of createDefaultTools()) {
+
+  // Initialize plugin runtime (loads executable plugins and content packs)
+  const pluginRuntime = new PluginRuntime()
+  await pluginRuntime.init()
+  const pluginToolAgentTools = pluginToolsToAgentTools(pluginRuntime.getTools())
+  const skillDirs = pluginRuntime.getSkillDirs()
+
+  for (const tool of createDefaultTools(skillDirs)) {
+    engine.registerTool(tool)
+  }
+  for (const tool of pluginToolAgentTools) {
     engine.registerTool(tool)
   }
   // MCP tools are registered separately (dynamic, discovered at runtime)
@@ -69,10 +80,11 @@ async function main(): Promise<void> {
       return
     }
 
-    await runTUIMode(engine, config)
+    await runTUIMode(engine, config, pluginRuntime)
   } finally {
     // LIFE-01: close engine (tokenizer worker, logger, session writer)
     await engine.shutdown()
+    pluginRuntime.dispose()
     // Wait for background MCP load to settle before disconnecting (best-effort, 2s cap)
     await Promise.race([mcpLoadPromise, new Promise<void>(r => setTimeout(r, 2000))])
     await mcpHost.disconnectAll()
@@ -124,35 +136,19 @@ async function runPipeMode(engine: ReasonixEngine): Promise<void> {
   }
 }
 
-async function runTUIMode(engine: ReasonixEngine, config: ReturnType<typeof loadConfig>): Promise<void> {
-  const pluginCount = readConfiguredPluginCount()
+async function runTUIMode(engine: ReasonixEngine, config: ReturnType<typeof loadConfig>, pluginRuntime: PluginRuntime): Promise<void> {
+  const status = pluginRuntime.getStatus()
+  const pluginCount = status.loadedPlugins.length
   const mcpCount = readConfiguredMcpCount()
   try {
     const { waitUntilExit } = await render(
       React.createElement(App, { engine, config, pluginCount, mcpCount }),
-      { exitOnCtrlC: false }  // Don't let Ink intercept \x03 — we handle SIGINT ourselves
+      { exitOnCtrlC: false }
     );
     await waitUntilExit();
   } finally {
-    // Ensure terminal is restored even if render throws
-    try { writeSync(1, '\x1b[?1049l'); } catch {} // EXIT_ALT_SCREEN
-    try { writeSync(1, '\x1b[?25h'); } catch {}   // SHOW_CURSOR
-  }
-}
-
-function readConfiguredPluginCount(): number {
-  try {
-    const raw = readFileSync(resolve(process.cwd(), ".deepicode", "plugins.json"), "utf8")
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return 0
-    return parsed.filter((item) => {
-      if (item && typeof item === "object" && !Array.isArray(item)) {
-        return (item as { options?: { enabled?: boolean } }).options?.enabled !== false
-      }
-      return true
-    }).length
-  } catch {
-    return 0
+    try { writeSync(1, '\x1b[?1049l'); } catch {}
+    try { writeSync(1, '\x1b[?25h'); } catch {}
   }
 }
 

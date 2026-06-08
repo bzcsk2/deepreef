@@ -18,3 +18,28 @@ export type { PluginHookAdapter, HookAdapterError } from "./hook-adapter.js"
 
 export { PluginRuntime, createPluginRuntime } from "./runtime.js"
 export type { PluginRuntimeOptions, PluginRuntimeStatus } from "./runtime.js"
+
+export { pluginToolToAgentTool, pluginToolsToAgentTools } from "./engine-tool-adapter.js"
+
+export {
+  resolveContentPack,
+  findManifest,
+  isDirectory,
+  parseManifest,
+  loadEccManifests,
+} from "./content-pack/index.js"
+export type {
+  ContentPackManifest,
+  ContentPackDiagnostic,
+  ContentAsset,
+  ResolvedContentPack,
+  ContentPackPluginOptions,
+  InstallProfile,
+  InstallProfiles,
+  InstallModule,
+  InstallModules,
+  InstallComponent,
+  InstallComponents,
+  ManifestSourceKind,
+  PluginKind,
+} from "./content-pack/index.js"

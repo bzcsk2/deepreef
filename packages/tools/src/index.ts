@@ -87,7 +87,7 @@ export type { TaskItem }
  * Preserves construction order (matches system prompt tool spec ordering).
  * MCP dynamic tools are registered separately by the CLI/host.
  */
-export function createDefaultTools(): AgentTool[] {
+export function createDefaultTools(skillDirs?: string[]): AgentTool[] {
   return [
     createReadFileTool(),
     createBashTool(),
@@ -99,7 +99,7 @@ export function createDefaultTools(): AgentTool[] {
     createGlobTool(),
     createWebFetchTool(),
     createWebSearchTool(),
-    createSkillTool(),
+    createSkillTool({ skillDirs }),
     createTaskCreateTool(),
     createTaskUpdateTool(),
     createTaskListTool(),

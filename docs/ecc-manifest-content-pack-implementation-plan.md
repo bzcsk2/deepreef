@@ -925,6 +925,52 @@ getHookAssets(): ContentAsset[]
 - 第一阶段只把 content pack skills 接到 `Skill` 工具。
 - 第二阶段再把 agents/rules/mcp/hooks 接上。
 
+### 14.3 旧 Executable Plugin 与 Zod 工具生产接线
+
+当前 Zod 适配已经在 `@deepicode/plugin` 包内实现：
+
+- `definePluginTool()`
+- Standard Schema 参数验证
+- Zod 到 JSON Schema 转换
+- `PluginRuntime`
+- `executePluginTool()`
+
+但这些能力尚未进入 Deepicode CLI/Engine 的生产路径。当前 `packages/cli/src/tui.ts` 只读取 `.deepicode/plugins.json` 计算展示数量，没有创建 `PluginRuntime`，也没有把 executable plugin tools 注册进 Engine。
+
+Claude Code Plugin/ECC 接入必须同时完成这条生产链路：
+
+```text
+.deepicode/plugins.json
+  -> 区分 executable module plugin 与 Claude Code manifest plugin
+  -> PluginRuntime.init()
+  -> executable plugin tools 生成 ToolSpec
+  -> 注册为 Engine AgentTool
+  -> 模型收到 Zod 生成的 JSON Schema
+  -> 工具调用进入 executePluginTool()
+  -> Standard Schema/Zod 执行前验证
+  -> 插件业务 execute(validatedArgs)
+```
+
+实施要求：
+
+1. CLI 启动时创建并初始化一个 `PluginRuntime`，不能只读取 plugin count。
+2. 将 `PluginRuntime.getTools()` 转换为 Engine 可注册的 `AgentTool`。
+3. Engine 中插件工具的工具名、description 和 parameters 必须来自 `PluginTool`。
+4. 插件工具执行必须经过 `executePluginTool()` 或等价公共执行入口，不能绕过 Zod/Standard Schema 验证直接调用函数。
+5. schema-aware plugin tool 的默认值、trim、transform 等验证输出必须传给插件业务函数。
+6. 普通函数 executable plugin 继续兼容，不要求 schema。
+7. Claude Code manifest plugin 与旧 executable plugin 必须能够在同一 `.deepicode/plugins.json` 中同时加载。
+8. CLI shutdown 时调用 `pluginRuntime.dispose()`。
+9. plugin runtime 初始化错误应进入诊断/status，不应让 ECC Skills 等其他有效资产全部失效。
+
+建议新增薄适配器：
+
+- `packages/plugin/src/engine-tool-adapter.ts`
+  - 将 `PluginTool` 转为 `AgentTool`。
+  - `execute()` 内调用 `executePluginTool()`。
+
+不要让 `@deepicode/core` 直接依赖 `@deepicode/plugin`。由 CLI 负责把 plugin tools 转换并注册到 Engine。
+
 ## 15. 包依赖建议
 
 当前依赖：
@@ -978,6 +1024,8 @@ getHookAssets(): ContentAsset[]
 - `loadPlugins()` 继续只处理 runtime plugins。
 - `PluginRuntime.init()` 同时调用 runtime loader 和 content-pack resolver。
 - content-pack 错误不应阻止 runtime plugin 加载。
+- 增加 `PluginTool -> AgentTool` 薄适配器，确保生产执行经过 `executePluginTool()`。
+- schema 转换失败必须产生 `invalid_schema` 诊断，不能静默注册无约束空 schema。
 
 ### 16.2 Tools 包
 
@@ -1041,18 +1089,80 @@ getHookAssets(): ContentAsset[]
 重点：
 
 - CLI 初始化 plugin runtime 并把内容包资产注入 Engine/tools/MCP。
+- CLI 将 executable plugin tools 注册进 Engine，完成 Zod 工具端到端接线。
 - TUI 显示 content pack 数量和诊断摘要。
 - `/help`、`/agent` 从动态 registry 获取 agents。
 - `/status` 展示 content pack assets 统计。
 
 ## 17. 与 Zod 集成的关系
 
-Deepicode 另有 Zod 集成计划。内容包 manifest 校验可以按两种路径实施：
+Zod 包级核心能力已经实现，但审查确认仍有前置缺陷和未完成接线。实施 agent 必须把本节视为 ECC/Claude Plugin 接入的组成部分。
 
-1. 如果 Zod 已完成：使用 Zod schema 校验 Deepicode content-pack manifest 和 ECC manifest 解析结果。
-2. 如果 Zod 未完成：先用小型手写校验或 JSON schema validator，接口保持 `parse -> Result<T, Diagnostic[]>`，后续可替换为 Zod。
+### 17.1 已完成且应复用
 
-不要让 ECC 内容包支持阻塞在 Zod 完成上。
+- `packages/plugin/src/define-tool.ts`
+- `packages/plugin/src/schema-adapter.ts`
+- `packages/plugin/src/tool-adapter.ts`
+- `packages/plugin/src/runtime.ts`
+- `packages/core/src/schemas/json.ts`
+- `packages/core/src/schemas/config.ts`
+- `packages/mcp/src/schemas.ts`
+- `packages/tui/src/settings-schema.ts`
+
+不要重写这些实现。修复现有缺陷并完成生产接线。
+
+### 17.2 接入前必须修复：校验失败不得使用原始配置
+
+当前以下边界调用 Zod 后，在校验返回 `issues` 时仍使用未经验证的 `parsed`：
+
+- `packages/core/src/config.ts`：`last-config.json`
+- `packages/mcp/src/host.ts`：`mcp.json`
+- `packages/mcp/src/host.ts`：`mcp-auth.json`
+- `packages/tui/src/settings.ts`：`ui-settings.json`
+
+这会导致错误类型进入运行时。例如：
+
+- `{ "provider": 42 }` 可导致 provider env key 处理中调用数字的 `toUpperCase()`。
+- `{ "activeSkills": "bad" }` 可导致 TUI 对字符串调用 `.map()`。
+- 非法 MCP server config 可进入 `McpHost.connect()`。
+
+修复规则：
+
+1. Zod/Standard Schema 返回 `issues` 时不得返回 raw parsed。
+2. `last-config.json` 校验失败时返回 `null`，使用默认配置。
+3. `mcp.json` 校验失败时跳过无效配置并记录诊断，不连接任何无效 server。
+4. `mcp-auth.json` 校验失败时返回空 auth store，不泄露或使用无效数据。
+5. `ui-settings.json` 校验失败时恢复安全字段过滤语义：
+   - 可以恢复 `normalizeSettings()`；
+   - 或使用部分字段逐项验证；
+   - 不能把整个 raw parsed 返回给 TUI。
+6. 保留文件不存在和 JSON 语法错误的原有容错行为。
+7. 使用已有 `parseJsonConfig()`，或删除该未使用 helper；不要保留一套未接入的抽象。
+8. `PluginConfigSchema` 要么真正接入 `plugins.json` 解析，要么移除，避免 DONE 声称已有配置校验但实际未使用。
+
+### 17.3 接入前必须修复：schema 转换失败不能静默降级
+
+当前 `convertSchemaToJsonSpec()` 在 Standard Schema 没有 JSON Schema 能力且 Zod 转换失败时，返回：
+
+```json
+{ "type": "object", "properties": {} }
+```
+
+这会把一个声明了 schema 的工具静默注册成无约束工具。模型看不到真实参数要求，但 runtime 又会执行严格验证，容易形成重复无效调用。
+
+修复要求：
+
+- schema-aware tool 转换失败时返回明确失败结果或抛出可识别错误。
+- `extractToolsFromPlugins()` 应跳过该工具并记录 `invalid_schema`。
+- 错误中包含 plugin id 和 tool name，但不得泄露敏感 schema 输入。
+- 普通无 schema 函数插件仍使用空 object schema，保持兼容。
+
+### 17.4 内容包 Manifest 校验
+
+- Claude Code plugin manifest 应使用 Zod schema 校验。
+- ECC profiles/modules/components 可以使用独立 Zod schema。
+- 接口保持 `parse -> result + diagnostics`，单个无效资源不应让其他有效资源失效。
+- manifest 校验失败不得回退为未经验证的原始 manifest。
 
 ## 18. 测试计划
 
@@ -1110,6 +1220,23 @@ Hooks：
 - timeout 生效。
 - matcher 能从 `PreToolUse` 匹配到 Deepicode tool。
 
+Zod 配置边界：
+
+- 非字符串 `last-config.provider` 被拒绝并回退默认配置。
+- 非数组 `ui-settings.activeSkills` 被拒绝或过滤，TUI 不崩溃。
+- 非字符串 MCP `command` 不会进入 `connect()`。
+- 无效 `mcp-auth.json` 返回空 auth store。
+- schema 校验失败后没有任何路径继续返回 raw parsed。
+
+Executable plugin + Zod：
+
+- CLI 启动会真正初始化 `PluginRuntime`。
+- 一个 `definePluginTool()` 工具会出现在 Engine tools 和发给模型的 ToolSpec 中。
+- 模型参数错误时插件业务函数不执行。
+- 验证后的默认值/transform 输出会传给插件业务函数。
+- schema 转换失败时工具不注册，并出现 `invalid_schema` 诊断。
+- 普通函数 executable plugin 仍可运行。
+
 ### 18.2 Integration Tests
 
 创建临时 workspace：
@@ -1134,6 +1261,10 @@ tmp/
 - `createSkillTool({ skillDirs })` 能 load fixture skill。
 - agent registry 出现 `ecc:code-reviewer`。
 - MCP config 只连接允许的 stdio server。
+- 同一 workspace 中同时加载：
+  - 一个 Claude Code manifest fixture；
+  - 一个使用 `definePluginTool()` 的 executable plugin fixture。
+- manifest plugin 的 skill 可加载，executable plugin 的 Zod 工具可在 Engine 中执行。
 
 ### 18.3 ECC Real-Repo Smoke Test
 
@@ -1168,9 +1299,11 @@ tmp/
 
 - 没有 `.deepicode/plugins.json` 时行为保持现状。
 - 旧 `.ts` runtime plugin 仍能注册工具。
+- 旧 `.ts` runtime plugin 不只是 package 单元测试通过，还必须从 CLI/Engine 生产路径真实执行。
 - 旧 hook plugin 的 `beforeToolCall`、`afterToolCall`、`onLoopEvent` 仍工作。
 - 内置 `/help`、`/skill`、`/agent` 不因无内容包而失败。
 - TUI 无 content pack 时 plugin count 显示不回退。
+- 损坏的 last-config、ui-settings、mcp 和 mcp-auth 不会进入运行时。
 
 ## 19. 验收标准
 
@@ -1188,10 +1321,26 @@ tmp/
 10. HTTP MCP、placeholder env、`npx -y` 默认跳过并有诊断。
 11. `/status` 或 welcome/status 区能看到 content pack 资产统计。
 12. `bun test` 和相关 package `typecheck` 通过。
+13. CLI/Engine 生产路径会真正加载 executable plugins，而不是只显示 plugin count。
+14. `definePluginTool()` 生成的 JSON Schema 会进入模型 ToolSpec，执行前验证不可绕过。
+15. Zod 配置校验失败时不得使用 raw parsed。
+16. schema-aware tool 无法生成 JSON Schema 时不得静默注册空 schema。
+17. Claude Code manifest plugin 与 Zod executable plugin 可以在同一 workspace 同时工作。
 
 ## 20. 实施阶段建议
 
-### Phase 1：内容包识别和 Skills
+### Phase 0：修复 Zod 前置缺陷
+
+目标：
+
+- 修复 last-config、TUI settings、MCP config、MCP auth 的校验失败回退。
+- 恢复 TUI settings 安全字段过滤。
+- schema-aware tool 转换失败时记录 `invalid_schema`，不注册空 schema。
+- 增加所有 schema-error 分支测试。
+
+Phase 0 完成前，不得声称 Zod 配置迁移完成。
+
+### Phase 1：Claude Plugin 识别、Skills 与生产 Runtime 接线
 
 目标：
 
@@ -1199,6 +1348,9 @@ tmp/
 - ECC profile/module 解析。
 - resolved content pack status。
 - Skill tool 注入外部 skill dirs。
+- CLI 初始化 `PluginRuntime`。
+- executable plugin tools 注册进 Engine。
+- Zod 工具完成 ToolSpec 生成、执行前验证和业务执行端到端链路。
 
 这是最小可用版本。
 
@@ -1247,6 +1399,10 @@ tmp/
 - 不要让内容包 agent 覆盖内置 `build`、`plan`。
 - 不要让内容包 rules 无限扩展 system prompt。
 - 不要引入新的包循环依赖。
+- 不要在 Zod 校验失败后继续使用 raw parsed。
+- 不要让 schema-aware plugin tool 静默降级成空 object schema。
+- 不要只增加 plugin count 展示而不加载 plugin runtime。
+- 不要绕过 `executePluginTool()` 直接调用 schema-aware plugin 函数。
 
 ## 22. 最终报告要求
 
@@ -1258,4 +1414,7 @@ tmp/
 - 默认安全策略如何工作。
 - 跑过哪些测试和命令。
 - 使用真实 `/vol4/Agent/ECC` smoke test 的结果。
+- executable plugin + Zod 工具的 CLI/Engine 端到端结果。
+- 四类损坏配置文件的回退测试结果：last-config、ui-settings、mcp、mcp-auth。
+- schema 转换失败的诊断和跳过结果。
 - 遗留风险和下一阶段建议。

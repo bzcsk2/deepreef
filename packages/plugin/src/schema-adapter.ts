@@ -60,19 +60,15 @@ export async function convertSchemaToJsonSpec(
 
   const zod = await getZodModule()
   if (zod) {
-    try {
-      const result = zod.z.toJSONSchema(inputSchema as unknown as Parameters<typeof zod.z.toJSONSchema>[0], {
-        io: "input",
-        target: "draft-07",
-        unrepresentable: "any",
-      })
-      return result as Record<string, unknown>
-    } catch {
-      // Fall through
-    }
+    const result = zod.z.toJSONSchema(inputSchema as unknown as Parameters<typeof zod.z.toJSONSchema>[0], {
+      io: "input",
+      target: "draft-07",
+      unrepresentable: "any",
+    })
+    return result as Record<string, unknown>
   }
 
-  return { type: "object", properties: {} }
+  throw new Error("Cannot convert schema to JSON Schema: no Standard JSON Schema method and zod module not available")
 }
 
 export async function validateSchemaArgs(

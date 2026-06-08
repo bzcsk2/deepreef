@@ -9,6 +9,10 @@ export interface SkillDef {
   content: string
   baseDir?: string
   tags?: string[]
+  source?: {
+    pluginId?: string
+    path: string
+  }
 }
 
 const FRONTMATTER_RE = /^---\n([\s\S]+?)\n---\n([\s\S]*)$/

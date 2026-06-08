@@ -158,12 +158,12 @@ function loadLastConfig(): { provider?: string; model?: string; baseUrl?: string
     const parsed = JSON.parse(raw)
     const result = LastConfigSchema["~standard"].validate(parsed)
     if (result && typeof result === "object" && "then" in result) {
-      return parsed as { provider?: string; model?: string; baseUrl?: string }
+      return null
     }
-    if ("value" in (result as { value: unknown })) {
-      return (result as { value: { provider?: string; model?: string; baseUrl?: string } }).value
+    if ("issues" in (result as { issues: unknown })) {
+      return null
     }
-    return parsed as { provider?: string; model?: string; baseUrl?: string }
+    return (result as { value: { provider?: string; model?: string; baseUrl?: string } }).value
   } catch {
     return null
   }

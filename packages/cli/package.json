@@ -22,6 +22,7 @@
     "@deepicode/core": "workspace:*",
     "@deepicode/tools": "workspace:*",
     "@deepicode/mcp": "workspace:*",
-    "@deepicode/tui": "workspace:*"
+    "@deepicode/tui": "workspace:*",
+    "@deepicode/plugin": "workspace:*"
   }
 }
