@@ -1,9 +1,11 @@
 import type { AgentConfig } from "./interface.js"
 import { MAIN_MODES, getMainMode } from "./main-mode.js"
 import type { MainMode } from "./main-mode.js"
+import { defaultAgentRegistry } from "./agent-registry.js"
 
 export type { MainMode } from "./main-mode.js"
 export { MAIN_MODES, getMainMode } from "./main-mode.js"
+export { AgentRegistry, defaultAgentRegistry } from "./agent-registry.js"
 
 export interface AgentDefinition {
   name: string
@@ -15,23 +17,25 @@ export interface AgentDefinition {
   toolNames?: string[]
 }
 
-export const AGENTS: Record<string, AgentDefinition> = {
-  build: {
-    name: "build",
-    label: "Build Mode",
-    systemPrompt: MAIN_MODES.build.systemPrompt,
-    toolNames: [...MAIN_MODES.build.toolNames],
-  },
-  plan: {
-    name: "plan",
-    label: "Plan Mode",
-    systemPrompt: MAIN_MODES.plan.systemPrompt,
-    toolNames: [...MAIN_MODES.plan.toolNames],
-  },
-}
+// Register default agents
+defaultAgentRegistry.register({
+  name: "build",
+  label: "Build Mode",
+  systemPrompt: MAIN_MODES.build.systemPrompt,
+  toolNames: [...MAIN_MODES.build.toolNames],
+})
+defaultAgentRegistry.register({
+  name: "plan",
+  label: "Plan Mode",
+  systemPrompt: MAIN_MODES.plan.systemPrompt,
+  toolNames: [...MAIN_MODES.plan.toolNames],
+})
+
+/** Backward-compatible static snapshot */
+export const AGENTS: Record<string, AgentDefinition> = defaultAgentRegistry.snapshot()
 
 export function getAgent(name: string): AgentDefinition {
-  return AGENTS[name] ?? AGENTS.build
+  return defaultAgentRegistry.get(name) ?? AGENTS.build
 }
 
 export function agentConfigFor(name: string, overrides?: Partial<AgentConfig>): AgentConfig {

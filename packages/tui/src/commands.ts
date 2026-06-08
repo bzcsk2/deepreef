@@ -3,7 +3,7 @@
  * Testable without rendering any Ink components.
  */
 
-import { AGENTS } from "@deepicode/core"
+import { AGENTS, defaultAgentRegistry } from "@deepicode/core"
 
 export type SlashCommand =
   | { name: "exit" }
@@ -65,13 +65,17 @@ export function getThinkingModes(): string[] {
 }
 
 /**
- * CL-52: Toggle between build/plan agents.
+ * Cycle to the next agent.
  * Returns the next agent name and its label.
  */
 export function toggleAgent(current: string): { next: string; label: string } {
-  const next = current === "build" ? "plan" : "build"
-  const label = AGENTS[next]?.label ?? next
-  return { next, label }
+  const agents = defaultAgentRegistry.list()
+  const names = agents.map(a => a.name)
+  if (names.length === 0) return { next: current, label: current }
+  const idx = names.indexOf(current)
+  const next = idx >= 0 && idx < names.length - 1 ? names[idx + 1] : names[0]
+  const def = defaultAgentRegistry.get(next)
+  return { next, label: def?.label ?? next }
 }
 
 /**
@@ -90,10 +94,10 @@ interface HelpCommandStrings {
 }
 
 export function buildHelpText(activeAgent: string, cmdStrings: HelpCommandStrings): string {
-  const agentList = Object.values(AGENTS)
+  const agentList = defaultAgentRegistry.list()
     .map((a) => `${a.name} — ${a.label}`)
     .join("\n")
-  const currentLabel = AGENTS[activeAgent]?.label ?? activeAgent
+  const currentLabel = defaultAgentRegistry.get(activeAgent)?.label ?? AGENTS[activeAgent]?.label ?? activeAgent
 
   return [
     "Commands:",

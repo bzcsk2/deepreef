@@ -1,7 +1,7 @@
 import { stdin as input, stdout as output, stderr as errorOutput } from "node:process"
 import { readFileSync, writeSync } from "node:fs"
 import { resolve } from "node:path"
-import { loadConfig, ReasonixEngine, SessionLoader } from "@deepicode/core"
+import { loadConfig, ReasonixEngine, SessionLoader, defaultAgentRegistry } from "@deepicode/core"
 import { buildSystemPrompt } from "@deepicode/core"
 import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend } from "@deepicode/tools"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "@deepicode/mcp"
@@ -36,7 +36,7 @@ async function main(): Promise<void> {
   // Initialize MCP host in background — don't block startup
   const mcpHost = new McpHost()
   setMcpHost(mcpHost)
-  const mcpLoadPromise = mcpHost.loadConfig().then((summary) => {
+  let mcpLoadPromise = mcpHost.loadConfig().then((summary) => {
     if (summary.failed.length > 0) {
       errorOutput.write(`[deepicode] MCP loaded with ${summary.failed.length}/${summary.serverCount} server failure(s)\n`)
     }
@@ -50,16 +50,38 @@ async function main(): Promise<void> {
   SessionLoader.cleanup().catch(() => {})
   const platform = normalizePlatform()
   const shellBackend = await resolveShellBackend(platform)
-  engine.setSystemPrompt(buildSystemPrompt(process.cwd(), {
+  let baseSystemPrompt = buildSystemPrompt(process.cwd(), {
     osPlatform: platform,
     shellBackend: `${shellBackend.id} (${shellBackend.executable})`,
-  }))
+  })
 
   // Initialize plugin runtime (loads executable plugins and content packs)
   const pluginRuntime = new PluginRuntime()
   await pluginRuntime.init()
   const pluginToolAgentTools = pluginToolsToAgentTools(pluginRuntime.getTools())
   const skillDirs = pluginRuntime.getSkillDirs()
+
+  // Register content pack agents into default registry
+  for (const agent of pluginRuntime.loadAgents()) {
+    defaultAgentRegistry.register(agent)
+  }
+
+  // Inject compiled rules into system prompt
+  const rulesResult = pluginRuntime.compileRules()
+  if (rulesResult.systemPrompt) {
+    baseSystemPrompt += "\n\n" + rulesResult.systemPrompt
+  }
+  engine.setSystemPrompt(baseSystemPrompt)
+
+  // Load content pack MCP servers into McpHost
+  const mcpConfigs = pluginRuntime.loadMcpConfigs()
+  if (mcpConfigs.length > 0) {
+    mcpLoadPromise = mcpLoadPromise.then(() => mcpHost.addSources(mcpConfigs)).then((summary) => {
+      if (summary.failed.length > 0) {
+        errorOutput.write(`[deepicode] Content pack MCP: ${summary.failed.length}/${summary.serverCount} server failure(s)\n`)
+      }
+    })
+  }
 
   for (const tool of createDefaultTools(skillDirs)) {
     engine.registerTool(tool)
@@ -80,7 +102,7 @@ async function main(): Promise<void> {
       return
     }
 
-    await runTUIMode(engine, config, pluginRuntime)
+    await runTUIMode(engine, config, pluginRuntime, mcpConfigs.length)
   } finally {
     // LIFE-01: close engine (tokenizer worker, logger, session writer)
     await engine.shutdown()
@@ -136,10 +158,10 @@ async function runPipeMode(engine: ReasonixEngine): Promise<void> {
   }
 }
 
-async function runTUIMode(engine: ReasonixEngine, config: ReturnType<typeof loadConfig>, pluginRuntime: PluginRuntime): Promise<void> {
+async function runTUIMode(engine: ReasonixEngine, config: ReturnType<typeof loadConfig>, pluginRuntime: PluginRuntime, mcpConfigCount: number = 0): Promise<void> {
   const status = pluginRuntime.getStatus()
   const pluginCount = status.loadedPlugins.length
-  const mcpCount = readConfiguredMcpCount()
+  const mcpCount = readConfiguredMcpCount() + mcpConfigCount
   try {
     const { waitUntilExit } = await render(
       React.createElement(App, { engine, config, pluginCount, mcpCount }),

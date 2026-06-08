@@ -1,12 +1,15 @@
+import { readFileSync } from "node:fs"
 import { readPluginConfig, type PluginConfigError } from "./config.js"
 import { loadPlugins, type PluginLoaded, type PluginLoadError } from "./loader.js"
 import { extractToolsFromPlugins, pluginToolsToToolSpecs, type PluginTool, type PluginToolError } from "./tool-adapter.js"
 import { PluginHookRegistry } from "./hook-adapter.js"
 import type { HookManager } from "@deepicode/security"
-import type { ToolSpec } from "@deepicode/core"
+import type { AgentDefinition, ToolSpec } from "@deepicode/core"
 import { resolve } from "node:path"
 import { resolveContentPack } from "./content-pack/resolver.js"
 import { isDirectory } from "./content-pack/discovery.js"
+import { parseEccAgentMarkdown } from "./content-pack/agent-parser.js"
+import { compileRules } from "./content-pack/rules-compiler.js"
 import type { ResolvedContentPack, ContentPackDiagnostic, ContentPackPluginOptions } from "./content-pack/types.js"
 
 export interface PluginRuntimeOptions {
@@ -147,6 +150,77 @@ export class PluginRuntime {
 
   getMcpAssets() {
     return this.contentPacks.flatMap((cp) => cp.assets.mcp)
+  }
+
+  loadAgents(): AgentDefinition[] {
+    const agents: AgentDefinition[] = []
+    for (const cp of this.contentPacks) {
+      for (const asset of cp.assets.agents) {
+        const parsed = parseEccAgentMarkdown(asset.path)
+        if (parsed.agent) {
+          agents.push(parsed.agent)
+        }
+        for (const w of parsed.warnings) {
+          this.diagnostics.push(`[warn] ${w}`)
+        }
+      }
+    }
+    return agents
+  }
+
+  compileRules(): { systemPrompt: string; count: number; warnings: string[] } {
+    const rules = this.getRuleAssets()
+    if (rules.length === 0) return { systemPrompt: "", count: 0, warnings: [] }
+    const result = compileRules(rules)
+    for (const w of result.warnings) {
+      this.diagnostics.push(`[warn] ${w}`)
+    }
+    return { systemPrompt: result.systemPrompt, count: result.count, warnings: result.warnings }
+  }
+
+  loadMcpConfigs(): Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }> {
+    const configs: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }> = []
+    for (const cp of this.contentPacks) {
+      for (const asset of cp.assets.mcp) {
+        try {
+          const raw = readFileSync(asset.path, "utf8")
+          const parsed = JSON.parse(raw)
+          const servers = parsed.mcpServers ?? {}
+          for (const [name, cfg] of Object.entries(servers)) {
+            const server = cfg as Record<string, unknown>
+            const command = server.command as string | undefined
+            if (!command) {
+              this.diagnostics.push(`[warn] MCP server "${name}" in ${asset.path} missing command, skipping`)
+              continue
+            }
+            if (!command.startsWith("node ") && !command.startsWith("bun ") && !command.includes("/") && !command.startsWith(".")) {
+              this.diagnostics.push(`[warn] MCP server "${name}" command "${command}" is not stdio-safe, skipping`)
+              continue
+            }
+            // Skip known unsafe patterns
+            const args = (server.args as string[]) ?? []
+            const env = (server.env as Record<string, string>) ?? {}
+            const fullCmd = [command, ...args].join(" ")
+            if (fullCmd.includes("http://") || fullCmd.includes("https://") || fullCmd.startsWith("npx ") || fullCmd.startsWith("uvx ")) {
+              this.diagnostics.push(`[info] MCP server "${name}" uses HTTP/npx/uvx transport (${fullCmd.slice(0, 60)}), skipping`)
+              continue
+            }
+            // Check for placeholder env vars (e.g. YOUR_API_KEY_HERE)
+            const hasPlaceholder = Object.values(env).some(v =>
+              typeof v === "string" && (v.includes("YOUR_") || v.includes("your-") || v.includes("<") && v.includes(">"))
+            )
+            if (hasPlaceholder) {
+              this.diagnostics.push(`[info] MCP server "${name}" has placeholder env vars, skipping`)
+              continue
+            }
+            configs.push({ name: `${cp.name}:${name}`, command, args, env })
+          }
+        } catch (e) {
+          this.diagnostics.push(`[warn] Failed to load MCP config ${asset.path}: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+    }
+    return configs
   }
 
   getStatus(): PluginRuntimeStatus {

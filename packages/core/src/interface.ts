@@ -55,8 +55,8 @@ export interface ToolContext {
   signal?: AbortSignal
   reportProgress?: (update: ToolProgressUpdate) => void
   invokeTool?: (name: string, args: Record<string, unknown>) => Promise<ToolResult>
-  delegateTask?: (task: string, agentType: "build" | "plan", files: string[]) => Promise<string>
-  switchAgent?: (name: "build" | "plan") => string
+  delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>
+  switchAgent?: (name: string) => string
   spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>
 }
 
