@@ -15,9 +15,11 @@ import { useSearchHighlight } from '@deepreef/ink';
 import { FG, TONE } from './reasonix/tokens.js';
 import { t } from './i18n/index.js';
 import type { TimelineItem } from './bridge.js';
+import { useTranscriptTimeline } from './store/TranscriptContext.js';
 
 interface SearchOverlayProps {
-  timeline: TimelineItem[];
+  /** Legacy 路径传入；Store 路径省略并由 useTranscriptTimeline 订阅 */
+  timeline?: TimelineItem[];
   isOpen: boolean;
   onClose: () => void;
 }
@@ -62,7 +64,9 @@ const SOURCE_LABELS: Record<string, string> = {
   tool: 'T',
 };
 
-export function SearchOverlay({ timeline, isOpen, onClose }: SearchOverlayProps) {
+export function SearchOverlay({ timeline: timelineProp, isOpen, onClose }: SearchOverlayProps) {
+  const timelineFromStore = useTranscriptTimeline();
+  const timeline = timelineProp ?? timelineFromStore;
   /** 当前搜索关键词 */
   const [query, setQuery] = useState('');
   /** 当前匹配结果的序号（用于遍历） */

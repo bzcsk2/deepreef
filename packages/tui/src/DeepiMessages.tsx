@@ -7,9 +7,11 @@ import { Card } from './reasonix/Card.js';
 import { StreamingCard } from './reasonix/StreamingCard.js';
 import { FG, SURFACE, TONE } from './reasonix/tokens.js';
 import { t } from './i18n/index.js';
+import { useTranscriptTimeline } from './store/TranscriptContext.js';
 
 interface DeepiMessagesProps {
-  timeline: TimelineItem[];
+  /** Legacy 路径传入；Store 路径省略并由 useTranscriptTimeline 订阅 */
+  timeline?: TimelineItem[];
   scrollRef?: React.RefObject<any>;
 }
 
@@ -188,10 +190,12 @@ const AssistantThinkingMessage = memo(function AssistantThinkingMessage({
     return <StreamingCard text={text} startTs={startTs} title={t().thinking} />;
   }
   if (!expanded) {
+    const preview = text.replace(/\s+/g, ' ').trim().slice(0, 80);
     return (
       <Box paddingX={1}>
         <Text color={TONE.warn} bold>{'\u2234'} {t().thinking}</Text>
-        <Text dimColor>{t().ctrlO}</Text>
+        {preview ? <Text dimColor>{` ${preview}${text.length > preview.length ? '…' : ''}`}</Text> : null}
+        <Text dimColor>{` ${t().ctrlO}`}</Text>
       </Box>
     );
   }
@@ -288,6 +292,16 @@ const MessageBlock = memo(function MessageBlock({
       return null;
 
     case 'assistant_text':
+      if (item.isStreaming) {
+        return (
+          <StreamingCard
+            text={item.text}
+            startTs={item.startTs}
+            title={t().writing}
+            doneTitle={t().reply}
+          />
+        );
+      }
       return <AssistantTextMessage text={item.text} />;
 
     case 'reasoning':
@@ -305,7 +319,18 @@ const MessageBlock = memo(function MessageBlock({
   }
 });
 
-export function DeepiMessages({ timeline }: DeepiMessagesProps) {
+/**
+ * DeepiMessages
+ *
+ * 渲染消息时间线。
+ * 注意：已移除 React.memo（鼠标跟踪已关闭），确保 reasoning（思考内容）流式更新能立即反映到界面。
+ */
+export function DeepiMessages({
+  timeline: timelineProp,
+  scrollRef,
+}: DeepiMessagesProps) {
+  const timelineFromStore = useTranscriptTimeline();
+  const timeline = timelineProp ?? timelineFromStore;
   const [expanded, setExpanded] = useState(true);
 
   useInput((input, key) => {

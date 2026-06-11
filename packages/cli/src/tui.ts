@@ -10,7 +10,7 @@ import type { ToolCallHooks } from "@deepreef/security"
 // P1-4: Memory is dynamically imported when enabled to avoid loading when DEEPREEF_MEMORY=false
 import React from "react"
 import { wrappedRender as render } from "@deepreef/ink"
-import { App } from "@deepreef/tui"
+import { App, createFrameMetricsHandler } from "@deepreef/tui"
 
 function printHelp(): void {
   output.write(`deepreef
@@ -313,7 +313,7 @@ async function runTUIMode(
   try {
     const { waitUntilExit } = await render(
       React.createElement(App, { engine, config, pluginCount, contentPackCount, assetCounts, diagnosticCounts, onUserInput, beforeSubmit }),
-      { exitOnCtrlC: false }
+      { exitOnCtrlC: false, onFrame: createFrameMetricsHandler() },
     );
     await waitUntilExit();
   } finally {

@@ -25,7 +25,7 @@ export function FullscreenLayout({ scrollable, bottom, scrollRef }: Props): Reac
       <Box flexDirection="row" flexGrow={1} overflow="hidden" width="100%" backgroundColor={SURFACE.bg}>
         <Box flexDirection="column" flexGrow={1} overflow="hidden">
           <Box flexGrow={1} flexDirection="column" overflow="hidden">
-            <ScrollBox ref={scrollRef} flexGrow={1} flexDirection="column" paddingTop={1} stickyScroll>
+            <ScrollBox ref={scrollRef} flexGrow={1} flexDirection="column" paddingTop={1}>
               {scrollable}
             </ScrollBox>
           </Box>
@@ -42,7 +42,7 @@ export function FullscreenLayout({ scrollable, bottom, scrollRef }: Props): Reac
   return (
     <Box flexDirection="column" flexGrow={1} overflow="hidden" width="100%" backgroundColor={SURFACE.bg}>
       <Box flexGrow={1} flexDirection="column" overflow="hidden">
-        <ScrollBox ref={scrollRef} flexGrow={1} flexDirection="column" paddingTop={1} stickyScroll>
+        <ScrollBox ref={scrollRef} flexGrow={1} flexDirection="column" paddingTop={1}>
           {scrollable}
         </ScrollBox>
       </Box>

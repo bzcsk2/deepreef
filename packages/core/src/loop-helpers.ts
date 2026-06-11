@@ -1,12 +1,7 @@
 import type { ToolCall } from "./types.js"
-import type { LoopEvent, SessionStats } from "./interface.js"
+import type { LoopEvent } from "./interface.js"
 import type { ContextManager } from "./context/manager.js"
 import type { AsyncSessionWriter } from "./session.js"
-import type { ModeSelectorState, SwitchSignal } from "./mode-selector.js"
-import type { ThinkingMode } from "./provider-thinking.js"
-import { evaluateModeSwitch } from "./mode-selector.js"
-import type { ModeStats } from "./mode-stats.js"
-import { logModeSwitch } from "./mode-stats.js"
 import { randomUUID } from "node:crypto"
 import type { PendingInstruction } from "./loop.js"
 
@@ -65,43 +60,6 @@ export function createDuplicateDetector(): DuplicateDetector {
       return { duplicate: false, blocked: false, count }
     },
   }
-}
-
-// ─── Mode Switch Signal ───
-
-export interface ModeSwitchResult {
-  switched: boolean
-  from?: ThinkingMode
-  to?: ThinkingMode
-  reason?: string
-}
-
-/**
- * CL-51: Build a SwitchSignal and evaluate whether to switch thinking modes.
- * Returns the decision without side effects — caller handles state updates and yielding.
- */
-export function evaluateModeSwitchForTurn(
-  modeSelectorState: ModeSelectorState,
-  currentMode: ThinkingMode,
-  totalToolCalls: number,
-  fullContentLength: number,
-  turnCount: number,
-  consecutiveErrors: number,
-  hasError: boolean,
-): ModeSwitchResult {
-  const signalBundle: SwitchSignal = {
-    currentMode,
-    toolCallCount: totalToolCalls,
-    textLength: fullContentLength,
-    loopCount: turnCount,
-    retryCount: consecutiveErrors,
-    hasError,
-  }
-  const decision = evaluateModeSwitch(modeSelectorState, signalBundle)
-  if (decision.action === "switch") {
-    return { switched: true, from: currentMode, to: decision.target, reason: decision.reason }
-  }
-  return { switched: false }
 }
 
 // ─── Pending Instruction Safe-Point ───

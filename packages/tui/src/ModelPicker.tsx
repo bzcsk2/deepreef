@@ -12,7 +12,7 @@
 import { useState, useCallback } from 'react';
 import { Box, Text, useInput } from '@deepreef/ink';
 import { PROVIDERS, getApiKeyEnvVar } from '@deepreef/core';
-import { execFile } from 'node:child_process';
+import { tryReadClipboard } from './clipboard.js';
 import { t } from './i18n/index.js';
 
 interface ModelPickerProps {
@@ -26,37 +26,7 @@ interface ModelPickerProps {
 type Step = 'provider' | 'key' | 'model' | 'custom';
 
 /** 提供商列表的显示顺序，数组索引同时也决定了键盘上下键的选中顺序 */
-const PROVIDER_ORDER = ['zen', 'deepseek', 'mimo', 'kilo', 'free-auto', 'openai-compatible', 'nvidia'];
-
-/**
- * tryReadClipboard — 尝试从系统剪贴板读取文本
- * 按平台依次尝试：macOS 用 pbpaste，Windows 用 powershell Get-Clipboard，Linux 用 wl-paste / xclip / xsel
- * 用于在输入 API Key 时支持 Ctrl+V 粘贴操作
- */
-async function tryReadClipboard(): Promise<string | null> {
-  const platform = process.platform;
-  const cmds: Array<{ bin: string; args: string[] }> = [];
-  if (platform === 'darwin') {
-    cmds.push({ bin: 'pbpaste', args: [] });
-  } else if (platform === 'win32') {
-    cmds.push({ bin: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command', 'Get-Clipboard'] });
-  } else {
-    cmds.push({ bin: 'wl-paste', args: [] });
-    cmds.push({ bin: 'xclip', args: ['-o', '-selection', 'clipboard'] });
-    cmds.push({ bin: 'xsel', args: ['--clipboard', '--output'] });
-  }
-  for (const { bin, args } of cmds) {
-    try {
-      const out = await new Promise<string>((resolve, reject) => {
-        execFile(bin, args, { encoding: 'utf8', timeout: 500 }, (err, stdout) => {
-          if (err) reject(err); else resolve(stdout);
-        });
-      });
-      if (out) return out.replace(/\n$/, '');
-    } catch { continue }
-  }
-  return null;
-}
+const PROVIDER_ORDER = ['zen', 'deepseek', 'mimo', 'kilo', 'openai-compatible', 'nvidia'];
 
 /** Default baseURL for openai-compatible provider */
 const DEFAULT_LOCAL_URL = 'http://localhost:8000/v1';
@@ -201,6 +171,7 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
         return;
       }
       if (_input) {
+        // bracketed paste 或普通单字符输入均直接追加
         setInputBuf(prev => prev + _input);
       }
       return;

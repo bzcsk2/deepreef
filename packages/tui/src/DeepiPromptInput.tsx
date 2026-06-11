@@ -1,5 +1,20 @@
-import { useState, useCallback, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { Box, Text, useInput } from '@deepreef/ink';
+import { useState, useCallback, useRef, useEffect, forwardRef, useImperativeHandle, type ReactNode } from 'react';
+import { Box, Text, useInput, type InputEvent } from '@deepreef/ink';
+import { tryReadClipboard } from './clipboard.js';
+import {
+  countLines,
+  expandTrackedPastes,
+  findPastePartAt,
+  findPastePartEndingAt,
+  formatPasteMarker,
+  insertPlainTextAt,
+  insertSummarizedPasteAt,
+  normalizePasteText,
+  removePastePart,
+  shiftPasteParts,
+  shouldSummarizePaste,
+  type TrackedPaste,
+} from './prompt-paste.js';
 import { t } from './i18n/index.js';
 import { FG, SURFACE, TONE } from './reasonix/tokens.js';
 
@@ -71,6 +86,48 @@ function charClass(ch: string): number {
 }
 
 /**
+ * 将输入文本按粘贴占位符拆成带品牌色的片段（占位符高亮，其余正文色）。
+ *
+ * @param text - 输入片段
+ * @param parts - 与完整 input 对齐的粘贴块（坐标基于完整 input）
+ * @param rangeStart - 本片段在完整 input 中的起始偏移
+ * @param keyPrefix - React key 前缀
+ */
+function renderTextWithPasteMarkers(
+  text: string,
+  parts: readonly TrackedPaste[],
+  rangeStart: number,
+  keyPrefix: string,
+): ReactNode {
+  if (!text) return null;
+  const rangeEnd = rangeStart + text.length;
+  const overlapping = parts
+    .filter((part) => part.end > rangeStart && part.start < rangeEnd)
+    .sort((a, b) => a.start - b.start);
+  if (overlapping.length === 0) return text;
+
+  const nodes: React.ReactNode[] = [];
+  let pos = 0;
+  for (const part of overlapping) {
+    const localStart = Math.max(0, part.start - rangeStart);
+    const localEnd = Math.min(text.length, part.end - rangeStart);
+    if (localStart > pos) {
+      nodes.push(<Text key={`${keyPrefix}-plain-${pos}`}>{text.slice(pos, localStart)}</Text>);
+    }
+    nodes.push(
+      <Text key={`${keyPrefix}-paste-${part.start}`} color={TONE.brand}>
+        {text.slice(localStart, localEnd)}
+      </Text>,
+    );
+    pos = localEnd;
+  }
+  if (pos < text.length) {
+    nodes.push(<Text key={`${keyPrefix}-plain-tail`}>{text.slice(pos)}</Text>);
+  }
+  return nodes;
+}
+
+/**
  * findWordLeft - 从指定位置向左找到前一个词边界
  * 用于 Ctrl+左箭头（按词左移）和 Ctrl+Backspace（按词删除）。
  * 先跳过空格，再跳过同类型词字符直到边界。
@@ -133,17 +190,57 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
   const [draftBeforeHistory, setDraftBeforeHistory] = useState('');
   // 当前光标位置（字符索引）
   const [cursor, setCursor] = useState(0);
+  /** 折叠粘贴块：display 中为 marker，提交时展开为 text */
+  const [pasteParts, setPasteParts] = useState<TrackedPaste[]>([]);
   // 记录上次按 Esc 的时间戳，用于检测 800ms 内的双击 Esc 触发取消
   const escRef = useRef(0);
   // 已处理的注入文本 ID，避免 injectedText 变化时重复填入
   const lastInjectionIdRef = useRef<number | null>(null);
+  const inputRef = useRef(input);
+  const pastePartsRef = useRef(pasteParts);
+  const cursorRef = useRef(cursor);
+
+  useEffect(() => { inputRef.current = input; }, [input]);
+  useEffect(() => { pastePartsRef.current = pasteParts; }, [pasteParts]);
+  useEffect(() => { cursorRef.current = cursor; }, [cursor]);
 
   useImperativeHandle(ref, () => ({
     writeText: (text: string) => {
       setInput(text);
       setCursor(text.length);
+      setPasteParts([]);
     }
   }));
+
+  /**
+   * 将粘贴内容插入光标处；多行/超长时显示 `[粘贴 +N 行]` 占位符。
+   *
+   * @param raw - 原始粘贴文本
+   * @param pos - 插入位置
+   */
+  const applyPaste = useCallback((raw: string, pos?: number) => {
+    const insertPos = pos ?? cursorRef.current;
+    const currentInput = inputRef.current;
+    const currentParts = pastePartsRef.current;
+    const normalized = normalizePasteText(raw);
+    const content = normalized.trim();
+    if (!content) return;
+
+    if (shouldSummarizePaste(content)) {
+      const lineCount = countLines(content);
+      const marker = formatPasteMarker(lineCount, t().pasteSummary);
+      const next = insertSummarizedPasteAt(currentInput, currentParts, insertPos, content, marker);
+      setInput(next.input);
+      setPasteParts(next.parts);
+      setCursor(next.cursor);
+      return;
+    }
+
+    const next = insertPlainTextAt(currentInput, currentParts, insertPos, normalized);
+    setInput(next.input);
+    setPasteParts(next.parts);
+    setCursor(next.cursor);
+  }, []);
 
   useEffect(() => { onChange?.(input); }, [input, onChange]);
 
@@ -152,6 +249,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     lastInjectionIdRef.current = injectedText.id;
     setInput(injectedText.text);
     setCursor(injectedText.text.length);
+    setPasteParts([]);
     setHistoryIdx(-1);
     setDraftBeforeHistory('');
   }, [injectedText]);
@@ -162,14 +260,15 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
    * 提交后重置输入框内容、光标位置和历史浏览状态。
    */
   const submitLine = useCallback(() => {
-    const text = input.trim();
+    const text = expandTrackedPastes(input, pasteParts).trim();
     if (!text) return;
     setHistoryIdx(-1);
     setDraftBeforeHistory('');
     setInput('');
     setCursor(0);
+    setPasteParts([]);
     onSubmit(text);
-  }, [input, onSubmit]);
+  }, [input, pasteParts, onSubmit]);
 
   /**
    * useInput 回调 - 处理所有键盘输入事件
@@ -197,9 +296,10 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
    * - Ctrl+D: 删除光标后一个字符（同 Delete）
    * - Ctrl+U: 清空整行输入
    * - Ctrl+K: 删除光标到行尾的内容
+   * - Bracketed paste / Ctrl+V: 多行折叠为 `[粘贴 +N 行]`
    * - 其他字符: 在光标位置插入文本
    */
-  useInput((_input, key) => {
+  useInput((_input, key, event: InputEvent) => {
     if (disabled) return;
 
     // Ctrl+C 触发取消（raw mode 下正常工作的 Ctrl+C 信号）
@@ -229,11 +329,35 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       return;
     }
 
+    // Bracketed paste（终端 Cmd+V / 右键粘贴）
+    if (event.keypress.isPasted) {
+      applyPaste(_input, cursor);
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    // Ctrl+V — 读系统剪贴板
+    if (key.ctrl && (_input === 'v' || _input === 'V')) {
+      void tryReadClipboard().then((clip) => {
+        if (clip) applyPaste(clip);
+      });
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    // 多字符单次输入视为粘贴（useInput 对 paste 的保证）
+    if (_input.length > 1 && !key.ctrl && !key.meta) {
+      applyPaste(_input, cursor);
+      event.stopImmediatePropagation();
+      return;
+    }
+
     // Ctrl+Enter — 在当前光标位置插入换行符
     if (key.return && key.ctrl) {
-      const pos = cursor;
-      setInput(prev => prev.slice(0, pos) + '\n' + prev.slice(pos));
-      setCursor(pos + 1);
+      const next = insertPlainTextAt(input, pasteParts, cursor, '\n');
+      setInput(next.input);
+      setPasteParts(next.parts);
+      setCursor(next.cursor);
       return;
     }
 
@@ -258,8 +382,10 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
           const next = Math.min(prev + 1, history.length - 1);
           if (next >= 0) {
             if (prev < 0) setDraftBeforeHistory(input);
-            setInput(history[next] ?? '');
-            setCursor((history[next] ?? '').length);
+            const item = history[next] ?? '';
+            setInput(item);
+            setCursor(item.length);
+            setPasteParts([]);
           }
           return next;
         });
@@ -276,10 +402,13 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
           if (next < 0) {
             setInput(draftBeforeHistory);
             setCursor(draftBeforeHistory.length);
+            setPasteParts([]);
             return -1;
           }
-          setInput(history[next] ?? '');
-          setCursor((history[next] ?? '').length);
+          const item = history[next] ?? '';
+          setInput(item);
+          setCursor(item.length);
+          setPasteParts([]);
           return next;
         });
       }
@@ -345,22 +474,46 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       return;
     }
 
-    // Backspace — 删除光标前一个字符
+    // Backspace — 删除光标前一个字符；若在粘贴占位符内则整块删除
     if (key.backspace) {
       const pos = cursor;
-      if (pos > 0) {
-        setInput(prev => prev.slice(0, pos - 1) + prev.slice(pos));
-        setCursor(pos - 1);
+      if (pos <= 0) return;
+      const endingPart = findPastePartEndingAt(pasteParts, pos);
+      if (endingPart) {
+        const removed = removePastePart(input, pasteParts, endingPart);
+        setInput(removed.input);
+        setPasteParts(removed.parts);
+        setCursor(removed.cursor);
+        return;
       }
+      const insidePart = findPastePartAt(pasteParts, pos);
+      if (insidePart) {
+        const removed = removePastePart(input, pasteParts, insidePart);
+        setInput(removed.input);
+        setPasteParts(removed.parts);
+        setCursor(removed.cursor);
+        return;
+      }
+      setInput(input.slice(0, pos - 1) + input.slice(pos));
+      setPasteParts(shiftPasteParts(pasteParts, pos, -1));
+      setCursor(pos - 1);
       return;
     }
 
-    // Delete — 删除光标后一个字符
+    // Delete — 删除光标后一个字符；若在粘贴占位符起点则整块删除
     if (key.delete) {
       const pos = cursor;
-      if (pos < input.length) {
-        setInput(prev => prev.slice(0, pos) + prev.slice(pos + 1));
+      if (pos >= input.length) return;
+      const partAtCursor = pasteParts.find((part) => part.start === pos);
+      if (partAtCursor) {
+        const removed = removePastePart(input, pasteParts, partAtCursor);
+        setInput(removed.input);
+        setPasteParts(removed.parts);
+        setCursor(removed.cursor);
+        return;
       }
+      setInput(input.slice(0, pos) + input.slice(pos + 1));
+      setPasteParts(shiftPasteParts(pasteParts, pos + 1, -1));
       return;
     }
 
@@ -377,6 +530,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     if (_input === 'u' && key.ctrl) {
       setInput('');
       setCursor(0);
+      setPasteParts([]);
       return;
     }
 
@@ -387,11 +541,15 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       return;
     }
 
+    // 未显式处理的 Ctrl/Meta 组合不当作字符插入
+    if (key.ctrl || key.meta) return;
+
     // 普通字符输入：在光标位置插入字符，光标后移
     if (_input) {
-      const pos = cursor;
-      setInput(prev => prev.slice(0, pos) + _input + prev.slice(pos));
-      setCursor(pos + _input.length);
+      const next = insertPlainTextAt(input, pasteParts, cursor, _input);
+      setInput(next.input);
+      setPasteParts(next.parts);
+      setCursor(next.cursor);
     }
   });
 
@@ -401,11 +559,9 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
   const queueHint = queueCount > 0 ? t().queued(queueCount) : '';
   // 加载中时显示 "processing" 提示
   const loadingHint = isLoading ? t().processing : '';
-  // 最终显示的文本：占位符 → 灰色占位文字；正常 → 输入+光标+队列/加载提示
-  // 光标用 ▊ 字符渲染，插入在当前 cursor 位置
-  const displayText = isPlaceholder && !isLoading && queueCount === 0
-    ? t().placeholder
-    : `${input.slice(0, cursor)}▊${input.slice(cursor)}${queueHint}${loadingHint}`;
+  const showPlaceholder = isPlaceholder && !isLoading && queueCount === 0;
+  const beforeCursor = input.slice(0, cursor);
+  const afterCursor = input.slice(cursor);
 
   return (
     <Box flexDirection="column" width="100%" justifyContent="center" alignItems="center">
@@ -420,7 +576,19 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
         <Text backgroundColor={SURFACE.bgInput}> </Text>
         <Box flexDirection="row" backgroundColor={SURFACE.bgInput}>
           <Text bold color={TONE.brand} backgroundColor={SURFACE.bgInput}>{'\u276F '}</Text>
-          <Text wrap="wrap" color={isPlaceholder ? FG.sub : FG.strong} backgroundColor={SURFACE.bgInput}>{displayText}</Text>
+          <Text wrap="wrap" color={showPlaceholder ? FG.sub : FG.strong} backgroundColor={SURFACE.bgInput}>
+            {showPlaceholder ? (
+              t().placeholder
+            ) : (
+              <>
+                {renderTextWithPasteMarkers(beforeCursor, pasteParts, 0, 'pre')}
+                <Text bold>{'\u258A'}</Text>
+                {renderTextWithPasteMarkers(afterCursor, pasteParts, cursor, 'post')}
+                {queueHint}
+                {loadingHint}
+              </>
+            )}
+          </Text>
           <Box flexGrow={1} backgroundColor={SURFACE.bgInput} />
         </Box>
         <Text backgroundColor={SURFACE.bgInput}> </Text>

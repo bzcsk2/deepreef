@@ -5,19 +5,13 @@ import type { ContextManager } from "./context/manager.js"
 import type { StreamingToolExecutor } from "./streaming-executor.js"
 import type { AsyncSessionWriter } from "./session.js"
 import type { FoldDecision } from "./context/token-estimator.js"
-import type { ModeSelectorState } from "./mode-selector.js"
 import type { ThinkingMode } from "./provider-thinking.js"
 import { createDeepSeekCapabilities } from "./provider-thinking.js"
-import type { StrategyTier } from "./strategy/tiers.js"
-import type { ModeStats } from "./mode-stats.js"
-import { logModeSwitch } from "./mode-stats.js"
 import { calculateCost } from "./pricing.js"
-import { recommendTier } from "./strategy/recommender.js"
 import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
 import {
   normalizeToolCallId, resetToolCallSeq,
   createDuplicateDetector,
-  evaluateModeSwitchForTurn,
   injectPendingInstruction,
 } from "./loop-helpers.js"
 
@@ -47,32 +41,18 @@ export interface LoopOptions {
   takePendingInstruction?: () => PendingInstruction | null
   maxTurns?: number
   thinkingMode?: ThinkingMode
-  modeSelectorState?: ModeSelectorState
-  modeStats?: ModeStats
   logger?: RuntimeLogger
   submitId?: string
-  tier?: StrategyTier
 }
 
 const DEFAULT_MAX_TURNS = 100
 
 export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
-  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult, takePendingInstruction, maxTurns: maxTurnsOverride, thinkingMode: thinkingModeOverride = "off", modeSelectorState, modeStats, logger = noopRuntimeLogger, submitId, tier } = opts
+  const { ctx, client, toolExecutor, toolSpecs, config, signal, sessionWriter, stats, isInterrupted, appendToolResult, takePendingInstruction, maxTurns: maxTurnsOverride, thinkingMode: thinkingModeOverride = "off", logger = noopRuntimeLogger, submitId } = opts
   const diagnosticsEnabled = logger.isEnabled("error")
 
-  // ST2: Derive maxTurns and thinkingMode from tier if not explicitly overridden
-  const maxTurns = maxTurnsOverride ?? tier?.maxChainLength ?? DEFAULT_MAX_TURNS
-  const thinkingMode = (thinkingModeOverride !== "off")
-    ? thinkingModeOverride
-    : (tier && !tier.enableReasoning ? "off" as const : thinkingModeOverride)
-
-  // ST2: Apply tier overrides to config
-  // IMPORTANT: model override is only safe for DeepSeek's native API.
-  // Third-party providers (Zen, Mimo) have their own model inventories.
-  if (tier) {
-    if (tier.recommendedModel && (!config.provider || config.provider === "deepseek")) config.model = tier.recommendedModel
-    if (tier.temperature !== null) config.temperature = tier.temperature
-  }
+  const maxTurns = maxTurnsOverride ?? DEFAULT_MAX_TURNS
+  const thinkingMode = thinkingModeOverride
 
   // CL-51: Safe-point helper — consume one pending instruction from the queue.
   const appendPendingInstruction = (): LoopEvent | null => {
@@ -81,14 +61,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
 
   const contextWindow = ctx.getContextWindow()
 
-  // fold check before first turn (non-blocking: kicks off async but uses sync fallback immediately)
-  const foldP = ctx.getFoldDecision()
-  const fold = await Promise.race([
-    foldP,
-    new Promise<FoldDecision>(resolve => setTimeout(() => {
-      resolve({ action: "none" as const, ratio: 0, used: 0, total: contextWindow })
-    }, 100)),
-  ])
+  // fold check before first turn (synchronous budget estimation)
+  const fold = ctx.getFoldDecision()
   if (fold.action === "force") {
     yield { role: "status", content: "Context budget exceeded — forcing fold on next turn", severity: "warning" as const, metadata: { fold } }
   } else if (fold.action !== "none") {
@@ -98,12 +72,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
   let turnCount = 0
   let consecutiveErrors = 0
   const recentToolCalls = createDuplicateDetector()
-  let currentMode: ThinkingMode = thinkingMode === "auto" ? "off" : thinkingMode
   let totalToolCalls = 0
 
   while (turnCount < maxTurns) {
     turnCount++
-    if (diagnosticsEnabled) logger.debug("loop.turn.start", { turnCount, thinkingMode: currentMode })
+    if (diagnosticsEnabled) logger.debug("loop.turn.start", { turnCount, thinkingMode })
     resetToolCallSeq()  // Reset per-turn sequence for ID normalization
     if (isInterrupted()) {
       yield { role: "status", content: "interrupted" }
@@ -117,8 +90,8 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     let finishedWithToolUse = false
 
     const provider = config.provider ?? ""
-    const isKeyless = provider === "kilo" || provider === "free-auto" || provider === "openai-compatible"
-    const useMaxTokens = provider === "kilo" || provider === "free-auto" || provider === "openai-compatible"
+    const isKeyless = provider === "kilo" || provider === "openai-compatible"
+    const useMaxTokens = provider === "kilo" || provider === "openai-compatible"
     const supportsThinking = provider === "deepseek" || provider === "zen" || provider === "mimo"
     for await (const event of client.chatCompletionsStream(ctx.buildMessages(), {
       apiKey: config.apiKey,
@@ -130,7 +103,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       keyless: isKeyless,
       useMaxCompletionTokens: !useMaxTokens,
       tools: toolSpecs.length > 0 ? toolSpecs : undefined,
-      ...(supportsThinking ? createDeepSeekCapabilities(provider).mapMode(currentMode) : {}),
+      ...(supportsThinking ? createDeepSeekCapabilities(provider).mapMode(thinkingMode) : {}),
       traceContext: diagnosticsEnabled ? { submitId, turnCount } : undefined,
     })) {
       if (isInterrupted()) {
@@ -174,10 +147,6 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
           stats.cacheHitTokens += event.usage.cacheHitTokens ?? 0
           stats.cacheMissTokens += event.usage.cacheMissTokens ?? 0
           stats.totalCost = calculateCost(config.model, stats.promptTokens, stats.completionTokens, stats.cacheHitTokens, stats.cacheMissTokens)
-          // ST2: Budget check — warn when tier budget is exceeded
-          if (tier && stats.totalCost > tier.budgetCNY) {
-            yield { role: "warning", content: `Budget exceeded: ${stats.totalCost.toFixed(4)} CNY > ${tier.budgetCNY} CNY (tier: ${tier.id})`, severity: "warning" as const, metadata: { tier: tier.id, budget: tier.budgetCNY, cost: stats.totalCost } }
-          }
           yield { role: "usage", metadata: { input: event.usage.promptTokens, output: event.usage.completionTokens, cacheHit: event.usage.cacheHitTokens ?? 0, cacheMiss: event.usage.cacheMissTokens ?? 0 } as Record<string, unknown> }
           sessionWriter?.enqueue({ ts: Date.now(), type: "stats", payload: { ...stats } })
           break
@@ -242,27 +211,6 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             }
             yield { role: "status", content: "tools_completed" }
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "status", content: "tools_completed" } })
-            // ST3: Emit refined estimate after tool batch
-            if (tier) {
-              yield { role: "strategy_estimate_refined", metadata: { tier: tier.id, budget: tier.budgetCNY, cost: stats.totalCost, toolCalls: totalToolCalls, turnCount } }
-            }
-
-            // ST4: Tier recommendation after tool batch
-            if (tier && turnCount >= 2) {
-              const estimatedTokens = await ctx.estimateTokens()
-              const contextUsagePercent = estimatedTokens / ctx.getContextWindow()
-              const rec = recommendTier({
-                currentTierId: tier.id,
-                stats,
-                turnCount,
-                toolCallsThisSubmit: totalToolCalls,
-                contextUsagePercent,
-                tier,
-              })
-              if (rec.action !== "stay") {
-                yield { role: "tier_recommendation", metadata: { recommendation: rec, currentTier: tier.id, stats: { totalCost: stats.totalCost, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens }, turnCount, toolCallsThisSubmit: totalToolCalls, contextUsagePercent } }
-              }
-            }
 
             // P2: Safe point 1 — consume one pending instruction after tool batch
             const injectedAfterTools = appendPendingInstruction()
@@ -285,17 +233,6 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
             yield { role: "done", metadata: { reason } as Record<string, unknown> }
             sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
             sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: { role: "done", metadata: { reason } } })
-
-            // CL-51: Evaluate thinking mode switch before returning
-            if (modeSelectorState && !signal.aborted && thinkingMode === "auto") {
-              const switchResult = evaluateModeSwitchForTurn(modeSelectorState, currentMode, totalToolCalls, fullContent.length, turnCount, consecutiveErrors, !!streamError)
-              if (switchResult.switched) {
-                currentMode = switchResult.to!
-                modeSelectorState.lastSwitchTime = Date.now()
-                if (diagnosticsEnabled) logger.info("reasoning.mode.switch", { from: switchResult.from, to: currentMode, reason: switchResult.reason })
-                yield { role: "status", content: "thinking_mode_switch", metadata: { from: switchResult.from, to: currentMode, reason: switchResult.reason } }
-              }
-            }
             return
           }
           break
@@ -306,18 +243,6 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
           yield streamError
           sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: streamError })
           break
-      }
-    }
-
-    // CL-51: Evaluate thinking mode switch after each turn
-    if (modeSelectorState && !signal.aborted && thinkingMode === "auto") {
-      const switchResult = evaluateModeSwitchForTurn(modeSelectorState, currentMode, totalToolCalls, fullContent.length, turnCount, consecutiveErrors, !!streamError)
-      if (switchResult.switched) {
-        currentMode = switchResult.to!
-        modeSelectorState.lastSwitchTime = Date.now()
-        if (modeStats && switchResult.from && switchResult.reason) logModeSwitch(modeStats, switchResult.from, currentMode, switchResult.reason)
-        if (diagnosticsEnabled) logger.info("reasoning.mode.switch", { from: switchResult.from, to: currentMode, reason: switchResult.reason })
-        yield { role: "status", content: "thinking_mode_switch", metadata: { from: switchResult.from, to: currentMode, reason: switchResult.reason } }
       }
     }
 

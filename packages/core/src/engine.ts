@@ -4,8 +4,10 @@ import type { DeepreefConfig } from "./config.js"
 import { ContextManager } from "./context/manager.js"
 import type { ToolCall, ToolSpec, ChatMessage } from "./types.js"
 import type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolResult, EnqueueInstructionResult, ChatClient } from "./interface.js"
+import type { QuestionInfo, QuestionAnswer } from "./question/types.js"
+import { QuestionService } from "./question/service.js"
 import { DeepSeekClient } from "./client.js"
-import { FreeAutoClient } from "./free-auto/client.js"
+
 import { StreamingToolExecutor } from "./streaming-executor.js"
 import { AsyncSessionWriter, SessionLoader } from "./session.js"
 import { runLoop } from "./loop.js"
@@ -14,14 +16,10 @@ import { PermissionEngine, HookManager } from "@deepreef/security"
 import { getAgent, agentConfigFor, getMainMode } from "./agent.js"
 import { SubagentRegistry, checkSubagentPermission } from "./subagent/index.js"
 import type { SubagentRunOptions, SubagentRunResult, SubagentDefinition } from "./subagent/index.js"
-import { createModeSelectorState } from "./mode-selector.js"
-import type { ModeSelectorState } from "./mode-selector.js"
 import type { ThinkingMode } from "./provider-thinking.js"
-import { createModeStats, getModeSummary } from "./mode-stats.js"
-import type { ModeStats } from "./mode-stats.js"
 import { createRuntimeLoggerFromEnv, type RuntimeLogger } from "./runtime-logger.js"
 import type { ResultPersistenceConfig } from "./result-persistence.js"
-import { getTier, type StrategyTier } from "./strategy/tiers.js"
+
 import type { EngineStatusSnapshot } from "./status.js"
 import type { ContextReductionMode, ContextReductionResult } from "./context/manager.js"
 import type { ContextPolicy } from "./context/policy.js"
@@ -59,10 +57,8 @@ export class ReasonixEngine implements CoreEngine {
   private ctx: ContextManager
   /** 注册的工具集合，key 为工具名 */
   private tools: Map<string, AgentTool> = new Map()
-  /** LLM 客户端（普通 provider 用 DeepSeekClient，free-auto 用 FreeAutoClient） */
+  /** LLM 客户端 */
   private client: ChatClient
-  /** Free Auto 客户端实例（需要 reset sticky 状态） */
-  private freeAutoClient?: FreeAutoClient
   /** 流式工具执行器，负责并发执行工具调用并流式返回结果 */
   private toolExecutor: StreamingToolExecutor
   /** 中断标记，由外部调用 interrupt() 设置 */
@@ -100,14 +96,7 @@ export class ReasonixEngine implements CoreEngine {
   /** LIFE-01: shutdown flag for idempotent cleanup */
   private _shutDown = false
 
-  /** AS3: Thinking mode selector state */
-  private modeSelectorState: ModeSelectorState = createModeSelectorState()
 
-  /** AS6: Thinking mode statistics */
-  private modeStats: ModeStats = createModeStats()
-
-  /** ST2: Current strategy tier */
-  private currentTier: StrategyTier = getTier("normal")
 
   /** 当前会话启用的技能内容，会附加到 system prompt */
   private activeSkills: Array<{ name: string; description: string; content: string }> = []
@@ -118,30 +107,17 @@ export class ReasonixEngine implements CoreEngine {
   private policyStore: ContextPolicyStore
   private contextPolicyLoadPromise: Promise<void> = Promise.resolve()
 
-  /** ST2: Pending tier decision from TUI */
-  private pendingTierDecision: { resolve: (v: boolean) => void; tier: string } | null = null
+
 
   /** Subagent registry for resolving subagent definitions */
   private subagentRegistry: SubagentRegistry
 
-  /** AS3: Set thinking mode for auto-switch */
-  setThinkingMode(mode: ThinkingMode): void {
-    this.modeSelectorState.currentMode = mode
-  }
-
-  /** AS3: Get current thinking mode */
-  getThinkingMode(): ThinkingMode {
-    return this.modeSelectorState.currentMode
-  }
+  /** QST-10: Question service for user interaction */
+  private questionService: QuestionService
 
   /** Get context window size */
   getContextWindow(): number {
     return this.ctx.getContextWindow()
-  }
-
-  /** AS6: Get thinking mode statistics summary */
-  getModeSummary(): string {
-    return getModeSummary(this.modeStats)
   }
 
   /** P2: Mid-session instruction queue — consumed by loop at safe points */
@@ -165,6 +141,29 @@ export class ReasonixEngine implements CoreEngine {
     }
   }
 
+  /** QST-10: TUI 调用以回答 Question */
+  respondQuestion(requestId: string, answers: QuestionAnswer[]): void {
+    this.questionService.reply({ requestId, answers })
+  }
+
+  /** QST-10: TUI 调用以拒绝 Question */
+  rejectQuestion(requestId: string): void {
+    this.questionService.reject(requestId)
+  }
+
+  /** QST-10: 获取待处理的 Question 列表 */
+  listPendingQuestions(): Array<{ id: string; sessionId: string; questions: QuestionInfo[] }> {
+    return this.questionService.list()
+  }
+
+  /** QST-10: 内部方法，供 ToolContext.askUser 调用 */
+  private async askUserFromTool(questions: QuestionInfo[]): Promise<QuestionAnswer[]> {
+    return this.questionService.ask({
+      sessionId: this.sessionId,
+      questions,
+    })
+  }
+
   /** P2: Enqueue a mid-session instruction for consumption at the next safe point */
   enqueueInstruction(instruction: string): EnqueueInstructionResult {
     const trimmed = instruction.trim()
@@ -186,12 +185,12 @@ export class ReasonixEngine implements CoreEngine {
     this.ctx = new ContextManager(config.maxContextRounds, config.contextWindow)
     this.sessionId = sessionId ?? randomUUID()
     this.logger = runtimeLogger ?? createRuntimeLoggerFromEnv({ sessionId: this.sessionId })
-    this.freeAutoClient = undefined
     this.client = this.resolveClient(customClient)
     this.currentAgent = "build"
     this.permissionEngine = new PermissionEngine()
     this.hookManager = new HookManager()
     this.subagentRegistry = new SubagentRegistry()
+    this.questionService = new QuestionService()
     this.hookManager.setErrorObserver((error, phase) => {
       if (this.logger.isEnabled("error")) {
         this.logger.error("hook.error", error, { phase })
@@ -214,6 +213,7 @@ export class ReasonixEngine implements CoreEngine {
       (task, agentType, files) => this.delegateTask(task, agentType, files),
       (name) => this.switchAgent(name),
       (options) => this.spawnSubagent(options),
+      (questions) => this.askUserFromTool(questions),
       persistConfig,
       this.logger,
     )
@@ -287,8 +287,8 @@ export class ReasonixEngine implements CoreEngine {
     this.stats = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0, apiCalls: 0, toolCalls: 0, totalCost: 0 }
   }
 
-  async getStatusSnapshot(): Promise<EngineStatusSnapshot> {
-    const budget = await this.ctx.getBudget()
+  getStatusSnapshot(): EngineStatusSnapshot {
+    const budget = this.ctx.getBudget()
     return {
       sessionId: this.sessionId,
       context: {
@@ -365,7 +365,7 @@ export class ReasonixEngine implements CoreEngine {
 
   async getContextPolicyStatus(): Promise<ContextPolicyStatus> {
     await this.contextPolicyLoadPromise
-    const budget = await this.ctx.getBudget()
+    const budget = this.ctx.getBudget()
     return {
       policy: this.getContextPolicy(),
       totalTokens: budget.totalTokens,
@@ -431,13 +431,7 @@ export class ReasonixEngine implements CoreEngine {
   /** Resolve the appropriate client for the current provider */
   private resolveClient(customClient?: ChatClient): ChatClient {
     if (customClient) return customClient
-    const baseClient = new DeepSeekClient(this.logger)
-    if (this.config.provider === "free-auto") {
-      const fa = new FreeAutoClient(baseClient)
-      this.freeAutoClient = fa
-      return fa
-    }
-    return baseClient
+    return new DeepSeekClient(this.logger)
   }
 
   /** 运行时更新引擎配置（用于 /model 命令切换 Provider） */
@@ -447,9 +441,8 @@ export class ReasonixEngine implements CoreEngine {
     if (partial.contextWindow !== undefined) {
       this.ctx.updateContextWindow(partial.contextWindow)
     }
-    // Re-resolve client when provider changes (e.g. switching to/from free-auto)
+    // Re-resolve client when provider changes
     if (providerChanged) {
-      this.freeAutoClient = undefined
       this.client = this.resolveClient()
     }
   }
@@ -461,28 +454,9 @@ export class ReasonixEngine implements CoreEngine {
     return def.label
   }
 
-  /** ST2: Process tier decision from UI — sets current tier */
-  resolveTierDecision(tier: string): void {
-    const resolved = getTier(tier)
-    this.currentTier = resolved
-    if (this.logger.isEnabled("info")) {
-      this.logger.info("tier.resolved", { tier: resolved.id, label: resolved.label })
-    }
-  }
-
   /** 获取当前 agent 名称 */
   getAgentName(): string {
     return this.currentAgent
-  }
-
-  /** ST2: Get current strategy tier */
-  getTier(): StrategyTier {
-    return this.currentTier
-  }
-
-  /** ST2: Set strategy tier */
-  setTier(tierId: string): void {
-    this.currentTier = getTier(tierId)
   }
 
   /**
@@ -522,7 +496,7 @@ export class ReasonixEngine implements CoreEngine {
 
     this.ctx.startTurn()
     this.ctx.log.append({ role: "user", content: userInput })
-    const budget = await this.ctx.getBudget()
+    const budget = this.ctx.getBudget()
     if (budget.ratio >= this.contextPolicy.triggerRatio) {
       let result
       if (this.contextPolicy.mode === "compact") {
@@ -550,9 +524,6 @@ export class ReasonixEngine implements CoreEngine {
     if (diagnosticsEnabled) submitLogger.info("submit.start", { agent: this.currentAgent, inputLength: userInput.length })
 
     try {
-      // ST3: Notify current tier at submit start
-      yield { role: "strategy_notify", content: this.currentTier.id, metadata: { tier: this.currentTier } }
-
       const toolSpecs: ToolSpec[] = []
       for (const tool of this.tools.values()) {
         if (ac.toolNames && !ac.toolNames.includes(tool.name)) continue
@@ -597,12 +568,8 @@ export class ReasonixEngine implements CoreEngine {
           if (!content) return null
           return { content, remaining: this.pendingInstructionQueue.length }
         },
-        thinkingMode: this.modeSelectorState.currentMode,
-        modeSelectorState: this.modeSelectorState,
-        modeStats: this.modeStats,
         logger: submitLogger,
         submitId,
-        tier: this.currentTier,
       }
 
       for await (const event of runLoop(loopOpts)) {

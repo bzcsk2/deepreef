@@ -26,8 +26,7 @@ export type { ChatMessage, ToolCall, ToolSpec, Usage, Role } from "./types.js"
 export type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolContext, ToolResult, LoopEventRole, ToolTier, ToolConcurrency, ToolProgressUpdate, ChatClient } from "./interface.js"
 export { SessionLoader } from "./session.js"
 export type { SessionSummary } from "./session.js"
-export { getTier, STRATEGY_TIERS, TIER_ORDER, DEFAULT_TIER } from "./strategy/tiers.js"
-export type { StrategyTier } from "./strategy/tiers.js"
+
 export {
   SubagentRegistry,
   defaultSubagentRegistry,
@@ -45,13 +44,43 @@ export type {
   SubagentRunResult,
   SubagentPermissionCheck,
 } from "./subagent/index.js"
-export { FreeAutoClient } from "./free-auto/client.js"
-export type { FreeAutoRouteEvent } from "./free-auto/client.js"
-export { FREE_AUTO_CANDIDATES } from "./free-auto/catalog.js"
-export type { FreeAutoCandidate } from "./free-auto/catalog.js"
+
 export {
-  isRetryableError,
-  isOnCooldown,
-  isProviderOnCooldown,
-  applyCooldown,
-} from "./free-auto/router.js"
+  QuestionService,
+  RejectedError,
+  QuestionNotFoundError,
+  createQuestionId,
+} from "./question/index.js"
+export type {
+  QuestionOption,
+  QuestionInfo,
+  QuestionRequest,
+  QuestionAnswer,
+  QuestionReply,
+  QuestionReject,
+  QuestionServiceInterface,
+} from "./question/index.js"
+
+export {
+  PermissionService,
+  PermissionRejectedError,
+  PermissionNotFoundError,
+  evaluateRules,
+  mergeRulesets,
+  fromConfig,
+  getDisabledTools,
+  createSessionRule,
+} from "./permission/index.js"
+export type {
+  PermissionAction,
+  PermissionMode,
+  PermissionRule,
+  PermissionRequest,
+  PermissionReply,
+  PermissionDecision,
+  PermissionCheck,
+  PermissionConfig,
+  ShellScan,
+  PermissionServiceInterface,
+  PermissionEngineInterface,
+} from "./permission/index.js"

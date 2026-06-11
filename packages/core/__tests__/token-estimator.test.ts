@@ -1,23 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { estimateTokens, getFoldDecision, refinedEstimate } from "../src/context/token-estimator.js"
-
-describe("refinedEstimate", () => {
-  it("should estimate ASCII text at ~4 chars per token", () => {
-    const t = refinedEstimate("hello world")
-    expect(t).toBe(3)
-  })
-
-  it("should count CJK characters at 1.5 tokens each", () => {
-    const t = refinedEstimate("你好世界")
-    // CJK chars also match PUNCT_RE (non-word), so double-counted in formula
-    expect(t).toBeGreaterThanOrEqual(6)
-  })
-
-  it("should count punctuation at 2 tokens each", () => {
-    const t = refinedEstimate("hello!!!")
-    expect(t).toBe(8)
-  })
-})
+import { estimateTokens, getFoldDecision } from "../src/context/token-estimator.js"
 
 describe("estimateTokens", () => {
   it("should include message overhead per message", () => {

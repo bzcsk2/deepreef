@@ -7,4 +7,12 @@ export { Spinner } from './Spinner.js';
 export { StatusBar } from './StatusBar.js';
 export { createBridge } from './bridge.js';
 export type { BridgeState, ToolStatus } from './bridge.js';
+export { TranscriptStore, isTranscriptStoreEnabled, transcriptToTimeline, TranscriptReader } from './store/index.js';
+export {
+  TranscriptProvider,
+  useTranscriptTimeline,
+  useTranscriptEntryCount,
+  useTranscriptReader,
+} from './store/index.js';
 export { isFullscreenEnvEnabled, isMouseTrackingEnabled, isFullscreenActive } from './fullscreen.js';
+export { createFrameMetricsHandler, isFrameMetricsEnabled } from './diagnostics/frame-metrics.js';

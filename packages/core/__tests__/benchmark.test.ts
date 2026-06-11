@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { calculateCost, calculateCostCNY, MODEL_PRICING, USD_TO_CNY } from "../src/pricing.js"
-import { estimateTokens, refinedEstimate } from "../src/context/token-estimator.js"
+import { estimateTokens } from "../src/context/token-estimator.js"
 import { MockSseServer } from "../src/test-utils/mock-sse-server.js"
 import { DeepSeekClient } from "../src/client.js"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
@@ -226,14 +226,5 @@ describe("TT3: Tool execution performance", () => {
     expect(result.length).toBe(1_000_000)
     expect(elapsed).toBeLessThan(500)
     rmSync(dir, { recursive: true, force: true })
-  })
-
-  it("should refine estimate of 10K messages without blocking", () => {
-    const text = Array.from({ length: 10000 }, (_, i) => `line ${i}`).join("\n")
-    const start = Date.now()
-    const result = refinedEstimate(text)
-    const elapsed = Date.now() - start
-    expect(result).toBeGreaterThan(0)
-    expect(elapsed).toBeLessThan(100)
   })
 })

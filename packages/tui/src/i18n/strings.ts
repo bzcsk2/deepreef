@@ -7,6 +7,8 @@ export interface Strings {
   placeholder: string;
   queued: (n: number) => string;
   processing: string;
+  /** 多行粘贴折叠占位符，如 [粘贴 +70 行] */
+  pasteSummary: (lineCount: number) => string;
   // Permission
   allow: string;
   alwaysAllow: string;

@@ -5,6 +5,7 @@ export const en: Strings = {
   placeholder: 'Type a message...',
   queued: (n) => ` (${n} queued)`,
   processing: ' (processing...)',
+  pasteSummary: (n) => `[Pasted +${n} lines]`,
   // Permission
   allow: 'Allow',
   alwaysAllow: 'Always Allow',

@@ -5,6 +5,7 @@ import { type ResultPersistenceConfig } from "./result-persistence.js"
 import { noopRuntimeLogger, type RuntimeLogger } from "./runtime-logger.js"
 import { evaluatePermission, createSettleLedger, createProgressQueue, applyResultPersistence, parseToolCallArgs } from "./executor-helpers.js"
 import type { SubagentRunOptions, SubagentRunResult } from "./subagent/types.js"
+import type { QuestionInfo, QuestionAnswer } from "./question/types.js"
 
 export class StreamingToolExecutor {
   private tools: Map<string, AgentTool>
@@ -16,6 +17,7 @@ export class StreamingToolExecutor {
   private delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>
   private switchAgent?: (name: string) => string
   private spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>
+  private askUser?: (questions: QuestionInfo[]) => Promise<QuestionAnswer[]>
   private resultPersistenceConfig?: ResultPersistenceConfig
   private logger: RuntimeLogger
 
@@ -33,6 +35,7 @@ export class StreamingToolExecutor {
     delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>,
     switchAgent?: (name: string) => string,
     spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>,
+    askUser?: (questions: QuestionInfo[]) => Promise<QuestionAnswer[]>,
     resultPersistenceConfig?: ResultPersistenceConfig,
     logger: RuntimeLogger = noopRuntimeLogger,
   ) {
@@ -45,6 +48,7 @@ export class StreamingToolExecutor {
     this.delegateTask = delegateTask
     this.switchAgent = switchAgent
     this.spawnSubagent = spawnSubagent
+    this.askUser = askUser
     this.resultPersistenceConfig = resultPersistenceConfig
     this.logger = logger
   }
@@ -277,6 +281,7 @@ export class StreamingToolExecutor {
       delegateTask: this.delegateTask,
       switchAgent: this.switchAgent,
       spawnSubagent: this.spawnSubagent,
+      askUser: this.askUser,
       invokeTool: async (name, args) => {
         if (stack.includes(name)) {
           return makeToolError(`Recursive tool invocation is not allowed: ${[...stack, name].join(" -> ")}`)

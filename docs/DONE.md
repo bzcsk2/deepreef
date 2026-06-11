@@ -1,15 +1,65 @@
 # Deepreef 完成记录
 
-最后更新：2026-06-09（AgentMemory 原生集成修订）
+最后整理：2026-06-11
 
-本文只记录当前代码中仍然成立的已完成功能和已验证修复。
-未完成、待验收、明确暂缓和已驳回方案统一见 [TODO.md](TODO.md)。当前后续专项交接见 [ADVICE.md](ADVICE.md)。
+本文记录 Deepreef 已落地的能力、已验证修复和重要历史实现。
+
+- 当前目标架构与吸收边界见 [Deepreef后续开发计划.md](Deepreef后续开发计划.md)。
+- 未完成任务、删除任务、待验收和明确暂缓事项见 [TODO.md](TODO.md)。
+- 本文中的“已完成”表示对应代码或修复曾经落地，不表示该能力会永久保留。
+
+状态标记：
+
+| 标记 | 含义 |
+|---|---|
+| `当前有效` | 当前目标架构继续保留，后续开发可依赖 |
+| `历史已实现，待删除` | 当前代码仍存在，但架构已决定删除 |
+| `部分完成` | 只记录已落地部分，剩余工作不算完成 |
+| `历史记录` | 用于解释代码演进，不应作为新开发方向 |
+
+## 0. 当前有效性总览
+
+### 0.1 当前有效，可继续依赖
+
+- Core/TUI 事件流解耦：`ReasonixEngine.submit() -> AsyncGenerator<LoopEvent>`。
+- `ContextManager`、Session JSONL、上下文 trim/compact 和 summarizer。
+- `StreamingToolExecutor`、shared/exclusive 并发、exactly-once tool result。
+- PermissionEngine、HookManager、敏感路径、stale-read 和原子编辑。
+- MCP、skills、plugin/content-pack、subagent、LSP、CodeGraph、memory。
+- RuntimeLogger、Perfetto trace、三平台能力层和 CI。
+- Zen/Kilo/OpenAI-compatible 等具体 provider 和免费 API 手动选择。
+- 用户显式 `/thinking off|open|high` 的 provider 参数映射。
+
+### 0.2 历史已实现，当前已废弃待删除
+
+以下能力曾实现并有历史测试，但不再属于目标架构：
+
+| 能力 | 当前状态 | 删除任务 |
+|---|---|---|
+| `free-auto` 虚拟 provider、自动候选路由和跨模型 failover | 历史已实现，已删除 | `DONE.md` 的 `RM-10` |
+| `/thinking auto`、ModeSelector、ModeStats 和自动 thinking 切换 | 历史已实现，已删除 | `DONE.md` 的 `RM-20` |
+| StrategyTier、动态 tier 推荐和对 model/temperature/reasoning 的覆盖 | 历史已实现，已删除 | `DONE.md` 的 `RM-20` |
+| TokenizerPool、Worker、精细 Token 预估和 TUI token/s 展示 | 历史已实现，已删除 | `DONE.md` 的 `RM-30` |
+
+删除前可以阅读本文对应历史章节理解接线范围，但禁止基于这些能力继续扩展。
+
+### 0.3 部分完成或仍待验收
+
+以下内容不构成完整完成结论；若继续推进，必须先在 `TODO.md` 建立对应任务：
+
+- Context 长会话人工验收和文档收尾。
+- macOS/Windows 原生终端体验验收。
+- FG best-effort 日志收尾。
+- ECC content-pack 完整 CLI 端到端接入。
+- AgentMemory 部分上游测试、CI 和断言增强。
 
 ---
 
 ## 1. 当前验证基线
 
-本次同步依据最新 GitHub Actions 与最近一次本地全量验证：
+本节保存最后一次已记录的全量 CI 基线，不代表 2026-06-11 文档整理后重新运行了测试。
+
+最后一次已记录验证：
 
 ```bash
 bun run typecheck
@@ -54,7 +104,7 @@ ReasonixEngine.submit()
 | 主题 | 当前实现 |
 |------|----------|
 | 运行时 | Bun |
-| API Provider | DeepSeek / Zen / Mimo |
+| API Provider | DeepSeek / Zen / Mimo / Kilo / NVIDIA / OpenAI-compatible；`free-auto` 已删除 |
 | TUI | React 19 + `@deepreef/ink`，显示组件适配自 Reasonix |
 | Core 事件 | `AsyncGenerator<LoopEvent>`，使用 role-based 事件模型 |
 | 工具并发 | `shared` 并行，`exclusive` 串行 |
@@ -206,9 +256,11 @@ DEEPREEF_TRACE=1
 - Span 层级：interaction → llm_request → tool_batch → tool。
 - 输出到 `.deepreef/traces/trace-<session-id>.json`。
 
-### 3.8 自动推理模式切换（AS0-AS6）
+### 3.8 自动推理模式切换（历史已实现，待删除）
 
-基于 Provider 能力和规则的自动推理模式切换：
+> 状态：以下内容用于保留实现历史。`ModeSelector`、`ModeStats`、自动模式与相关 TUI 状态将由 `RM-20` 删除；仅保留 Provider thinking 能力映射和用户手动选择 `off/open/high` 的能力。
+
+历史上曾实现基于 Provider 能力和规则的自动推理模式切换：
 
 **核心组件：**
 
@@ -307,18 +359,6 @@ DEEPREEF_TRACE=1
 | P4 | 结果溢出持久化 | 已完成 |
 | P5 | Hook 可观测性增强 | 已完成 |
 
-### 4.4 自动推理模式切换（AS0-AS6）
-
-| 编号 | 内容 | 状态 |
-|------|------|------|
-| AS0 | reasoning_content 工具链连续性修复 | 已完成 |
-| AS1 | Provider 能力和请求映射 | 已完成 |
-| AS2 | 纯规则评估器 | 已完成 |
-| AS3 | Controller 和 loop 集成 | 已完成 |
-| AS4 | TUI 状态显示 | 已完成 |
-| AS5 | 手动覆盖 `/thinking` 命令 | 已完成 |
-| AS6 | 统计追踪 | 已完成 |
-
 ### 4.5 运行时日志系统（LOG0-LOG7）
 
 | 编号 | 内容 | 状态 |
@@ -344,7 +384,9 @@ DEEPREEF_TRACE=1
 
 ---
 
-### 4.7 策略系统基础
+### 4.7 策略系统基础（历史已实现，待删除）
+
+> 状态：StrategyTier 及其自动推荐、模型/temperature/reasoning 覆盖将由 `RM-20` 删除。本节只保留历史实现记录。
 
 | 编号 | 内容 | 状态 |
 |------|------|------|
@@ -538,7 +580,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts
 
 ### Provider 与 API
 
-- **Zen 401 修复**：tier 系统的 `recommendedModel`（`deepseek-v4-flash`）覆盖了用户为 Zen 选择的模型（如 `mimo-v2.5-free`），但 `deepseek-v4-flash` 在 Zen API 上不存在，Zen 返回 401 "Missing API key"。修复方式：`loop.ts:74` 模型覆盖只在 `provider === "deepseek"` 或未指定时生效，第三方 provider 不受影响。
+- **Zen 401 历史修复**：tier 系统的 `recommendedModel`（`deepseek-v4-flash`）覆盖了用户为 Zen 选择的模型（如 `mimo-v2.5-free`），但 `deepseek-v4-flash` 在 Zen API 上不存在，Zen 返回 401 "Missing API key"。修复方式：`loop.ts:74` 模型覆盖只在 `provider === "deepseek"` 或未指定时生效，第三方 provider 不受影响。该事故也是 `RM-20` 删除 tier 自动覆盖的重要依据。
 
 ### T21-R：斜杠命令补全键盘事件冲突
 
@@ -659,7 +701,9 @@ bun test packages/mcp/__tests__/mcp-host.test.ts
 - `DeepiPromptInput` forwardRef + suppressHistory 属性。
 - `App.tsx` + `CommandAutocomplete` 通过 ref 控制。
 
-### ST2：StrategyTier 引擎集成
+> `ST2` 到 `ST4` 均为历史实现记录，相关运行时能力已废弃，待 `RM-20` 删除。
+
+### ST2：StrategyTier 引擎集成（历史已实现，待删除）
 
 - `engine.ts` 新增 `currentTier` 字段、`resolveTierDecision()` / `setTier()` / `getTier()`。
 - `loop.ts` 根据 tier 覆盖 `maxChainLength`、`enableReasoning`、`model`、`temperature`。
@@ -667,7 +711,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts
 - `interface.ts` `CoreEngine` 新增 `getTier?` / `setTier?`。
 - 验收：15 个 strategy tier 测试全通过。
 
-### ST3：策略事件 + TUI
+### ST3：策略事件 + TUI（历史已实现，待删除）
 
 - `engine.ts submit()` 首事件产出 `strategy_notify`。
 - `loop.ts` 工具批处理后产出 `strategy_estimate_refined`。
@@ -675,7 +719,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts
 - `StatusBar.tsx` 可选 `tier` 属性，`App.tsx` 从 engine 取值传入。
 - 验收：typecheck 通过，基线 729/729 无回归。
 
-### ST4：动态 Tier 推荐器
+### ST4：动态 Tier 推荐器（历史已实现，待删除）
 
 - 新增 `strategy/recommender.ts`：`recommendTier()` 函数，分析 cost/turn/context 模式。
 - 规则：budget 超标降级、最大轮数近 + 高上下文升级、多工具 + 余量升级、持续低消耗降级。
@@ -929,7 +973,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts
 
 ## 6. ADVICE.md 状态
 
-`ADVICE.md` 原先用于复核 Code Clean 报告和安排阶段路线。历史可执行内容已经拆分完成：
+`ADVICE.md` 原先用于复核 Code Clean 报告、保存专项设计和安排阶段路线。历史可执行内容已经拆分完成：
 
 | 原路线 | 归档状态 | 对应专项 |
 |--------|----------|----------|
@@ -943,7 +987,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts
 
 `TEST-STABILITY-01` 和 `OS-17-R` 已完成并记录在本文。仍未完成的原生平台人工验收见 `TODO.md`。
 
-2026-06-04 后，`ADVICE.md` 只保留仍需交接执行的专项。当前剩余 Context 的 `CTX-70` 文档/人工验收和 FG best-effort 日志收尾。
+自 2026-06-11 起，`ADVICE.md` 已重构为审核 Agent 面向开发 Agent 的审核意见与下一步动作入口。技术方案、任务、完成事实分别以 `Deepreef后续开发计划.md`、`TODO.md`、`DONE.md` 为准。
 
 ### 6.1 LSP 专项进度
 
@@ -1001,7 +1045,7 @@ bun test packages/mcp/__tests__/mcp-host.test.ts
 
 保留限制：
 
-- `/context` 的代码链路已完成；完整长会话人工验收仍按 `ADVICE.md` 的 `CTX-70` 执行。
+- `/context` 的代码链路已完成；完整长会话人工验收按 `TODO.md` 的 `CTX-70` 执行。
 - 本轮完整 `bun test` 未作为最新结论记录，因用户要求中断。
 
 ---
@@ -1079,11 +1123,15 @@ bun run typecheck
 
 ---
 
-## 11. Kilo/LLM7 Free Auto 匿名免费 Provider
+## 11. 免费 Provider 与 Free Auto 历史
 
 | 阶段 | 状态 | 说明 |
 |------|------|------|
-| 免费 Provider 支持 | ✅ 已完成 | Kilo (Free)、NVIDIA NIM (Free)、Free Auto 路由 |
+| 用户显式选择免费 Provider | 当前有效 | Kilo、NVIDIA NIM，以及其他用户手动配置的免费 API |
+| OpenAI-compatible 本地 Provider | 当前有效 | 用户显式配置 Base URL 和模型 |
+| `free-auto` 虚拟 Provider 与自动路由 | 历史已实现，待删除 | 由 `RM-10` 删除，不迁移到新架构 |
+
+> 本章混合记录了仍有效的免费 Provider 支持和 `free-auto` 的历史实现。后续开发只能复用显式 Provider 与通用 `ChatClient` 抽象，不能继续依赖自动候选选择、sticky、惩罚、cooldown 或跨模型 failover。
 
 ### 11.1 新 Provider 注册
 
@@ -1097,7 +1145,7 @@ bun run typecheck
 - `ModelPicker.tsx`：新增 `kilo`、`free-auto`、`openai-compatible`、`nvidia` 到提供商选择列表；`keyless` provider 跳过 Key 输入步骤。
 - 新增配置测试（Kilo / Free Auto / OpenAI Compatible / NVIDIA）。
 
-### 11.2 Free Auto 智能路由（`packages/core/src/free-auto/`）
+### 11.2 Free Auto 智能路由（历史已实现，待删除）
 
 | 文件 | 定位 |
 |------|------|
@@ -1130,7 +1178,7 @@ bun run typecheck
 | 异常 EOF 检测 | stream 结束无 `[DONE]` 且无 finish_reason 时 yield error |
 | `max_tokens` vs `max_completion_tokens` | 通过 `useMaxCompletionTokens` 区分 Kilo/LLM7（用 max_tokens）和 DeepSeek（用 max_completion_tokens） |
 
-### 11.5 TUI 适配
+### 11.5 TUI 适配（含待删除的自动状态）
 
 - `bridge.tsx`：
   - 新增 `routedModel` / `routedModelDetail` 状态，处理 `free_auto_route` 事件。
@@ -1141,6 +1189,8 @@ bun run typecheck
   - Agent 名称加 `TONE.warn` 高亮。
   - routedModel 优先显示自由自动路由模型。
 - `WelcomeScreen.tsx`：引入 figlet ASCII 大标题。
+
+> `routedModel`、`free_auto_route`、Auto thinking 状态及相应展示属于 `RM-10`/`RM-20` 删除范围；普通 Provider/模型展示保留。
 
 ### 11.6 WebFetch / WebSearch 工具重写
 
@@ -1287,19 +1337,19 @@ bun test                   # 1134 pass, 5 pre-existing fail (mode-selector + bri
 
 ## 13. 文档维护规则
 
-1. `DONE.md` 只记录已存在且仍然成立的能力。
-2. 未完成事项移入 `TODO.md`，不要在 DONE 中维护第二套待办列表。
+1. `DONE.md` 主体只记录已落地事实；当前有效性必须明确标为“当前有效”“历史已实现，待删除”或“部分完成”。
+2. 未完成事项移入 `TODO.md`；DONE 中只能记录已落地范围、验收事实和保留限制，不能维护第二套待办列表。
 3. 每次更新基线必须实际运行 `bun run typecheck` 和 `bun test`。
 4. 已驳回方案和低风险暂缓项写入 `TODO.md` 对应章节。
 5. 不再追加重复的"第 N 轮修复"流水账；后续按专项编号记录结果。
 
 ---
 
-## 14. ECC Manifest Content Pack 审查修复（2026-06-08）
+## 14. ECC Manifest Content Pack：已落地范围与保留限制（2026-06-08）
 
 依据 `docs/ecc-manifest-content-pack-review-fixes.md` 审查文档完成全部 P0 和关键 P1 修复。
 
-### 14.1 整体状态：代码就绪，端到端接入待完成
+### 14.1 整体状态：部分完成，代码就绪但端到端接入未验收
 
 代码架构层面的修复（类型系统、解析器、安全策略、接线管道）已全部完成并通过单元测试验证，
 **但缺少最后一步生产接线**：`PluginRuntime.init()` 从 `.deepreef/plugins.json` 读取配置，
@@ -1410,7 +1460,7 @@ bun test             # 185 pass, 0 fail
 | 路径安全测试被 skip | `../` traversal 测试启用；新增 symlink escape 测试 |
 | DONE.md typecheck 状态不准确 | 标注 packages/memory 预置错误 |
 
-### 14.7 待完成：端到端接入
+### 14.7 未纳入完成结论：端到端接入
 
 要将 ECC 真正接入生产管线，还需：
 
@@ -1484,9 +1534,9 @@ bun test             # 185 pass, 0 fail
 
 ---
 
-## 15. AgentMemory 原生集成（进行中）
+## 15. AgentMemory 原生集成：已落地范围与保留限制
 
-### 15.1 阶段 A：上游源码落位（进行中）
+### 15.1 阶段 A：已落地源码与运行时骨架
 
 | 子项 | 状态 | 说明 |
 |------|------|------|
@@ -1514,7 +1564,6 @@ bun test             # 185 pass, 0 fail
 
 ### 15.3 保留限制
 
-- Apache-2.0 license、NOTICE.md 和上游 commit 尚未写入
 - `MemoryRuntimeSdk.trigger()` 现支持 `<A, B>` 泛型，与原始 `iii-sdk` 签名兼容
 - `health/monitor.ts` 中 `sdk.on("connection_state", ...)` 已移除（MemoryRuntimeSdk 不支持事件监听）
 - `@anthropic-ai/sdk`、`@anthropic-ai/claude-agent-sdk`、`@xenova/transformers` 为 optional peer deps，缺失时 fallback
@@ -1794,12 +1843,12 @@ bun run test:memory-native   # 独立脚本，可接入 CI
 | `test/deepreef-memory-migration.test.ts` | migrate tool shape/schema/execute | ✅ 3/3 |
 | `packages/cli/src/__tests__/memory-integration.test.ts` | CLI import/tool registration/service lifecycle | ✅ 5/5 |
 
-### 20.5 仍需后续处理
+### 20.5 未纳入完成结论
 
-- `onPreToolUse` 明确不接入（DONE 已列为限制）
-- Subagent start/stop 观察未接入
-- 测试断言强度待加强（advancedTools 注册验证、autoObserve 观察计数、forget 后 recall 验证）
-- CI 集成待完成（test:memory-native 脚本已就绪，需接入 CI pipeline）
+- `onPreToolUse` 明确不接入，属于设计限制。
+- Subagent start/stop 观察未接入，不属于本轮完成范围。
+- 当前测试未覆盖 advancedTools 注册、autoObserve 观察计数和 forget 后 recall 等强断言。
+- `test:memory-native` 脚本已就绪，但尚未接入 CI pipeline。
 
 ---
 
@@ -2002,3 +2051,330 @@ const client = new McpClient(name, clientLogger)
 bun run typecheck                          # 通过
 bun test packages/mcp                      # 34 pass, 0 fail
 ```
+
+---
+
+## 22. RM-10：删除 `free-auto` 自动免费模型路由
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| RM-10 | ✅ 已完成 | 删除 `free-auto` 虚拟 provider 和自动候选切换 |
+
+**实现边界：**
+
+### 22.1 删除范围
+
+| 文件/目录 | 操作 |
+|-----------|------|
+| `packages/core/src/free-auto/` | 整个目录删除 |
+| `packages/core/src/engine.ts` | 删除 `FreeAutoClient` 导入、`freeAutoClient` 字段、`resolveClient()` 中的 free-auto 分支 |
+| `packages/core/src/config.ts` | 删除 `free-auto` provider 条目、`virtual` 字段、相关 baseUrl 逻辑 |
+| `packages/core/src/index.ts` | 删除 Free Auto 相关 exports |
+| `packages/core/src/loop.ts` | 删除 `isKeyless` 和 `useMaxTokens` 中的 `free-auto` 条件 |
+| `packages/tui/src/ModelPicker.tsx` | 从 `PROVIDER_ORDER` 中删除 `free-auto` |
+| `packages/tui/src/bridge.tsx` | 删除 `routedModel`、`routedModelDetail` 字段和 `free_auto_route` 事件处理 |
+| `packages/tui/src/App.tsx` | 删除 `routedModel` 和 `routedModelDetail` 的使用 |
+| `packages/core/__tests__/free-auto-router.test.ts` | 整个文件删除 |
+| `packages/core/__tests__/config.test.ts` | 删除 `free-auto` 相关测试用例 |
+
+### 22.2 保留并验证
+
+- Zen、Kilo 等免费 provider 仍能被用户明确选择并正常调用。
+- keyless provider 不发送 Authorization header。
+- `/model` 不再出现 `free-auto`，但仍显示各免费 provider/model。
+- 历史 `.deepreef/last-config.json` 若保存了 `provider: "free-auto"`，加载时安全回退到默认 provider（zen）。
+
+### 22.3 适配点
+
+1. **config.ts**：删除 `virtual` 字段后，`loadConfig()` 中 baseUrl 逻辑简化为直接赋值。
+2. **engine.ts**：`resolveClient()` 简化为直接返回 `DeepSeekClient`。
+3. **bridge.tsx**：删除 `routedModel` 和 `routedModelDetail` 字段后，`App.tsx` 中 StatusBar 的 `model` 和 `statusMessage` 直接使用 `activeModel` 和 `statusMessage`。
+
+### 22.4 验收命令
+
+```bash
+bun run typecheck
+bun test packages/core/__tests__/config.test.ts packages/core/__tests__/engine-tools.test.ts
+bun test packages/tui/__tests__/commands.test.ts
+bun test
+git diff --check
+```
+
+### 22.5 关闭条件
+
+- `rg "free-auto|FreeAuto|free_auto" packages` 不再发现任何匹配（旧配置迁移兼容代码除外）。
+- 用户仍可手动选择并使用免费模型 API。
+- 不存在任何自动跨 provider/model failover。
+
+### 22.6 保留限制
+
+- 删除任务不涉及 `RM-20`（自动推理强度调节）的内容。
+- 免费 provider 仍由用户手动选择，系统不自动切换。
+
+---
+
+## 23. RM-20：删除 `/thinking auto` 和自动 thinking 切换
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| RM-20 | ✅ 已完成 | 删除 ModeSelector、ModeStats、StrategyTier、自动推理强度调节 |
+
+**实现边界：**
+
+### 23.1 删除范围
+
+| 文件/目录 | 操作 |
+|-----------|------|
+| `packages/core/src/mode-selector.ts` | 整个文件删除 |
+| `packages/core/src/mode-stats.ts` | 整个文件删除 |
+| `packages/core/src/strategy/tiers.ts` | 整个文件删除 |
+| `packages/core/src/strategy/recommender.ts` | 整个文件删除 |
+| `packages/core/src/strategy/` | 整个目录删除 |
+| `packages/core/src/engine.ts` | 删除 ModeSelectorState/ModeStats/StrategyTier 导入、字段（modeSelectorState, modeStats, currentTier, pendingTierDecision）、方法（setThinkingMode, getThinkingMode, getModeSummary, resolveTierDecision, getTier, setTier）、strategy_notify 事件、loopOpts tier 参数 |
+| `packages/core/src/loop.ts` | 删除 imports（ModeSelectorState, StrategyTier, ModeStats, logModeSwitch, recommendTier）、删除 LoopOptions 中 modeSelectorState/modeStats/tier 字段、删除 tier config overrides（maxChainLength, enableReasoning, model, temperature）、删除 auto thinking 分支、删除 currentMode 变量、删除 strategy_estimate_refined/tier_recommendation/thinking_mode_switch 事件 |
+| `packages/core/src/interface.ts` | 删除 LoopEventRole 中的 "strategy_notify"、"strategy_estimate_refined"、"tier_recommendation"；删除 CoreEngine 中的 resolveTierDecision、getTier、setTier、getThinkingMode 方法 |
+| `packages/core/src/index.ts` | 删除 strategy tier exports |
+| `packages/core/src/loop-helpers.ts` | 删除 evaluateModeSwitchForTurn 函数和相关 mode-selector/mode-stats 导入 |
+| `packages/core/src/provider-thinking.ts` | 将 ThinkingMode 类型从 `"off" | "open" | "high" | "auto"` 改为 `"off" | "open" | "high"`；更新 createDeepSeekCapabilities |
+| `packages/tui/src/commands.ts` | 从 THINKING_MODES 中删除 "auto" |
+| `packages/tui/src/bridge.tsx` | 删除 effectiveThinkingMode 字段、thinking_mode_switch 事件处理、strategy_notify/strategy_estimate_refined/tier_recommendation 事件处理 |
+| `packages/tui/src/App.tsx` | 删除 effectiveThinkingMode 使用、engine.getThinkingMode()、engine.setThinkingMode()、engine.getTier() |
+| `packages/tui/src/StatusBar.tsx` | 删除 effectiveThinkingMode prop、简化 thinkingLabel 逻辑 |
+| `packages/core/__tests__/provider-thinking.test.ts` | 更新测试：删除 "auto" 期望、删除 mapMode('auto') 测试 |
+| `packages/tui/__tests__/commands.test.ts` | 更新测试：删除 "auto" 期望、删除 validateThinkingMode("auto") 测试 |
+
+### 23.2 保留并验证
+
+- `/thinking off|open|high` 仍然由用户显式选择，不会被运行时自动修改。
+- Provider thinking capabilities 映射（off/open/high）保留。
+- Zen/Kilo 等 provider 的 thinking 参数映射保留。
+- 历史 `.deepreef/last-config.json` 若保存了 `thinkingMode: "auto"`，加载时安全回退到 `"off"`。
+
+### 23.3 验收命令
+
+```bash
+bun run typecheck
+bun test packages/core/__tests__/provider-thinking.test.ts
+bun test packages/core/__tests__/engine-tools.test.ts
+bun test packages/tui/__tests__/commands.test.ts
+git diff --check
+```
+
+### 23.4 关闭条件
+
+- `bun run typecheck` 通过。
+- ThinkingMode 类型不再包含 "auto"。
+- TUI `/thinking` 命令不再显示 "auto" 选项。
+- StatusBar 不再显示 auto 策略内部状态。
+- 不存在任何自动 thinking mode 切换逻辑。
+
+### 23.5 保留限制
+
+- 删除任务不涉及 `RM-30`（删除 Token 用量预估专项代码）的内容。
+- `docs/auto-reasoning-design.md` 保留为历史参考文档。
+
+---
+
+## 24. RM-30：删除 Token 用量预估专项代码
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| RM-30 | ✅ 已完成 | 删除 TokenizerPool、Worker、精细预估和 TUI token/s 展示 |
+
+**实现边界：**
+
+### 24.1 删除范围
+
+| 文件/目录 | 操作 |
+|-----------|------|
+| `packages/core/src/context/tokenizer-pool.ts` | 整个文件删除 |
+| `packages/core/src/context/tokenizer-worker.js` | 整个文件删除 |
+| `packages/core/__tests__/tokenizer-pool.test.ts` | 整个文件删除 |
+| `packages/core/src/context/token-estimator.ts` | 简化：删除 `refinedEstimate()`、CJK/标点精细化 |
+| `packages/core/src/context/manager.ts` | 删除 `TokenizerPool` 导入和使用；`estimateTokens()`、`getBudget()`、`getFoldDecision()`、`shutdown()` 改为同步 |
+| `packages/core/src/engine.ts` | 删除 `await ctx.getBudget()` 中的 await |
+| `packages/core/src/loop.ts` | 简化 fold check：删除 Promise.race，直接调用同步 `ctx.getFoldDecision()` |
+| `packages/tui/src/reasonix/StreamingCard.tsx` | 删除 token/s 估算逻辑、`CHARS_PER_TOKEN`、`estimateTokens()`、`formatRate()`；改为显示经过秒数 |
+| `packages/core/__tests__/token-estimator.test.ts` | 删除 `refinedEstimate` 测试 |
+| `packages/core/__tests__/benchmark.test.ts` | 删除 `refinedEstimate` 导入和测试 |
+
+### 24.2 保留并验证
+
+- Provider 返回的真实 `promptTokens/completionTokens/cacheHitTokens/cacheMissTokens` 保留。
+- `SessionStats` 中真实 prompt/completion/cache hit/cache miss 保留。
+- `StatusBar` 和 `/status` 中基于真实 Provider 数据计算的 cache 命中率保留。
+- `pricing.ts` 基于真实 usage 的成本计算保留。
+- Context 预算保护（fold/trim/compact）保留，使用简化同步估算。
+- Provider/model 的 `contextWindow` 配置保留。
+
+### 24.3 验收命令
+
+```bash
+rg "TokenizerPool|tokenizer-worker|refinedEstimate|CHARS_PER_TOKEN" packages/core packages/tui packages/cli
+bun test packages/core/__tests__/token-estimator.test.ts
+bun test packages/core/__tests__/context.test.ts packages/core/__tests__/context-summary.test.ts packages/core/__tests__/engine-context-policy.test.ts
+bun test packages/core/__tests__/benchmark.test.ts
+bun run typecheck
+bun test
+git diff --check
+```
+
+### 24.4 关闭条件
+
+- `TokenizerPool`、Worker、精细 Token 预估和 TUI token/s 猜测已删除。
+- Context 预算、trim/compact 和超窗保护仍通过测试。
+- 真实 usage、cache hit/miss 和基于真实 usage 的成本统计未回归。
+- `DONE.md` 记录删除事实与保留边界，不再把 Token 用量预估列为当前能力。
+
+---
+
+## 25. QST-10：复制适配 OpenCode Question 完整交互闭环
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| QST-10 | ✅ 已完成 | Agent 可暂停、询问用户并在回答后继续；Subagent 问题冒泡到主 TUI |
+
+**实现边界：**
+
+### 25.1 核心模块（packages/core/src/question/）
+
+| 文件 | 职责 |
+|------|------|
+| `id.ts` | `createQuestionId()` 生成 `que` 前缀唯一 ID |
+| `types.ts` | `QuestionInfo`、`QuestionRequest`、`QuestionAnswer`、`QuestionReply`、`QuestionReject` 类型定义 |
+| `service.ts` | `QuestionService` 类：ask/reply/reject/list/interrupt/shutdown |
+| `index.ts` | 导出所有类型和 `QuestionService` |
+
+### 25.2 Engine API 扩展
+
+- `CoreEngine` 新增 `respondQuestion(requestId, answers)`、`rejectQuestion(requestId)`、`listPendingQuestions(sessionId?)` 方法
+- `LoopEventRole` 新增 `question_ask`、`question_replied`、`question_rejected` 事件
+- `ToolContext` 新增 `askUser?(questions: QuestionInfo[]): Promise<QuestionAnswer[]>` 可选方法
+- `StreamingToolExecutor` 将 `askUser` 传递到工具上下文
+
+### 25.3 ask-user.ts 工具重写
+
+- 使用 `ctx.askUser()` 暂停执行等待用户回答
+- 保留 JSON fallback（向后兼容）
+- 支持 single/multiple/custom 三种问题模式
+
+### 25.4 TUI 集成
+
+| 文件 | 变更 |
+|------|------|
+| `question-state.ts` | 纯状态机：tab/select/edit/submit/reject，支持 single 和 multi-question 模式 |
+| `QuestionPrompt.tsx` | 问题面板组件：选项列表、自定义输入、确认摘要、键盘导航 |
+| `bridge.tsx` | 处理 `question_ask`/`question_replied`/`question_rejected` 事件；新增 `respondQuestion`/`rejectQuestion` 方法 |
+| `App.tsx` | 渲染 `QuestionPrompt`；问题挂起时禁用输入框；cancel 时自动 reject |
+
+### 25.5 测试覆盖
+
+- `packages/core/__tests__/question-service.test.ts`：10 个测试，覆盖 ask/reply/reject/interrupt/shutdown/list
+
+### 25.6 验收命令
+
+```bash
+bun run typecheck
+bun test packages/core/__tests__/question-service.test.ts
+git diff --check
+```
+
+### 25.7 关闭条件
+
+- `QuestionService` 管理 pending 问题，ask 返回 Promise，reply/reject 解析 Promise
+- TUI 正确渲染问题面板，支持 ↑↓ 选择、Enter 提交、Esc 拒绝、Tab 切换
+- Subagent 的 `askUser` 调用冒泡到主 TUI 的 QuestionPrompt
+- cancel 时自动 reject 所有 pending 问题，不泄漏 Promise
+- `DONE.md` 记录 QST-10 完成事实
+
+---
+
+## 26. PERM-10：复制适配 OpenCode 权限规则、Auto Accept 与子 Agent 冒泡
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| PERM-10 | ✅ 已完成 | Pattern-based 权限规则、once/always/reject 生命周期、safe/balanced/yolo 模式、子 Agent bubble |
+
+**实现边界：**
+
+### 26.1 核心模块（packages/core/src/permission/）
+
+| 文件 | 职责 |
+|------|------|
+| `types.ts` | `PermissionAction`、`PermissionMode`、`PermissionRule`、`PermissionRequest`、`PermissionReply` 类型定义 |
+| `rules.ts` | `evaluateRules()` 通配符匹配、`mergeRulesets()`、`fromConfig()`、`createSessionRule()` |
+| `service.ts` | `PermissionService` 类：ask/reply/list/interrupt/shutdown，session-approved rules |
+| `patterns/shell.ts` | `extractShellPatterns()` 从 shell 命令提取文件路径和命令模式 |
+| `index.ts` | 导出所有类型和函数 |
+
+### 26.2 Rules 引擎
+
+- 通配符匹配：`*` 匹配任意字符，`?` 匹配单个字符
+- "最后匹配生效"语义：后置 ruleset 覆盖前置
+- 无匹配时默认返回 `"ask"`
+- `fromConfig()` 将配置规则转换为 `PermissionRule[]`
+- `createSessionRule()` 创建会话级临时规则
+
+### 26.3 PermissionService
+
+- `ask()` 返回 Promise，阻塞调用方直到用户回复
+- `reply("once")` 仅批准当前实例
+- `reply("always")` 添加 session-approved rules 并自动批准其他匹配的 pending 请求
+- `reply("reject")` 拒绝当前请求并级联拒绝同 session 所有 pending 请求
+- `matchesSessionRules()` 检查请求是否匹配 session 规则
+- `interrupt(sessionId?)` 拒绝指定 session 的所有 pending 请求
+- `shutdown()` 清理所有 pending 和 session 规则
+
+### 26.4 Shell Pattern 提取
+
+- 识别 POSIX/Windows 文件操作命令（rm、cp、mv、cat、ls 等）
+- 提取文件路径参数作为 permission patterns
+- 检测外部目录（工作区外）并标记为 `dirs`
+- 生成 suggested "always" patterns（只读命令）
+
+### 26.5 Engine 集成
+
+- `executor-helpers.ts` 的 `evaluatePermission()` 扩展支持 `PermissionService`
+- 优先检查 session-approved rules → config rules → legacy PermissionEngine → hooks → user prompt
+- `extractResourcePatterns()` 从工具参数提取资源模式
+
+### 26.6 TUI 集成
+
+| 文件 | 变更 |
+|------|------|
+| `PermissionPrompt.tsx` | 三阶段 UI：permission → always 确认 → reject 反馈；显示 permission type、resource patterns、tool name |
+| `bridge.tsx` | 处理 `permission_ask` 事件，解析 `PermissionRequest`；新增 `respondPermission(reply, message?)` |
+| `App.tsx` | 渲染新 `PermissionPrompt`，传递 `PermissionRequest` |
+
+### 26.7 子 Agent 权限
+
+- `deriveSubagentPermissions()` 从父级规则继承 deny rules 和 external_directory 限制
+- `checkSubagentPermission()` 支持 `readonly/denyExec/acceptEdits/bubble` 四种模式
+- `bubble` 模式返回 `{ allowed: false, bubble: true }`，由父级处理
+- `acceptEdits` 模式仍需 exec 工具的父级批准
+
+### 26.8 测试覆盖
+
+- `packages/core/__tests__/permission-service.test.ts`：18 个测试
+  - PermissionService：ask/reply (once/always/reject)/matchesSessionRules/interrupt/shutdown
+  - evaluateRules：无匹配/allow/deny/最后匹配/通配符
+  - fromConfig：配置转换
+  - extractShellPatterns：命令模式提取
+
+### 26.9 验收命令
+
+```bash
+bun run typecheck
+bun test packages/core/__tests__/permission-service.test.ts
+git diff --check
+```
+
+### 26.10 关闭条件
+
+- Pattern-based 权限规则支持通配符匹配，"最后匹配生效"
+- `once/always/reject` 生命周期正确工作，session rules 自动批准匹配请求
+- `yolo` 模式（预留）仅自动批准 ask，不覆盖任何 deny
+- "Always" 按 resource pattern 生效，不按工具名无限放行
+- 子 Agent 继承父级 deny rules，bubble 真正冒泡到父 TUI
+- interrupt/shutdown 后权限 pending 列表为空
+- `DONE.md` 记录 PERM-10 完成事实

@@ -13,8 +13,7 @@ import { FG, TONE } from './reasonix/tokens.js';
  * - cacheHitTokens/cacheMissTokens: 用于计算缓存命中率
  * - contextUsed/contextTotal: 上下文窗口使用量（已用/总量）
  * - pendingInstructionCount: >0 时显示待处理指令通知
- * - thinkingMode: 用户选择的思考模式（auto/off/open/high）
- * - effectiveThinkingMode: auto 策略当前内部生效档位（off/open/high）
+ * - thinkingMode: 用户选择的思考模式（off/open/high）
  * - reasoningActive: 当前流中是否正在收到 reasoning 输出
  * - tier: 服务层级标签（如 free/pro）
  * - cwd: 当前工作目录路径
@@ -33,7 +32,6 @@ interface StatusBarProps {
   pendingInstructionCount?: number;
   statusMessage?: string | null;
   thinkingMode?: string;
-  effectiveThinkingMode?: string;
   reasoningActive?: boolean;
   tier?: string;
   cwd?: string;
@@ -64,17 +62,14 @@ function cacheRate(hit: number, miss: number): string {
   return `${Math.round((hit / total) * 100)}%`;
 }
 
-export function StatusBar({ model, provider, agent, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens, contextUsed, contextTotal, pendingInstructionCount, statusMessage, thinkingMode, effectiveThinkingMode, reasoningActive, tier, cwd }: StatusBarProps) {
+export function StatusBar({ model, provider, agent, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens, contextUsed, contextTotal, pendingInstructionCount, statusMessage, thinkingMode, reasoningActive, tier, cwd }: StatusBarProps) {
   // 计算缓存命中率
   const rate = cacheRate(cacheHitTokens, cacheMissTokens);
   // 只显示 agent 名称，去掉 " Agent" 后缀
   const agentShort = agent?.replace(/\s+(Agent|Mode)$/i, '') ?? agent;
   // 只显示当前文件夹名
   const cwdShort = cwd ? cwd.split('/').filter(Boolean).pop() ?? cwd : '';
-  const configuredThinking = thinkingMode ?? 'off';
-  const thinkingLabel = configuredThinking === 'auto'
-    ? (reasoningActive ? 'auto:on' : effectiveThinkingMode ? `auto:${effectiveThinkingMode}` : 'auto')
-    : configuredThinking;
+  const thinkingLabel = thinkingMode ?? 'off';
   return (
     <Box width="100%" flexDirection="column">
       {/* 状态警告信息（如 ⚠ 提示），仅在 statusMessage 有值时显示 */}

@@ -1,5 +1,6 @@
 import type { ChatMessage, ToolSpec, Usage } from "./types.js"
 import type { DeepSeekStreamEvent, DeepSeekClientOptions } from "./client.js"
+import type { QuestionInfo, QuestionAnswer } from "./question/types.js"
 
 /* ── LoopEvent — core yields these, shell consumes them ── */
 
@@ -14,12 +15,12 @@ export type LoopEventRole =
   | "error"
   | "status"
   | "done"
-  | "strategy_notify"
-  | "strategy_estimate_refined"
-  | "tier_recommendation"
   | "tool_progress"
   | "usage"
   | "permission_ask"
+  | "question_ask"
+  | "question_replied"
+  | "question_rejected"
 
 export interface LoopEvent {
   role: LoopEventRole
@@ -58,6 +59,7 @@ export interface ToolContext {
   delegateTask?: (task: string, agentType: string, files: string[]) => Promise<string>
   switchAgent?: (name: string) => string
   spawnSubagent?: (options: SubagentRunOptions) => Promise<SubagentRunResult>
+  askUser?: (questions: QuestionInfo[]) => Promise<QuestionAnswer[]>
 }
 
 import type { SubagentRunOptions, SubagentRunResult } from "./subagent/types.js"
@@ -112,12 +114,10 @@ export interface CoreEngine {
   registerTool(tool: AgentTool): void
   switchAgent(agentName: string): string
   getAgentName(): string
-  resolveTierDecision(tier: string): void
   respondPermission(allow: boolean, alwaysAllow?: boolean): void
   enqueueInstruction(instruction: string): EnqueueInstructionResult
-  getTier?(): { id: string; label: string; budgetCNY: number }
-  setTier?(tierId: string): void
-  getThinkingMode?(): string
+  respondQuestion(requestId: string, answers: QuestionAnswer[]): void
+  rejectQuestion(requestId: string): void
   getContextWindow?(): number
 }
 

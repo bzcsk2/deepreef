@@ -3,7 +3,6 @@ import { AppendOnlyLog } from "./append-log.js"
 import { ImmutablePrefix } from "./immutable.js"
 import { VolatileScratch } from "./scratch.js"
 import { getFoldDecision, estimateTokens } from "./token-estimator.js"
-import { TokenizerPool } from "./tokenizer-pool.js"
 import type { FoldDecision } from "./token-estimator.js"
 import { ContextSummary } from "./summary.js"
 import type { ContextSummarizer } from "./summarizer.js"
@@ -38,15 +37,12 @@ export class ContextManager {
   private summarizer?: ContextSummarizer
   private maxRounds: number
 
-  private tokenizer: TokenizerPool
-
   constructor(maxRounds = 20, private contextWindow = 128_000) {
     this.prefix = new ImmutablePrefix()
     this.log = new AppendOnlyLog()
     this.scratch = new VolatileScratch()
     this.summary = new ContextSummary()
     this.maxRounds = maxRounds
-    this.tokenizer = new TokenizerPool()
   }
 
   getContextWindow(): number { return this.contextWindow }
@@ -57,11 +53,11 @@ export class ContextManager {
     this.contextWindow = window
   }
 
-  async estimateTokens(): Promise<number> {
-    return this.tokenizer.estimate(this.buildMessages())
+  estimateTokens(): number {
+    return estimateTokens(this.buildMessages())
   }
 
-  async getBudget(): Promise<ContextBudget> {
+  getBudget(): ContextBudget {
     const prefixTokens = estimateTokens([...this.prefix.messages])
     const summaryTokens = estimateTokens(this.summary.getMessages())
     const log = this.prepareLog()
@@ -71,13 +67,13 @@ export class ContextManager {
     return { prefixTokens, summaryTokens, logTokens, scratchTokens, totalTokens, window: this.contextWindow, ratio: totalTokens / this.contextWindow }
   }
 
-  async getFoldDecision(): Promise<FoldDecision> {
-    const used = await this.estimateTokens()
+  getFoldDecision(): FoldDecision {
+    const used = this.estimateTokens()
     return getFoldDecision(used, this.contextWindow)
   }
 
-  async shutdown(): Promise<void> {
-    await this.tokenizer.shutdown()
+  shutdown(): void {
+    // No-op: TokenizerPool removed in RM-30
   }
 
   private prepareLog(): ChatMessage[] {

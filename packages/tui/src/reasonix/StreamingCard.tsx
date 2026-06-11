@@ -1,19 +1,19 @@
 /**
  * StreamingCard — 流式输出卡片
- * 实时显示 AI 模型正在生成的文本，包含动画 Spinner 和 token/秒 速率估算。
+ * 实时显示 AI 模型正在生成的文本，包含动画 Spinner。
  * 输入参数：
  *   - text: string，当前已收到的流式文本内容
  *   - done?: boolean，流式输出是否已完成
  *   - aborted?: boolean，用户是否主动终止了流式输出
- *   - startTs: number，流开始时间戳（毫秒），用于计算经过时间和速率
+ *   - startTs: number，流开始时间戳（毫秒），用于计算经过时间
  *   - expanded?: boolean，保留的兼容参数；流式输出始终显示全部内容
  * 内部行为：
- *   - 通过 useInterval 每秒触发重渲染，更新速率显示
+ *   - 通过 useInterval 每秒触发重渲染，更新时间显示
  *   - 完成回复和未完成的流式输出使用不同的视觉模板
  */
 
 import { Box, Text, useInterval } from '@deepreef/ink';
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Card } from './Card.js';
 import { CardHeader } from './CardHeader.js';
 import { Spinner } from './Spinner.js';
@@ -21,10 +21,6 @@ import { Markdown } from './markdown.js';
 import { clipToCells } from './text-width.js';
 import { FG, TONE } from './tokens.js';
 import { t } from '../i18n/index.js';
-
-const CHARS_PER_TOKEN = 4;
-const MIN_MS_FOR_RATE = 500;   // 至少要经过 500ms 才开始估算速率，避免短时数据波动
-const MIN_CHARS_FOR_RATE = 20; // 至少累积 20 个字符才开始估算速率，避免样本量过小
 
 interface StreamingCardProps {
   text: string;
@@ -34,13 +30,6 @@ interface StreamingCardProps {
   expanded?: boolean;
   title?: string;
   doneTitle?: string;
-}
-
-/**
- * 估算文本的 token 数量（粗略估算，按每 CHARS_PER_TOKEN 个字符=1 token）
- */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
 /**
@@ -64,28 +53,13 @@ function wrapLines(text: string, width: number): string[] {
   return lines.length > 0 ? lines : [''];
 }
 
-/**
- * 格式化 token 速率显示
- * 超过 1000 token/s 时显示为 k 单位（如 1.2k）
- */
-function formatRate(tps: number | null): string {
-  if (tps === null) return '';
-  if (tps >= 1000) return t().tps(`${(tps / 1000).toFixed(1)}k`);
-  return t().tps(`${tps}`);
-}
-
 export function StreamingCard({ text, done = false, aborted = false, startTs, title, doneTitle }: StreamingCardProps): React.ReactElement {
-  // 每 1000ms 触发一次重渲染，用于更新经过时间和速率显示
+  // 每 1000ms 触发一次重渲染，用于更新经过时间显示
   const [, setTick] = useState(0);
   useInterval(() => setTick(t => t + 1), 1000);
 
-  const now = Date.now();
-  const elapsedMs = now - startTs;
-  const tokens = estimateTokens(text);
-  // 仅当经过时间和文本长度均超过阈值时才计算速率，避免短时采样偏差
-  const tps = (elapsedMs >= MIN_MS_FOR_RATE && text.length >= MIN_CHARS_FOR_RATE)
-    ? Math.round((tokens * 1000) / elapsedMs)
-    : null;
+  const elapsedMs = Date.now() - startTs;
+  const elapsedSec = Math.floor(elapsedMs / 1000);
 
   // 获取终端列数并计算每行可用字符数（减去两侧边距）
   const cols = process.stdout.columns ?? 80;
@@ -104,7 +78,7 @@ export function StreamingCard({ text, done = false, aborted = false, startTs, ti
           glyph={'\u2039'}
           tone={TONE.ok}
           title={doneTitle ?? t().reply}
-          right={tps !== null ? <Text dimColor>{formatRate(tps)}</Text> : undefined}
+          right={elapsedSec > 0 ? <Text dimColor>{`${elapsedSec}s`}</Text> : undefined}
         />
         <Markdown text={text} />
       </Card>
@@ -119,7 +93,7 @@ export function StreamingCard({ text, done = false, aborted = false, startTs, ti
         title={headLabel}
         right={
           <>
-            {tps !== null && <Text dimColor>{formatRate(tps)}</Text>}
+            {elapsedSec > 0 && <Text dimColor>{`${elapsedSec}s`}</Text>}
             {!aborted && <Spinner kind="braille" color={TONE.brand} />}
           </>
         }

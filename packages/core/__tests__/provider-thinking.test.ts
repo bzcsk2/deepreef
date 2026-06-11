@@ -2,19 +2,14 @@ import { describe, it, expect } from "vitest"
 import { createDeepSeekCapabilities } from "../src/provider-thinking.js"
 
 describe("AS1: Provider thinking capabilities", () => {
-  it("declares all four thinking modes", () => {
+  it("declares three thinking modes", () => {
     const caps = createDeepSeekCapabilities("deepseek")
-    expect(caps.supportedModes).toEqual(["off", "open", "high", "auto"])
+    expect(caps.supportedModes).toEqual(["off", "open", "high"])
   })
 
   it("mapMode('off') disables thinking", () => {
     const caps = createDeepSeekCapabilities("deepseek")
     expect(caps.mapMode("off")).toEqual({ thinking: { type: "disabled" } })
-  })
-
-  it("mapMode('auto') enables thinking without effort", () => {
-    const caps = createDeepSeekCapabilities("deepseek")
-    expect(caps.mapMode("auto")).toEqual({ thinking: { type: "enabled" } })
   })
 
   it("deepseek: mapMode('open') enables thinking without reasoningEffort", () => {

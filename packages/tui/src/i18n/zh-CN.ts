@@ -5,6 +5,7 @@ export const zhCN: Strings = {
   placeholder: '输入消息...',
   queued: (n) => ` (${n} 条排队)`,
   processing: ' (处理中...)',
+  pasteSummary: (n) => `[粘贴 +${n} 行]`,
   // Permission
   allow: '允许',
   alwaysAllow: '始终允许',

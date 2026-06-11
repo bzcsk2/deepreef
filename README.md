@@ -478,7 +478,7 @@ bun run typecheck  # TypeScript 编译检查
 | [TODO](./TODO.md) | 当前任务与优先级 |
 | [DONE](./DONE.md) | 已完成记录与已知限制 |
 | [FindBug](./FindBug.md) | Agent 系统 Bug 模式与审查指南 |
-| [ADVICE](./ADVICE.md) | 历史规划归档入口；当前任务见 TODO，完成记录见 DONE |
+| [ADVICE](./docs/ADVICE.md) | 审核 Agent 给开发 Agent 的审核意见与下一步动作 |
 
 ---
 

@@ -240,17 +240,7 @@ describe("saveLastConfig / loadConfig 持久化", () => {
     })
   })
 
-  describe("free-auto", () => {
-    it("should be virtual and keyless", () => {
-      const fa = PROVIDERS["free-auto"]
-      expect(fa).toBeDefined()
-      expect(fa.label).toBe("Free Auto")
-      expect(fa.virtual).toBe(true)
-      expect(fa.keyless).toBe(true)
-      expect(fa.baseUrl).toBe("")
-      expect(fa.requiresKey).toBe(false)
-    })
-  })
+
 
   describe("openai-compatible", () => {
     it("should have correct config", () => {
@@ -286,13 +276,6 @@ describe("saveLastConfig / loadConfig 持久化", () => {
       delete process.env.DEEPREEF_PROVIDER
     })
 
-    it("should handle free-auto as virtual provider", () => {
-      process.env.DEEPREEF_PROVIDER = "free-auto"
-      const cfg = loadConfig()
-      expect(cfg.provider).toBe("free-auto")
-      expect(cfg.apiKey).toBe("")
-      expect(cfg.baseUrl).toBe("")
-      delete process.env.DEEPREEF_PROVIDER
-    })
+
   })
 })

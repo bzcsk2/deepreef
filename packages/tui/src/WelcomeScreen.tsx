@@ -44,15 +44,15 @@ interface WelcomeScreenProps {
  * 使用 figlet ANSI Regular 字体渲染（实心方块字符），
  * 每行使用不同的渐变色，从蓝色过渡到紫色。
  */
-function Title(): React.ReactElement {
-  const ascii = figlet.textSync('deepseek', { font: 'ANSI Regular' }).trim().split('\n');
-  // 渐变色列表：从蓝色到紫色
-  const colors: any[] = ['#4FA3F7', '#5C94F9', '#6985FA', '#7676FC', '#866FFB', '#9868F9', '#B064F6', '#C15FF3', '#CA5FF2'];
+// 静态缓存：figlet 渲染结果在模块加载时计算一次，避免每次 WelcomeScreen 渲染时同步阻塞
+const DEEPREEF_ASCII = figlet.textSync('deepseek', { font: 'ANSI Regular' }).trim().split('\n');
+const DEEPREEF_COLORS: any[] = ['#4FA3F7', '#5C94F9', '#6985FA', '#7676FC', '#866FFB', '#9868F9', '#B064F6', '#C15FF3', '#CA5FF2'];
 
+function Title(): React.ReactElement {
   return (
     <Box flexDirection="column" justifyContent="center">
-      {ascii.map((line, i) => (
-        <Text key={i} bold color={colors[i % colors.length]}>{line}</Text>
+      {DEEPREEF_ASCII.map((line, i) => (
+        <Text key={i} bold color={DEEPREEF_COLORS[i % DEEPREEF_COLORS.length]}>{line}</Text>
       ))}
     </Box>
   );

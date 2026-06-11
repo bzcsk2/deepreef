@@ -1,19 +1,24 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Box, Text, AlternateScreen, instances, SHOW_CURSOR, EXIT_ALT_SCREEN, useInput } from '@deepreef/ink';
+import { Box, AlternateScreen, instances, SHOW_CURSOR, EXIT_ALT_SCREEN, useInput } from '@deepreef/ink';
+import type { ScrollBoxHandle } from '@deepreef/ink';
 import { writeSync } from 'node:fs';
 import type { ReasonixEngine } from '@deepreef/core';
 import type { ChatMessage, DeepreefConfig } from '@deepreef/core';
 import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig } from '@deepreef/core';
 import { createBridge, timelineFromMessages, type BridgeState } from './bridge.js';
+import { TranscriptProvider } from './store/TranscriptContext.js';
+import { BridgeRuntimeProvider } from './store/BridgeRuntimeContext.js';
+import { isBridgeRuntimeSplitEnabled, isTranscriptStoreEnabled } from './store/feature.js';
+import { WelcomeWhenEmpty } from './WelcomeWhenEmpty.js';
+import { BridgeDeepiPromptInput, BridgeScrollAlerts, BridgeStatusBar } from './BridgeConnected.js';
 import { DeepiMessages } from './DeepiMessages.js';
-import { DeepiPromptInput, type DeepiPromptInputHandle } from './DeepiPromptInput.js';
-import { StatusBar } from './StatusBar.js';
+import type { DeepiPromptInputHandle } from './DeepiPromptInput.js';
 import { FullscreenLayout } from './FullscreenLayout.js';
+import { useMessageScroll } from './useMessageScroll.js';
 import { WelcomeScreen } from './WelcomeScreen.js';
 import { isFullscreenEnvEnabled } from './fullscreen.js';
 import { ModelPicker } from './ModelPicker.js';
 import { SessionPicker } from './SessionPicker.js';
-import { PermissionPrompt } from './PermissionPrompt.js';
 import { CommandAutocomplete } from './CommandAutocomplete.js';
 import { SearchOverlay } from './SearchOverlay.js';
 import { CenteredStage } from './CenteredStage.js';
@@ -42,9 +47,8 @@ let exitPending = false;
 
 /**
  * 模块级回调 —— 由 App 组件挂载时注入。
- * _cancel:       取消当前 LLM 请求
- * _interrupt:    中断引擎执行
- * _setStatusMsg: 更新状态栏提示文字
+ * 模块级回调（供 doInterrupt 与 SIGINT handler 共享）。
+ * 注意：这些变量在每次 App 渲染时被重新赋值，单实例 TUI 下安全。
  */
 let _cancel: (() => void) | null = null;
 let _interrupt: (() => void) | null = null;
@@ -119,8 +123,7 @@ const initialState: BridgeState = {
   warnings: [],
   error: null,
   permissionPrompt: null,
-  thinkingMode: 'off',
-  effectiveThinkingMode: undefined,
+  questionPrompt: null,
   reasoningActive: false,
 };
 
@@ -210,11 +213,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const persistedAgent = persistedSettings.agent && (AGENTS[persistedSettings.agent] || defaultAgentRegistry.get(persistedSettings.agent))
     ? persistedSettings.agent
     : undefined;
-  const [bridgeState, setBridgeState] = useState<BridgeState>(() => ({
-    ...initialState,
-    thinkingMode: persistedThinkingMode ?? engine.getThinkingMode?.() ?? 'off',
-  }));
+  const [thinkingMode, setThinkingMode] = useState(persistedThinkingMode ?? 'off');
+  const [bridgeState, setBridgeState] = useState<BridgeState>(() => ({ ...initialState }));
   const bridge = useMemo(() => createBridge(engine, setBridgeState, onUserInput, beforeSubmit), [engine, onUserInput, beforeSubmit]);
+  const transcriptReader = useMemo(() => bridge.getTranscriptReader(), [bridge]);
+  const bridgeRuntime = useMemo(() => bridge.getBridgeRuntime(), [bridge]);
+  const bridgeSplit = isBridgeRuntimeSplitEnabled();
   const bridgeRef = useRef(bridge);
   bridgeRef.current = bridge;
   const contextTotal = engine.getContextWindow?.() ?? config.contextWindow ?? 128_000;
@@ -222,25 +226,46 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const mountedRef = useRef(true);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const appendMessage = useCallback((message: ChatMessage) => {
-    setBridgeState(prev => ({
-      ...prev,
-      timeline: [...prev.timeline, {
-        id: `message-${crypto.randomUUID()}`,
-        kind: 'message',
-        message,
-      }],
-    }));
+    bridgeRef.current.appendTimelineMessage(message);
   }, []);
 
-  // Wire module-level callbacks for doInterrupt()
+  // 模块级回调在每次渲染更新（单实例 TUI 安全）。SIGINT handler 使用独立 ref 避免闭包陈旧。
   _cancel = () => bridgeRef.current.cancel();
   _interrupt = () => engineRef.current.interrupt();
   _setStatusMsg = setStatusMessage;
 
-  // SIGINT handler (Linux: Ctrl+C generates signal, not character)
+  const sigCancelRef = useRef<(() => void) | null>(null);
+  const sigInterruptRef = useRef<(() => void) | null>(null);
+  const sigSetMsgRef = useRef<((m: string | null) => void) | null>(null);
+  sigCancelRef.current = _cancel;
+  sigInterruptRef.current = _interrupt;
+  sigSetMsgRef.current = setStatusMessage;
+
+  // SIGINT handler（使用 ref 读取最新值，降低严格模式风险）
   useEffect(() => {
-    process.on('SIGINT', doInterrupt);
-    return () => { process.off('SIGINT', doInterrupt); };
+    const handler = () => {
+      if (exitPending) return;
+      const cancel = sigCancelRef.current;
+      const interrupt = sigInterruptRef.current;
+      const setMsg = sigSetMsgRef.current;
+
+      if (tuiState === 'loading') {
+        cancel?.();
+        return;
+      }
+      if (exitTimer) {
+        clearTimeout(exitTimer);
+        exitTimer = null;
+        exitPending = true;
+        interrupt?.();
+        cleanupTerminal();
+        process.exit(0);
+      }
+      exitTimer = setTimeout(() => { exitTimer = null; setMsg?.(null); }, 2000);
+      setMsg?.(t().pressCtrlC);
+    };
+    process.on('SIGINT', handler);
+    return () => { process.off('SIGINT', handler); };
   }, []);
 
   // Track mounted state
@@ -263,7 +288,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const handleCancel = useCallback(() => {
     bridgeRef.current.cancel();
   }, []);
-  const scrollRef = useRef<any>(null);
+  const scrollRef = useRef<ScrollBoxHandle | null>(null);
   const promptInputRef = useRef<DeepiPromptInputHandle>(null);
 
   const [activeProvider, setActiveProvider] = useState(config.provider ?? 'zen'); // 当前选中的 LLM 提供商
@@ -278,6 +303,16 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const [showSkillModal, setShowSkillModal] = useState(false);                   // 是否显示技能管理弹窗覆盖层
   const [showContextModal, setShowContextModal] = useState(false);               // 是否显示上下文策略管理弹窗覆盖层
   const [showSearch, setShowSearch] = useState(false);                           // 是否显示搜索覆盖层（Ctrl+F 触发）
+  const modalBlocksScroll = showSearch
+    || showModelPicker
+    || showSessionPicker
+    || showAgentMenu
+    || showLangMenu
+    || showThinkingMenu
+    || showSkillModal
+    || showContextModal
+    || showAutocomplete;
+  useMessageScroll(scrollRef, !modalBlocksScroll);
   const [activeAgent, setActiveAgent] = useState(persistedAgent ?? engine.getAgentName?.() ?? 'build'); // 当前 Agent 名称
   const [activeSkills, setActiveSkills] = useState(persistedSettings.activeSkills ?? engine.getActiveSkills?.() ?? []); // 当前已启用的技能列表
   const [inputHistory, setInputHistory] = useState<string[]>([]);                // 输入历史记录（最多 MAX_INPUT_HISTORY 条）
@@ -288,13 +323,10 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     if (persistedAgent) {
       engineRef.current.switchAgent(persistedAgent);
     }
-    if (persistedThinkingMode) {
-      engineRef.current.setThinkingMode(persistedThinkingMode as any);
-    }
     if (persistedSettings.activeSkills) {
       engineRef.current.setActiveSkills(persistedSettings.activeSkills);
     }
-  }, [persistedAgent, persistedSettings.activeSkills, persistedThinkingMode]);
+  }, [persistedAgent, persistedSettings.activeSkills]);
 
   useEffect(() => {
     let cancelled = false;
@@ -367,12 +399,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       if (command.mode) {
         const error = validateThinkingMode(command.mode);
         if (error) {
-          appendMessage({ role: 'assistant' as const, content: `${error}\nCurrent: ${bridgeState.thinkingMode}` });
+          appendMessage({ role: 'assistant' as const, content: `${error}\nCurrent: ${thinkingMode}` });
           return;
         }
-        engineRef.current.setThinkingMode(command.mode as any);
         saveTuiSettings({ thinkingMode: command.mode });
-        setBridgeState(prev => ({ ...prev, thinkingMode: command.mode, effectiveThinkingMode: undefined, reasoningActive: false }));
+        setThinkingMode(command.mode);
+        setBridgeState(prev => ({ ...prev, reasoningActive: false }));
         appendMessage({ role: 'assistant' as const, content: `Thinking mode set to: ${command.mode}` });
         return;
       }
@@ -385,6 +417,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     }
     const taggedSkillNames = extractSkillTags(submitted);
     if (taggedSkillNames.length === 0) {
+      scrollRef.current?.scrollToBottom();
       bridge.submit(submitted);
       return;
     }
@@ -397,13 +430,14 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         ...taggedSkills,
       ];
       engineRef.current.setActiveSkills(merged);
+      scrollRef.current?.scrollToBottom();
       try {
         await bridge.submit(submitted);
       } finally {
         engineRef.current.setActiveSkills(previousSkills);
       }
     })();
-  }, [activeAgent, appendMessage, bridge]);
+  }, [activeAgent, appendMessage, bridge, thinkingMode]);
 
   /** Agent 切换回调：调用引擎切换 Agent 并更新显示名称 */
   const handleAgentChoose = useCallback((next: string) => {
@@ -421,19 +455,19 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     appendMessage({ role: 'assistant' as const, content: t().switchedLang(next) });
   }, [appendMessage]);
 
-  /** 推理档位选择回调：更新引擎和 bridge 的 thinkingMode */
+  /** 推理档位选择回调：更新本地 thinkingMode 并清除 reasoningActive */
   const handleThinkingChoose = useCallback((mode: string) => {
     const error = validateThinkingMode(mode);
     if (error) {
-      appendMessage({ role: 'assistant' as const, content: `${error}\nCurrent: ${bridgeState.thinkingMode}` });
+      appendMessage({ role: 'assistant' as const, content: `${error}\nCurrent: ${thinkingMode}` });
       return;
     }
-    engineRef.current.setThinkingMode(mode as any);
     saveTuiSettings({ thinkingMode: mode });
-    setBridgeState(prev => ({ ...prev, thinkingMode: mode, effectiveThinkingMode: undefined, reasoningActive: false }));
+    setThinkingMode(mode);
+    setBridgeState(prev => ({ ...prev, reasoningActive: false }));
     setShowThinkingMenu(false);
     appendMessage({ role: 'assistant' as const, content: `Thinking mode set to: ${mode}` });
-  }, [appendMessage, bridgeState.thinkingMode]);
+  }, [appendMessage, thinkingMode]);
 
   /** 模型选择回调：更新引擎配置并保存至持久化存储 */
   const handleModelSelect = useCallback((sel: { provider: string; model: string; apiKey: string; baseUrl: string }) => {
@@ -464,11 +498,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     const msgs = await engineRef.current.loadSession(sessionId);
     // Guard against post-unmount setState
     if (!mountedRef.current) return;
-    // Reset bridge state with recovered messages
+    const recoveredTimeline = timelineFromMessages(msgs);
     setBridgeState({
       ...initialState,
-      timeline: timelineFromMessages(msgs),
+      ...(isTranscriptStoreEnabled() ? {} : { timeline: recoveredTimeline }),
     });
+    bridgeRef.current.resetBridgeRuntime();
+    bridgeRef.current.replaceTranscript(recoveredTimeline);
     appendMessage({ role: 'assistant' as const, content: t().resumedSession(sessionId.slice(0, 8), msgs.length) });
   }, [appendMessage]);
 
@@ -478,9 +514,16 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   }, []);
 
   /** 权限请求回调：向引擎传递用户的允许/拒绝决策 */
-  const handlePermissionSelect = useCallback((allow: boolean, alwaysAllow?: boolean) => {
-    engineRef.current.respondPermission(allow, alwaysAllow);
-    setBridgeState(prev => ({ ...prev, permissionPrompt: null }));
+  const handlePermissionSelect = useCallback((reply: 'once' | 'always' | 'reject', message?: string) => {
+    bridgeRef.current.respondPermission(reply, message);
+  }, []);
+
+  const handleQuestionReply = useCallback((requestId: string, answers: string[][]) => {
+    bridgeRef.current.respondQuestion(requestId, answers);
+  }, []);
+
+  const handleQuestionReject = useCallback((requestId: string) => {
+    bridgeRef.current.rejectQuestion(requestId);
   }, []);
 
   const providerLabel = getProviderLabel(activeProvider);
@@ -607,23 +650,28 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   }
 
   // ---- 主内容区（可滚动区域）：消息时间线、搜索结果、欢迎屏、警告/错误提示、权限请求弹窗 ----
+  const timelineProp = isTranscriptStoreEnabled() ? undefined : bridgeState.timeline;
   const scrollableContent = (
     <>
       <SearchOverlay
-        timeline={bridgeState.timeline}
+        timeline={timelineProp}
         isOpen={showSearch}
         onClose={() => setShowSearch(false)}
       />
       <DeepiMessages
-        timeline={bridgeState.timeline}
+        timeline={timelineProp}
         scrollRef={scrollRef}
       />
-      {bridgeState.timeline.length === 0 && !bridgeState.isLoading && !bridgeState.error ? (
+      <WelcomeWhenEmpty
+        legacyEmpty={bridgeState.timeline.length === 0}
+        isLoading={bridgeSplit ? undefined : bridgeState.isLoading}
+        error={bridgeSplit ? undefined : bridgeState.error}
+      >
         <WelcomeScreen
           model={activeModel}
           provider={providerLabel}
           agent={AGENTS[activeAgent]?.label ?? defaultAgentRegistry.get(activeAgent)?.label ?? activeAgent}
-          thinkingMode={bridgeState.thinkingMode}
+          thinkingMode={thinkingMode}
           contextMode={contextPolicy.mode}
           skillCount={activeSkills.length}
           pluginCount={pluginCount}
@@ -631,24 +679,18 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           assetCounts={assetCounts ?? { skills: 0, agents: 0, rules: 0, commands: 0, mcp: 0, hooks: 0 }}
           diagnosticCounts={diagnosticCounts ?? { errors: 0, warnings: 0 }}
         />
-      ) : null}
-      {bridgeState.warnings.map((w, i) => (
-        <Box key={i} paddingX={1}>
-          <Text color="warning">⚠ {w}</Text>
-        </Box>
-      ))}
-      {bridgeState.error && (
-        <Box paddingX={1} marginTop={1}>
-          <Text color="error">✗ {bridgeState.error}</Text>
-        </Box>
-      )}
-      {bridgeState.permissionPrompt && (
-        <PermissionPrompt
-          toolName={bridgeState.permissionPrompt.toolName}
-          args={bridgeState.permissionPrompt.args}
-          onSelect={handlePermissionSelect}
-        />
-      )}
+      </WelcomeWhenEmpty>
+      <BridgeScrollAlerts
+        onPermissionSelect={handlePermissionSelect}
+        onQuestionReply={handleQuestionReply}
+        onQuestionReject={handleQuestionReject}
+        legacy={bridgeSplit ? undefined : {
+          warnings: bridgeState.warnings,
+          error: bridgeState.error,
+          permissionPrompt: bridgeState.permissionPrompt,
+          questionPrompt: bridgeState.questionPrompt,
+        }}
+      />
     </>
   );
 
@@ -671,7 +713,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           onClose={() => setShowAutocomplete(false)}
         />
       )}
-      <DeepiPromptInput
+      <BridgeDeepiPromptInput
         ref={promptInputRef}
         onSubmit={handleSubmit}
         history={inputHistory}
@@ -680,50 +722,59 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           setInputText(text);
           setShowAutocomplete(text.startsWith('/') && !text.includes(' '));
         }}
-        isLoading={bridgeState.isLoading}
-        disabled={!!bridgeState.permissionPrompt}
-        queueCount={bridgeState.messageQueue.length}
         onCancel={handleCancel}
         suppressHistory={showAutocomplete}
         suppressSubmit={showAutocomplete}
+        legacy={bridgeSplit ? undefined : {
+          isLoading: bridgeState.isLoading,
+          disabled: !!bridgeState.permissionPrompt || !!bridgeState.questionPrompt,
+          queueCount: bridgeState.messageQueue.length,
+        }}
       />
-      <StatusBar
-        model={bridgeState.routedModel ?? activeModel}
+      <BridgeStatusBar
+        model={activeModel}
         provider={providerLabel}
         agent={AGENTS[activeAgent]?.label ?? defaultAgentRegistry.get(activeAgent)?.label ?? activeAgent}
-        inputTokens={bridgeState.tokens.input}
-        outputTokens={bridgeState.tokens.output}
-        cacheHitTokens={bridgeState.tokens.cacheHit}
-        cacheMissTokens={bridgeState.tokens.cacheMiss}
-        contextUsed={bridgeState.contextUsage}
         contextTotal={contextTotal}
-        pendingInstructionCount={bridgeState.pendingInstructionCount}
-        statusMessage={bridgeState.routedModelDetail ? `${bridgeState.routedModel} ${bridgeState.routedModelDetail}` : statusMessage}
-        thinkingMode={bridgeState.thinkingMode}
-        effectiveThinkingMode={bridgeState.effectiveThinkingMode}
-        reasoningActive={bridgeState.reasoningActive}
-        tier={engine.getTier?.()?.label}
+        statusMessage={statusMessage}
+        thinkingMode={thinkingMode}
         cwd={process.cwd()}
+        legacy={bridgeSplit ? undefined : {
+          inputTokens: bridgeState.tokens.input,
+          outputTokens: bridgeState.tokens.output,
+          cacheHitTokens: bridgeState.tokens.cacheHit,
+          cacheMissTokens: bridgeState.tokens.cacheMiss,
+          contextUsed: bridgeState.contextUsage,
+          pendingInstructionCount: bridgeState.pendingInstructionCount,
+          reasoningActive: bridgeState.reasoningActive,
+        }}
       />
     </Box>
   );
 
   if (isFullscreenEnvEnabled()) {
     return (
-      <AlternateScreen>
-        <FullscreenLayout
-          scrollRef={scrollRef}
-          scrollable={scrollableContent}
-          bottom={bottomContent}
-        />
-      </AlternateScreen>
+      <BridgeRuntimeProvider runtime={bridgeRuntime}>
+        <TranscriptProvider reader={transcriptReader}>
+          {/* 禁用 mouseTracking，让终端原生支持文本选取（用户明确不需要鼠标交互） */}
+          <AlternateScreen mouseTracking={false}>
+            <FullscreenLayout
+              scrollRef={scrollRef}
+              scrollable={scrollableContent}
+              bottom={bottomContent}
+            />
+          </AlternateScreen>
+        </TranscriptProvider>
+      </BridgeRuntimeProvider>
     );
   }
 
   return (
-    <>
-      {scrollableContent}
-      {bottomContent}
-    </>
+    <BridgeRuntimeProvider runtime={bridgeRuntime}>
+      <TranscriptProvider reader={transcriptReader}>
+        {scrollableContent}
+        {bottomContent}
+      </TranscriptProvider>
+    </BridgeRuntimeProvider>
   );
 }

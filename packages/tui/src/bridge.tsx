@@ -1,6 +1,15 @@
-import type { ChatMessage, ReasonixEngine } from '@deepreef/core';
+import type { ChatMessage, ReasonixEngine, QuestionRequest, PermissionRequest, PermissionReply } from '@deepreef/core';
 import { setTUIState } from './App.js';
+import { DeltaBatcher, resolveDeltaFlushMs } from './delta-batcher.js';
 import { t } from './i18n/index.js';
+import {
+  isTranscriptStoreEnabled,
+  isBridgeRuntimeSplitEnabled,
+  TranscriptStore,
+  TranscriptReader,
+  transcriptToTimeline,
+  BridgeRuntime,
+} from './store/index.js';
 
 export interface ToolStatus {
   key: string;
@@ -27,14 +36,9 @@ export interface BridgeState {
   contextUsage: number;
   warnings: string[];
   error: string | null;
-  permissionPrompt: { toolName: string; args: Record<string, unknown> } | null;
-  thinkingMode: string;
-  effectiveThinkingMode: string | undefined;
+  permissionPrompt: PermissionRequest | null;
+  questionPrompt: QuestionRequest | null;
   reasoningActive: boolean;
-  /** Free Auto routing: actual provider:model selected for current request */
-  routedModel?: string;
-  /** Free Auto routing: failover info */
-  routedModelDetail?: string;
 }
 
 function historyRoundId(index: number): string {
@@ -90,6 +94,42 @@ function parseArgs(raw: string | undefined): Record<string, unknown> {
   }
 }
 
+function applyAssistantToTimeline(
+  items: TimelineItem[],
+  item: Extract<TimelineItem, { kind: 'assistant_text' }>,
+): TimelineItem[] {
+  const index = items.findIndex(existing => existing.id === item.id);
+  if (index !== -1) {
+    const next = [...items];
+    next[index] = item;
+    return next;
+  }
+
+  const firstTool = items.findIndex(existing =>
+    'roundId' in existing
+    && existing.roundId === item.roundId
+    && existing.kind === 'tool',
+  );
+  if (firstTool === -1) return [...items, item];
+
+  const next = [...items];
+  next.splice(firstTool, 0, item);
+  return next;
+}
+
+function applyReasoningToTimeline(
+  items: TimelineItem[],
+  item: Extract<TimelineItem, { kind: 'reasoning' }>,
+): TimelineItem[] {
+  const index = items.findIndex(existing => existing.id === item.id);
+  if (index !== -1) {
+    const next = [...items];
+    next[index] = item;
+    return next;
+  }
+  return [...items, item];
+}
+
 function isTransientToolLoopWarning(message: string): boolean {
   return message.startsWith('Tool call loop detected:');
 }
@@ -102,23 +142,109 @@ export function createBridge(
 ): {
   submit: (text: string) => Promise<void>;
   cancel: () => void;
+  respondPermission: (reply: PermissionReply, message?: string) => void;
+  respondQuestion: (requestId: string, answers: string[][]) => void;
+  rejectQuestion: (requestId: string) => void;
+  /** Store 路径下用 timeline 全量同步 transcript（session 恢复等） */
+  replaceTranscript: (items: TimelineItem[]) => void;
+  /** 追加一条消息到 transcript（系统提示 / 模型切换等） */
+  appendTimelineMessage: (message: ChatMessage) => void;
+  /** Store 路径下的 React 订阅 reader */
+  getTranscriptReader: () => TranscriptReader | null;
+  /** 拆分后的 bridge 运行时 store */
+  getBridgeRuntime: () => BridgeRuntime | null;
+  /** 重置拆分后的 bridge 运行时（session 切换） */
+  resetBridgeRuntime: () => void;
 } {
   let running = false;
   let processingQueue = false;
   let activeRequest = 0;
+  const transcriptStore = isTranscriptStoreEnabled() ? new TranscriptStore() : null;
+  const transcriptReader = transcriptStore ? new TranscriptReader(transcriptStore) : null;
+  const bridgeRuntime = isBridgeRuntimeSplitEnabled() ? new BridgeRuntime() : null;
+
+  /**
+   * 提交 bridge 状态变更；拆分模式下写入子 store 并跳过 React bridgeState 更新。
+   */
+  const commitBridge = (updater: (prev: BridgeState) => Partial<BridgeState>): void => {
+    setState(prev => {
+      const patch = updater(prev);
+      if (bridgeRuntime && transcriptStore) {
+        // 副作用移出 updater，避免 React 严格模式 double-invoke 导致 applyPatch 被调用两次
+        queueMicrotask(() => bridgeRuntime.applyPatch(patch));
+        return prev;
+      }
+      return { ...prev, ...patch };
+    });
+  };
+
+  const publishTimeline = (patch?: (prev: BridgeState) => Partial<BridgeState>) => {
+    if (transcriptStore) {
+      if (patch) commitBridge(patch);
+      return;
+    }
+
+    if (patch) {
+      commitBridge(patch);
+      return;
+    }
+
+    commitBridge(() => ({}));
+  };
+
+  const hydrateStoreFromTimeline = (items: TimelineItem[]) => {
+    if (!transcriptStore || !transcriptReader) return;
+    transcriptStore.replaceAll(items);
+    transcriptReader.invalidate();
+  };
+
+  const replaceTranscript = (items: TimelineItem[]) => {
+    if (!transcriptStore) return;
+    if (transcriptStore.hasLiveTouchedEntries()) {
+      transcriptStore.mergeHydration(items);
+    } else {
+      hydrateStoreFromTimeline(items);
+    }
+    transcriptReader?.invalidate();
+  };
+
+  const appendTimelineMessage = (message: ChatMessage) => {
+    if (transcriptStore) {
+      transcriptStore.appendMessage(`message-${crypto.randomUUID()}`, message);
+      return;
+    }
+    setState(prev => ({
+      ...prev,
+      timeline: [
+        ...prev.timeline,
+        { id: `message-${crypto.randomUUID()}`, kind: 'message', message },
+      ],
+    }));
+  };
 
   const updateTimeline = (mutate: (items: TimelineItem[]) => TimelineItem[]) => {
+    if (transcriptStore) {
+      transcriptStore.replaceAll(mutate(transcriptStore.toTimelineItems()));
+      transcriptReader?.invalidate();
+      publishTimeline();
+      return;
+    }
     setState(prev => ({ ...prev, timeline: mutate(prev.timeline) }));
   };
 
   const clearTransientWarnings = () => {
-    setState(prev => {
+    commitBridge(prev => {
       const warnings = prev.warnings.filter(warning => !isTransientToolLoopWarning(warning));
-      return warnings.length === prev.warnings.length ? prev : { ...prev, warnings };
+      return warnings.length === prev.warnings.length ? {} : { warnings };
     });
   };
 
   const upsertItem = (item: TimelineItem, update?: (existing: TimelineItem) => TimelineItem) => {
+    if (transcriptStore) {
+      transcriptStore.upsertItem(item, update);
+      publishTimeline();
+      return;
+    }
     updateTimeline(items => {
       const index = items.findIndex(existing => existing.id === item.id);
       if (index === -1) return [...items, item];
@@ -129,41 +255,28 @@ export function createBridge(
   };
 
   const upsertAssistantText = (item: Extract<TimelineItem, { kind: 'assistant_text' }>) => {
-    updateTimeline(items => {
-      const index = items.findIndex(existing => existing.id === item.id);
-      if (index !== -1) {
-        const next = [...items];
-        next[index] = item;
-        return next;
-      }
-
-      const firstDetail = items.findIndex(existing =>
-        'roundId' in existing
-        && existing.roundId === item.roundId
-        && (existing.kind === 'reasoning' || existing.kind === 'tool')
-      );
-      if (firstDetail === -1) return [...items, item];
-
-      const next = [...items];
-      next.splice(firstDetail, 0, item);
-      return next;
-    });
+    if (transcriptStore) {
+      transcriptStore.upsertAssistantText(item);
+      publishTimeline();
+      return;
+    }
+    updateTimeline(items => applyAssistantToTimeline(items, item));
   };
 
   const processQueue = () => {
     if (running || processingQueue) return;
     processingQueue = true;
-    setState(prev => {
+    commitBridge(prev => {
       const [next, ...rest] = prev.messageQueue;
       if (!next) {
         processingQueue = false;
-        return prev;
+        return {};
       }
-      setTimeout(() => {
+      queueMicrotask(() => {
         processingQueue = false;
         void submit(next, true);
-      }, 0);
-      return { ...prev, messageQueue: rest };
+      });
+      return { messageQueue: rest };
     });
   };
 
@@ -176,18 +289,17 @@ export function createBridge(
         onUserInput?.(text);
       }
       if (result.status === 'queued') {
-        setState(prev => ({ ...prev, pendingInstructionCount: result.queueLength }));
+        commitBridge(() => ({ pendingInstructionCount: result.queueLength }));
         return;
       }
       if (result.status === 'full') {
-        setState(prev => ({
-          ...prev,
+        commitBridge(prev => ({
           pendingInstructionCount: result.queueLength,
           messageQueue: [...prev.messageQueue, text],
         }));
         return;
       }
-      setState(prev => ({ ...prev, messageQueue: [...prev.messageQueue, text] }));
+      commitBridge(prev => ({ messageQueue: [...prev.messageQueue, text] }));
       return;
     }
 
@@ -209,14 +321,65 @@ export function createBridge(
     const toolItemIds = new Map<string, string>();
     const toolOutputs = new Map<string, string>();
     let toolSequence = 0;
+    let assistantStartTs = 0;
+    let reasoningStartTs = 0;
+
+    const flushStreamingUI = () => {
+      if (transcriptStore) {
+        publishTimeline(prev => ({
+          reasoningActive: reasoningId && reasoningText ? true : prev.reasoningActive,
+        }));
+        return;
+      }
+
+      setState(prev => {
+        let timeline = prev.timeline;
+        let reasoningActive = prev.reasoningActive;
+
+        if (assistantId && assistantText) {
+          timeline = applyAssistantToTimeline(timeline, {
+            id: assistantId,
+            kind: 'assistant_text',
+            roundId,
+            text: assistantText,
+            isStreaming: true,
+            startTs: assistantStartTs,
+          });
+        }
+
+        if (reasoningId && reasoningText) {
+          reasoningActive = true;
+          timeline = applyReasoningToTimeline(timeline, {
+            id: reasoningId,
+            kind: 'reasoning',
+            roundId,
+            text: reasoningText,
+            isStreaming: true,
+            startTs: reasoningStartTs,
+          });
+        }
+
+        if (timeline === prev.timeline && reasoningActive === prev.reasoningActive) {
+          return prev;
+        }
+        const patch = { timeline, reasoningActive };
+        bridgeRuntime?.applyPatch(patch);
+        return { ...prev, ...patch };
+      });
+    };
+
+    const streamBatcher = new DeltaBatcher(resolveDeltaFlushMs(), flushStreamingUI);
 
     const startRound = () => {
+      streamBatcher.cancel();
       roundNumber += 1;
       roundId = `turn-${requestId}-round-${roundNumber}-${crypto.randomUUID()}`;
       assistantId = null;
       reasoningId = null;
       assistantText = '';
       reasoningText = '';
+      assistantStartTs = 0;
+      reasoningStartTs = 0;
       toolCallArgs.clear();
       activeToolKeys.clear();
       toolItemIds.clear();
@@ -225,37 +388,65 @@ export function createBridge(
     };
 
     const finalizeRound = () => {
+      streamBatcher.flushNow();
       if (assistantId) {
         const id = assistantId;
-        upsertItem({
-          id,
-          kind: 'assistant_text',
-          roundId,
-          text: assistantText,
-          isStreaming: false,
-          startTs: Date.now(),
-        }, existing => existing.kind === 'assistant_text' ? { ...existing, isStreaming: false } : existing);
+        if (transcriptStore) {
+          if (assistantText) {
+            transcriptStore.ensureTextPart(id, 'assistant_text', roundId, assistantStartTs || Date.now());
+            transcriptStore.setTextPart(id, assistantText, false);
+          }
+          transcriptStore.finalizePart(id);
+        } else {
+          upsertItem({
+            id,
+            kind: 'assistant_text',
+            roundId,
+            text: assistantText,
+            isStreaming: false,
+            startTs: assistantStartTs || Date.now(),
+          }, existing => existing.kind === 'assistant_text'
+            ? { ...existing, text: assistantText, isStreaming: false }
+            : existing);
+        }
       }
       if (reasoningId) {
         const id = reasoningId;
-        upsertItem({
-          id,
-          kind: 'reasoning',
-          roundId,
-          text: reasoningText,
-          isStreaming: false,
-          startTs: Date.now(),
-        }, existing => existing.kind === 'reasoning' ? { ...existing, isStreaming: false } : existing);
+        if (transcriptStore) {
+          if (reasoningText) {
+            transcriptStore.ensureTextPart(id, 'reasoning', roundId, reasoningStartTs || Date.now());
+            transcriptStore.setTextPart(id, reasoningText, false);
+          }
+          transcriptStore.finalizePart(id);
+        } else {
+          upsertItem({
+            id,
+            kind: 'reasoning',
+            roundId,
+            text: reasoningText,
+            isStreaming: false,
+            startTs: reasoningStartTs || Date.now(),
+          }, existing => existing.kind === 'reasoning'
+            ? { ...existing, text: reasoningText, isStreaming: false }
+            : existing);
+        }
       }
+      if (transcriptStore) publishTimeline();
     };
 
     const ensureAssistant = () => {
-      if (!assistantId) assistantId = `${roundId}-assistant`;
+      if (!assistantId) {
+        assistantId = `${roundId}-assistant`;
+        assistantStartTs = Date.now();
+      }
       return assistantId;
     };
 
     const ensureReasoning = () => {
-      if (!reasoningId) reasoningId = `${roundId}-reasoning`;
+      if (!reasoningId) {
+        reasoningId = `${roundId}-reasoning`;
+        reasoningStartTs = Date.now();
+      }
       return reasoningId;
     };
 
@@ -282,11 +473,25 @@ export function createBridge(
         output: '',
         startedAt: now,
       };
+      const mergedTool = { ...fallback, ...cleanPatch };
+
+      if (transcriptStore) {
+        transcriptStore.upsertTool(itemId, roundId, mergedTool, existing => ({
+          ...existing,
+          ...cleanPatch,
+          elapsedMs: patch.elapsedMs ?? (patch.status && patch.status !== 'running'
+            ? now - existing.startedAt
+            : existing.elapsedMs),
+        }));
+        publishTimeline();
+        return;
+      }
+
       upsertItem({
         id: itemId,
         kind: 'tool',
         roundId,
-        tool: { ...fallback, ...cleanPatch },
+        tool: mergedTool,
       }, existing => {
         if (existing.kind !== 'tool') return existing;
         return {
@@ -302,21 +507,42 @@ export function createBridge(
 
     startRound();
     setTUIState('loading');
-    setState(prev => ({
-      ...prev,
-      isLoading: true,
-      error: null,
-      warnings: [],
-      permissionPrompt: null,
-      timeline: [
-        ...prev.timeline,
-        {
-          id: `user-${requestId}-${crypto.randomUUID()}`,
-          kind: 'message',
-          message: { role: 'user', content: text },
-        },
-      ],
-    }));
+    setState(prev => {
+      const userItem: TimelineItem = {
+        id: `user-${requestId}-${crypto.randomUUID()}`,
+        kind: 'message',
+        message: { role: 'user', content: text },
+      };
+
+      if (transcriptStore) {
+        if (transcriptStore.getEntryCount() === 0 && prev.timeline.length > 0) {
+          hydrateStoreFromTimeline(prev.timeline);
+        }
+        transcriptStore.appendUser(userItem.id, text);
+        bridgeRuntime?.applyPatch({
+          isLoading: true,
+          error: null,
+          warnings: [],
+          permissionPrompt: null,
+        });
+        return bridgeRuntime ? prev : {
+          ...prev,
+          isLoading: true,
+          error: null,
+          warnings: [],
+          permissionPrompt: null,
+        };
+      }
+
+      return {
+        ...prev,
+        isLoading: true,
+        error: null,
+        warnings: [],
+        permissionPrompt: null,
+        timeline: [...prev.timeline, userItem],
+      };
+    });
 
     try {
       await beforeSubmit?.();
@@ -325,58 +551,82 @@ export function createBridge(
 
         switch (event.role) {
           case 'assistant_delta': {
-            assistantText += event.content ?? '';
-            upsertAssistantText({
-              id: ensureAssistant(),
-              kind: 'assistant_text',
-              roundId,
-              text: assistantText,
-              isStreaming: true,
-              startTs: Date.now(),
-            });
+            const chunk = event.content ?? '';
+            assistantText += chunk;
+            const id = ensureAssistant();
+            if (transcriptStore) {
+              transcriptStore.ensureTextPart(id, 'assistant_text', roundId, assistantStartTs);
+              transcriptStore.appendPartDelta(id, chunk);
+              streamBatcher.schedule();
+            } else {
+              streamBatcher.schedule();
+            }
             break;
           }
 
           case 'assistant_final': {
+            streamBatcher.flushNow();
             assistantText = event.content ?? assistantText;
-            if (typeof event.metadata?.reasoning === 'string') {
-              reasoningText = event.metadata.reasoning;
+            const metadataReasoning = event.metadata?.reasoning;
+            if (typeof metadataReasoning === 'string' && metadataReasoning.length > 0) {
+              reasoningText = metadataReasoning;
             }
             if (assistantText) {
-              upsertAssistantText({
-                id: ensureAssistant(),
-                kind: 'assistant_text',
-                roundId,
-                text: assistantText,
-                isStreaming: false,
-                startTs: Date.now(),
-              });
+              const id = ensureAssistant();
+              if (transcriptStore) {
+                transcriptStore.ensureTextPart(id, 'assistant_text', roundId, assistantStartTs || Date.now());
+                transcriptStore.setTextPart(id, assistantText, false);
+              } else {
+                upsertAssistantText({
+                  id,
+                  kind: 'assistant_text',
+                  roundId,
+                  text: assistantText,
+                  isStreaming: false,
+                  startTs: assistantStartTs || Date.now(),
+                });
+              }
             }
             if (reasoningText) {
-              upsertItem({
-                id: ensureReasoning(),
-                kind: 'reasoning',
+              const id = ensureReasoning();
+              const item = {
+                id,
+                kind: 'reasoning' as const,
                 roundId,
                 text: reasoningText,
                 isStreaming: false,
-                startTs: Date.now(),
-              });
+                startTs: reasoningStartTs || Date.now(),
+              };
+              if (transcriptStore) {
+                transcriptStore.upsertReasoning(item);
+              } else {
+                upsertItem(item);
+              }
             }
+            if (transcriptStore) publishTimeline();
             break;
           }
 
           case 'reasoning_delta': {
             clearTransientWarnings();
-            reasoningText += event.content ?? '';
-            setState(prev => ({ ...prev, reasoningActive: true }));
-            upsertItem({
-              id: ensureReasoning(),
-              kind: 'reasoning',
-              roundId,
-              text: reasoningText,
-              isStreaming: true,
-              startTs: Date.now(),
-            });
+            const chunk = event.content ?? '';
+            reasoningText += chunk;
+            const id = ensureReasoning();
+            if (transcriptStore) {
+              transcriptStore.ensureTextPart(id, 'reasoning', roundId, reasoningStartTs);
+              transcriptStore.appendPartDelta(id, chunk);
+              streamBatcher.schedule();
+            } else {
+              upsertItem({
+                id,
+                kind: 'reasoning',
+                roundId,
+                text: reasoningText,
+                isStreaming: true,
+                startTs: reasoningStartTs,
+              });
+              commitBridge(() => ({ reasoningActive: true }));
+            }
             break;
           }
 
@@ -447,7 +697,7 @@ export function createBridge(
               });
               toolOutputs.set(key, event.content ?? t().unknownError);
             } else {
-              setState(prev => ({ ...prev, error: event.content ?? t().unknownError }));
+              commitBridge(() => ({ error: event.content ?? t().unknownError }));
             }
             break;
 
@@ -456,8 +706,7 @@ export function createBridge(
             const addOutput = typeof event.metadata?.output === 'number' ? event.metadata.output : 0;
             const addCacheHit = typeof event.metadata?.cacheHit === 'number' ? event.metadata.cacheHit : 0;
             const addCacheMiss = typeof event.metadata?.cacheMiss === 'number' ? event.metadata.cacheMiss : 0;
-            setState(prev => ({
-              ...prev,
+            commitBridge(prev => ({
               tokens: {
                 input: prev.tokens.input + addInput,
                 output: prev.tokens.output + addOutput,
@@ -471,8 +720,7 @@ export function createBridge(
 
           case 'warning': {
             const warning = event.content ?? t().unknownWarning;
-            setState(prev => ({
-              ...prev,
+            commitBridge(prev => ({
               warnings: isTransientToolLoopWarning(warning)
                 ? [...prev.warnings.filter(item => !isTransientToolLoopWarning(item)), warning]
                 : [...prev.warnings, warning],
@@ -483,42 +731,85 @@ export function createBridge(
           case 'status':
             if (event.metadata?.kind === 'instruction_injected') {
               const queueLen = typeof event.metadata.queueLength === 'number' ? event.metadata.queueLength : 0;
-              setState(prev => ({ ...prev, pendingInstructionCount: queueLen }));
-            } else if (event.content === 'thinking_mode_switch') {
-              const to = event.metadata?.to as string;
-              if (to) setState(prev => ({ ...prev, effectiveThinkingMode: to }));
+              commitBridge(() => ({ pendingInstructionCount: queueLen }));
             } else if (event.content === 'tools_completed') {
               finalizeRound();
               startRound();
-            } else if (event.content === 'free_auto_route' && event.metadata) {
-              const provider = event.metadata.provider as string;
-              const model = event.metadata.model as string;
-              const reason = event.metadata.reason as string;
-              const attempt = event.metadata.attempt as number;
-              setState(prev => ({
-                ...prev,
-                routedModel: `${provider}/${model}`,
-                routedModelDetail: reason ? `(${reason})` : undefined,
-              }));
             } else if (event.content && event.content !== 'interrupted') {
-              setState(prev => ({ ...prev, warnings: [...prev.warnings, event.content!] }));
+              commitBridge(prev => ({ warnings: [...prev.warnings, event.content!] }));
             }
             break;
 
           case 'permission_ask': {
-            let args: Record<string, unknown> = {};
-            try { args = JSON.parse(event.content ?? '{}'); } catch {}
-            setState(prev => ({
-              ...prev,
-              permissionPrompt: { toolName: event.toolName ?? 'unknown', args },
-            }));
+            // Parse permission request from event metadata
+            const requestId = event.metadata?.requestId as string | undefined;
+            const sessionId = event.metadata?.sessionId as string | undefined;
+            const permission = event.metadata?.permission as string | undefined;
+            const patterns = event.metadata?.patterns as string[] | undefined;
+            const always = event.metadata?.always as string[] | undefined;
+            const metadata = event.metadata?.metadata as Record<string, unknown> | undefined;
+            const tool = event.metadata?.tool as { toolCallId: string; toolName: string } | undefined;
+            const parentSessionId = event.metadata?.parentSessionId as string | undefined;
+
+            if (requestId && sessionId && permission) {
+              const permissionRequest: PermissionRequest = {
+                id: requestId,
+                sessionId,
+                permission,
+                patterns: patterns ?? [],
+                always: always ?? [],
+                metadata: metadata ?? {},
+                tool: tool ?? { toolCallId: '', toolName: event.toolName ?? 'unknown' },
+                parentSessionId,
+              };
+              commitBridge(() => ({ permissionPrompt: permissionRequest }));
+            } else {
+              // Fallback for legacy permission events
+              let args: Record<string, unknown> = {};
+              try { args = JSON.parse(event.content ?? '{}'); } catch {}
+              const fallbackRequest: PermissionRequest = {
+                id: `perm_${Date.now().toString(36)}`,
+                sessionId: '',
+                permission: event.toolName ?? 'unknown',
+                patterns: [],
+                always: [],
+                metadata: args,
+                tool: { toolCallId: '', toolName: event.toolName ?? 'unknown' },
+              };
+              commitBridge(() => ({ permissionPrompt: fallbackRequest }));
+            }
+            break;
+          }
+
+          case 'question_ask': {
+            // Parse question request from event metadata
+            const requestId = event.metadata?.requestId as string | undefined;
+            const sessionId = event.metadata?.sessionId as string | undefined;
+            const questions = event.metadata?.questions as Array<{
+              question: string;
+              header: string;
+              options: Array<{ label: string; description: string }>;
+              multiple?: boolean;
+              custom?: boolean;
+            }> | undefined;
+            if (requestId && sessionId && questions) {
+              const questionRequest: QuestionRequest = { id: requestId, sessionId, questions };
+              commitBridge(() => ({ questionPrompt: questionRequest }));
+            }
+            break;
+          }
+
+          case 'question_replied': {
+            commitBridge(() => ({ questionPrompt: null }));
+            break;
+          }
+
+          case 'question_rejected': {
+            commitBridge(() => ({ questionPrompt: null }));
             break;
           }
 
           case 'done':
-          case 'strategy_notify':
-          case 'strategy_estimate_refined':
-          case 'tier_recommendation':
             break;
 
           default: {
@@ -530,13 +821,18 @@ export function createBridge(
     } catch (e: unknown) {
       if (requestId === activeRequest) {
         const msg = e instanceof Error ? e.message : String(e);
-        setState(prev => ({ ...prev, error: msg }));
+        commitBridge(() => ({ error: msg }));
       }
     } finally {
       if (requestId === activeRequest) {
+        streamBatcher.flushNow();
         finalizeRound();
         setTUIState('idle');
-        setState(prev => ({ ...prev, isLoading: false, permissionPrompt: null, reasoningActive: false }));
+        commitBridge(() => ({
+          isLoading: false,
+          permissionPrompt: null,
+          reasoningActive: false,
+        }));
       }
       running = false;
       processQueue();
@@ -544,10 +840,44 @@ export function createBridge(
   };
 
   const cancel = () => {
-    engine.respondPermission(false);
+    // Reject any pending permission
+    commitBridge(prev => {
+      if (prev.permissionPrompt) {
+        engine.respondPermission(false);
+      }
+      if (prev.questionPrompt) {
+        engine.rejectQuestion(prev.questionPrompt.id);
+      }
+      return { permissionPrompt: null, questionPrompt: null };
+    });
     engine.interrupt();
-    setState(prev => ({ ...prev, permissionPrompt: null }));
   };
 
-  return { submit, cancel };
+  const respondPermission = (reply: PermissionReply, message?: string) => {
+    engine.respondPermission(reply === 'once' || reply === 'always', reply === 'always');
+    commitBridge(() => ({ permissionPrompt: null }));
+  };
+
+  const respondQuestion = (requestId: string, answers: string[][]) => {
+    engine.respondQuestion(requestId, answers);
+    commitBridge(() => ({ questionPrompt: null }));
+  };
+
+  const rejectQuestion = (requestId: string) => {
+    engine.rejectQuestion(requestId);
+    commitBridge(() => ({ questionPrompt: null }));
+  };
+
+  return {
+    submit,
+    cancel,
+    respondPermission,
+    respondQuestion,
+    rejectQuestion,
+    replaceTranscript,
+    appendTimelineMessage,
+    getTranscriptReader: () => transcriptReader,
+    getBridgeRuntime: () => bridgeRuntime,
+    resetBridgeRuntime: () => bridgeRuntime?.reset(),
+  };
 }

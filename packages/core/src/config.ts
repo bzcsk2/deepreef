@@ -30,8 +30,6 @@ export interface ProviderInfo {
   contextWindow?: number
   /** Keyless providers (Kilo anonymous free tier) must send NO Authorization header */
   keyless?: boolean
-  /** Virtual providers (Free Auto) do not have a real base URL — routing is handled internally */
-  virtual?: boolean
 }
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000
@@ -83,17 +81,7 @@ export const PROVIDERS: Record<string, ProviderInfo> = {
       { label: "Laguna XS 2", model: "poolside/laguna-xs.2:free", contextWindow: 128_000 },
     ],
   },
-  "free-auto": {
-    baseUrl: "",
-    model: "free-auto",
-    requiresKey: false,
-    keyless: true,
-    virtual: true,
-    label: "Free Auto",
-    models: [
-      { label: "Free Auto", model: "free-auto" },
-    ],
-  },
+
   "openai-compatible": {
     baseUrl: "",
     model: "",
@@ -208,9 +196,7 @@ export function loadConfig(): DeepreefConfig {
 
   const providerBaseUrlEnv = process.env[getBaseUrlEnvVar(provider)]
   const legacyDeepSeekBaseUrlEnv = provider === "deepseek" ? process.env.DEEPSEEK_BASE_URL : undefined
-  const baseUrl = (providerCfg?.virtual)
-    ? ""
-    : (providerBaseUrlEnv ?? legacyDeepSeekBaseUrlEnv ?? lastForProvider?.baseUrl ?? providerCfg?.baseUrl ?? DEEPSEEK_BASE_URL)
+  const baseUrl = providerBaseUrlEnv ?? legacyDeepSeekBaseUrlEnv ?? lastForProvider?.baseUrl ?? providerCfg?.baseUrl ?? DEEPSEEK_BASE_URL
 
   const providerModelEnv = process.env[getModelEnvVar(provider)]
   const legacyDeepSeekModelEnv = provider === "deepseek" ? process.env.DEEPSEEK_MODEL : undefined

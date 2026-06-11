@@ -33,7 +33,7 @@ export interface ThemeTokens {
  * - tone.err     (#FF5F56) 错误色：失败图标、错误横幅
  * - tone.info    (#4A90E2) 信息色：通用信息标记
  * - surface.bg      (#000000) 终端大背景
- * - surface.bgInput (#1D3B5C) 输入框背景
+ * - surface.bgInput (#653a99be) 输入框背景（带 alpha 通道的紫色）
  * - surface.bgCode  (#0C0C0C) 代码块背景（比主背景略亮）
  * - surface.bgElev  (#13283F) 卡片/弹窗背景（浮起层级）
  */

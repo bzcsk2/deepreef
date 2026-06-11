@@ -1,7 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import type { LoopEvent } from '@deepreef/core';
 import type { ReasonixEngine } from '@deepreef/core';
-import { createBridge, type BridgeState } from '../src/bridge.js';
+import { createBridge, type BridgeState, type TimelineItem } from '../src/bridge.js';
+
+/** 测试内关闭 delta 合并，避免异步 flush 导致断言竞态。 */
+beforeAll(() => {
+  process.env.DEEPCODE_DELTA_FLUSH_MS = '0';
+});
+
+afterAll(() => {
+  delete process.env.DEEPCODE_DELTA_FLUSH_MS;
+});
 
 function initialState(): BridgeState {
   return {
@@ -14,7 +23,34 @@ function initialState(): BridgeState {
     warnings: [],
     error: null,
     permissionPrompt: null,
+    questionPrompt: null,
+    reasoningActive: false,
   };
+}
+
+function userMessages(timeline: TimelineItem[]) {
+  return timeline.filter(
+    (item): item is Extract<TimelineItem, { kind: 'message' }> =>
+      item.kind === 'message' && item.message.role === 'user',
+  );
+}
+
+function reasoningItems(timeline: TimelineItem[]) {
+  return timeline.filter(
+    (item): item is Extract<TimelineItem, { kind: 'reasoning' }> => item.kind === 'reasoning',
+  );
+}
+
+function toolItems(timeline: TimelineItem[]) {
+  return timeline.filter(
+    (item): item is Extract<TimelineItem, { kind: 'tool' }> => item.kind === 'tool',
+  );
+}
+
+function assistantTextItems(timeline: TimelineItem[]) {
+  return timeline.filter(
+    (item): item is Extract<TimelineItem, { kind: 'assistant_text' }> => item.kind === 'assistant_text',
+  );
 }
 
 function stateHarness() {
@@ -80,6 +116,44 @@ async function waitFor(check: () => boolean): Promise<void> {
   throw new Error('Timed out waiting for condition');
 }
 
+describe('TUI bridge with TranscriptStore', () => {
+  const previousStoreFlag = process.env.DEEPCODE_TUI_STORE;
+
+  beforeAll(() => {
+    process.env.DEEPCODE_TUI_STORE = '1';
+    process.env.DEEPCODE_DELTA_FLUSH_MS = '0';
+  });
+
+  afterAll(() => {
+    if (previousStoreFlag === undefined) delete process.env.DEEPCODE_TUI_STORE;
+    else process.env.DEEPCODE_TUI_STORE = previousStoreFlag;
+    delete process.env.DEEPCODE_DELTA_FLUSH_MS;
+  });
+
+  it('streams assistant deltas through the store path', async () => {
+    const engine = mockEngine([
+      async function* () {
+        yield { role: 'assistant_delta', content: 'hel' };
+        yield { role: 'assistant_delta', content: 'lo' };
+        yield { role: 'assistant_final', content: 'hello' };
+        yield { role: 'done' };
+      },
+    ]);
+    const harness = stateHarness();
+    const bridge = createBridge(engine as unknown as ReasonixEngine, harness.setState);
+
+    await bridge.submit('hi');
+
+    const reader = bridge.getTranscriptReader();
+    expect(reader).not.toBeNull();
+    const timeline = reader!.getSnapshot();
+    const assistant = timeline.filter(item => item.kind === 'assistant_text');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.kind === 'assistant_text' && assistant[0].text).toBe('hello');
+    expect(assistant[0]?.kind === 'assistant_text' && assistant[0].isStreaming).toBe(false);
+  });
+});
+
 describe('TUI bridge turn state', () => {
   it('accepts and displays input before background startup finishes', async () => {
     let releaseStartup!: () => void;
@@ -122,9 +196,10 @@ describe('TUI bridge turn state', () => {
 
     await bridge.submit('think first');
 
-    const item = harness.state.timeline[0];
-    if (item?.kind !== 'turn') throw new Error('Expected turn');
-    expect(item.turn.reasoningText).toBe('hidden chain summary');
+    const reasoning = reasoningItems(harness.state.timeline);
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]?.text).toBe('hidden chain summary');
+    expect(assistantTextItems(harness.state.timeline)[0]?.text).toBe('answer');
   });
 
   it('keeps a pure tool turn visible and associates arguments by toolCallIndex', async () => {
@@ -143,13 +218,12 @@ describe('TUI bridge turn state', () => {
 
     await bridge.submit('where am I?');
 
-    const item = harness.state.timeline[0];
-    expect(item?.kind).toBe('turn');
-    if (item?.kind !== 'turn') throw new Error('Expected turn');
-    expect(item.turn.assistantText).toBe('');
-    expect(item.turn.tools).toHaveLength(1);
-    expect(item.turn.tools[0]?.args).toEqual({ command: 'pwd' });
-    expect(item.turn.tools[0]?.status).toBe('done');
+    expect(userMessages(harness.state.timeline)).toHaveLength(1);
+    expect(assistantTextItems(harness.state.timeline)).toHaveLength(0);
+    const tools = toolItems(harness.state.timeline);
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.tool.args).toEqual({ command: 'pwd' });
+    expect(tools[0]?.tool.status).toBe('done');
   });
 
   it('preserves tools when a later batch reuses toolCallIndex zero', async () => {
@@ -169,9 +243,8 @@ describe('TUI bridge turn state', () => {
 
     await bridge.submit('run both');
 
-    const item = harness.state.timeline[0];
-    if (item?.kind !== 'turn') throw new Error('Expected turn');
-    expect(item.turn.tools.map(tool => tool.args.command)).toEqual(['pwd', 'ls']);
+    const tools = toolItems(harness.state.timeline);
+    expect(tools.map(item => item.tool.args.command)).toEqual(['pwd', 'ls']);
   });
 
   it('clears a repeated tool-call warning when the next reasoning event arrives', async () => {
@@ -258,7 +331,7 @@ describe('TUI bridge turn state', () => {
     await waitFor(() => engine.submitted.length === 2 && harness.state.isLoading === false);
 
     expect(engine.submitted).toEqual(['first', 'second']);
-    expect(harness.state.timeline).toHaveLength(2);
+    expect(userMessages(harness.state.timeline)).toHaveLength(2);
   });
 
   it('denies a pending permission prompt when cancelled so the generator can exit', async () => {
