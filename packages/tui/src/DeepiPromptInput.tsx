@@ -373,10 +373,10 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       return;
     }
 
-    // 上箭头 — 历史记录上翻
+    // 上箭头 — 历史记录上翻（Ctrl+Up 保留给消息区滚动）
     // 首次进入历史时（从 -1 变为 0），保存当前输入到 draftBeforeHistory
     // 后续上翻时从 history 数组中取出对应的历史项
-    if (key.upArrow) {
+    if (key.upArrow && !key.ctrl) {
       if (!suppressHistory) {
         setHistoryIdx(prev => {
           const next = Math.min(prev + 1, history.length - 1);
@@ -393,9 +393,9 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       return;
     }
 
-    // 下箭头 — 历史记录下翻
+    // 下箭头 — 历史记录下翻（Ctrl+Down 保留给消息区滚动）
     // 超出历史范围（next < 0）时恢复保存的当前草稿 draftBeforeHistory
-    if (key.downArrow) {
+    if (key.downArrow && !key.ctrl) {
       if (!suppressHistory) {
         setHistoryIdx(prev => {
           const next = prev - 1;
