@@ -48,8 +48,8 @@ export function StreamingCard({ text, done = false, aborted = false, startTs, ti
     return (
       <Card>
         <CardHeader
-          glyph={'\u2039'}
-          tone={TONE.ok}
+          glyph={'\u25CF'}
+          tone={TONE.accent}
           title={doneTitle ?? t().reply}
           right={elapsedSec > 0 ? <Text dimColor>{`${elapsedSec}s`}</Text> : undefined}
         />

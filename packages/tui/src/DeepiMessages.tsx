@@ -153,7 +153,7 @@ const UserMessage = memo(function UserMessage({ message }: { message: ChatMessag
   return (
     <Card>
       <Box flexDirection="row" backgroundColor={SURFACE.bgInput} paddingX={1} paddingY={1}>
-        <Text bold color={TONE.brand}>{'\u276F '}</Text>
+        <Text bold color={TONE.brand}>{'> '}</Text>
         <Box flexGrow={1}>{markdownText(message.content ?? '')}</Box>
       </Box>
     </Card>
@@ -165,7 +165,7 @@ const AssistantTextMessage = memo(function AssistantTextMessage({ text }: { text
   return (
     <Box flexDirection="row" width="100%" paddingX={1} paddingY={1}>
       <Box minWidth={2}>
-        <Text color={TONE.ok}>{'\u2039'}</Text>
+        <Text color={TONE.accent}>{'\u25CF'}</Text>
       </Box>
       <Box flexDirection="column" flexGrow={1}>
         {markdownText(text)}
