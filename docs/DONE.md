@@ -3034,3 +3034,64 @@ bun run packages/core/scripts/benchmark-matrix.ts
 - `bun test packages/core/__tests__/harness-strictness.test.ts` — **19 pass / 0 fail**
 - `bun test packages/core/__tests__/engine-tools.test.ts` — **29 pass / 0 fail**（含 ADV-HAR-02 集成测试）
 - `bun test packages/core/__tests__/supervisor-pool.test.ts` — **13 pass / 0 fail**（含 ADV-HAR-04 空池测试）
+
+---
+
+## 43. ADV-HAR 验收修复（2026-06-12）
+
+验收发现 5 个问题，全部修复。
+
+| 问题 | 级别 | 说明 | 状态 |
+|------|------|------|------|
+| ADV-HAR-07/08 未生效 | P0 | `toolRouting`/`verificationPolicy` 传入 loop 但从未读取 | ✅ 已修复 |
+| 未知本地模型未自动 strict | P0 | `inferDefaultStrictness()` 收到 null，永远返回 normal | ✅ 已修复 |
+| Harness 配置缺 Zod 校验 | P0 | 非法 JSON（如 `{"strictness":"invalid"}`）直接强转，可崩溃 | ✅ 已修复 |
+| orchestration 事件破坏测试 | P1 | 新增首个 orchestration 事件改变了事件顺序，2 个测试失败 | ✅ 已修复 |
+| Worker 生命周期事件不完整 | P1 | `submit()` 开头 `worker_remove: "*"` 立即删除完成状态 | ✅ 已修复 |
+
+### 43.1 P0-1：ADV-HAR-07/08 生效
+
+**修改文件：**
+- `packages/core/src/loop.ts` — `tryVerificationGate()` 现在读取 `verificationPolicy`：
+  - `"block"`: 硬阻断，必须验证
+  - `"require-or-waive"`: 要求验证或用户豁免
+  - `"warn"`: 仅发出 `verification_gate_warning`，不阻断
+
+### 43.2 P0-2：未知本地模型自动 strict
+
+**修改文件：**
+- `packages/core/src/engine.ts` — `submit()` 调用 `resolveModelProfile()` 获取 modelProfile，传递给 `resolveHarnessStrictness()`
+- `inferDefaultStrictness()` 现在能正确识别 `unknown-local` 模型并返回 `"strict"`
+
+### 43.3 P0-3：Harness 配置 Zod 校验
+
+**修改文件：**
+- `packages/core/src/harness/strictness.ts` — 新增 `ProjectHarnessConfigSchema`（Zod）
+- `readProjectHarnessConfig()` 使用 `safeParse()` 校验，非法配置返回 null + console.warn
+
+**Schema 定义：**
+```typescript
+const ProjectHarnessConfigSchema = z.object({
+  strictness: z.enum(["strict", "normal", "loose"]).optional(),
+  modelOverrides: z.record(z.string(), z.enum(["strict", "normal", "loose"])).optional(),
+}).strict()
+```
+
+### 43.4 P1-4：测试适配 orchestration 事件
+
+**修改文件：**
+- `packages/core/__tests__/engine-tools.test.ts` — P2-2、LIFE-01 测试现在跳过 `orchestration` 和 `strategy_notify` 事件
+
+### 43.5 P1-5：Worker 生命周期完整化
+
+**修改文件：**
+- `packages/core/src/engine.ts` — 移除 `submit()` 开头的 `worker_remove: "*"`
+- Worker 状态保留供 React 渲染：`starting → running → waiting_permission/question → completed/failed/cancelled`
+- `worker_remove` 仅在 session 切换时调用
+
+### 43.6 验收
+
+- `bun run typecheck` — 通过（0 错误）
+- `bun test packages/core/__tests__/engine-tools.test.ts` — **29 pass / 0 fail**
+- `bun test packages/core/__tests__/harness-strictness.test.ts` — **19 pass / 0 fail**
+- 合计 **48 pass / 0 fail**
