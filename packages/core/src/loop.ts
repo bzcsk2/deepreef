@@ -33,6 +33,8 @@ import {
 } from "./supervisor/guided-loop.js"
 import type { SupervisorTriggerContext } from "./supervisor/types.js"
 import type { EffectiveHarnessPolicy } from "./harness/index.js"
+import { resolveToolRouting } from "./tool-routing/two-stage-router.js"
+import type { ToolRoutingMode } from "./tool-routing/types.js"
 
 export interface PendingInstruction {
   content: string
@@ -93,6 +95,10 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     thinkingMode: thinkingModeOverride = "off", logger = noopRuntimeLogger, submitId, earlyStop,
     taskLedger, requireVerificationBeforeFinal = false, verificationGateState,
     refreshLedgerContext, supervisorGuidance, buildSupervisorExtras,
+    /** ADV-HAR-07: 工具路由策略 */
+    toolRouting: toolRoutingMode,
+    /** ADV-HAR-08: 验证策略 */
+    verificationPolicy: verificationMode,
   } = opts
   const diagnosticsEnabled = logger.isEnabled("error")
 
@@ -232,7 +238,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
 
   /** DRF-40: 尝试拦截 done 并注入验证提示 */
   const tryVerificationGate = function* (): Generator<LoopEvent, boolean> {
-    if (!taskLedger || !requireVerificationBeforeFinal) return false
+    // ADV-HAR-08: warn 模式即使 requireVerificationBeforeFinal=false 也要产生警告
+    // require-or-waive / block 模式仅在有 taskLedger 且 requireVerificationBeforeFinal 时生效
+    if (!taskLedger) return false
+    if (!requireVerificationBeforeFinal && verificationMode !== "warn") return false
+
     const gateState = verificationGateState ?? { continuationCount: 0 }
     const decision = evaluateVerificationGate(
       taskLedger.snapshot(),
@@ -243,13 +253,11 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
 
     // ADV-HAR-08: 根据 verificationPolicy 决定行为
     // - "block": 硬阻断，必须验证
-    // - "require-or-waive": 要求验证或用户豁免
+    // - "require-or-waive": 要求验证或用户可继续绕过
     // - "warn": 仅警告，不阻断
-    const effectivePolicy = opts.effectivePolicy
-    const verificationMode = effectivePolicy?.verification ?? "block"
+    const mode = verificationMode ?? "block"
 
-    if (verificationMode === "warn") {
-      // warn 模式：仅发出警告，不阻断
+    if (mode === "warn") {
       const warnEvt: LoopEvent = {
         role: "status",
         content: "verification_gate_warning",
@@ -262,9 +270,41 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       }
       yield warnEvt
       sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: warnEvt })
-      return false  // 不阻断
+      return false
     }
 
+    if (mode === "require-or-waive") {
+      // require-or-waive: 提醒用户验证，但允许继续
+      // 首次触发时发出可豁免警告；重复触发时退化为硬阻断
+      gateState.continuationCount++
+      const isFirstWaive = gateState.continuationCount <= 2
+      const evt: LoopEvent = {
+        role: "status",
+        content: isFirstWaive ? "verification_gate_waivable" : "verification_gate",
+        severity: "warning",
+        metadata: {
+          verificationPending: taskLedger.verificationPending,
+          changedFiles: taskLedger.changedFiles.length,
+          continuationCount: gateState.continuationCount,
+          verificationMode: mode,
+          waivable: isFirstWaive,
+          message: isFirstWaive
+            ? "Verification recommended — continue to waive verification"
+            : `Verification required after ${gateState.continuationCount} continuations`,
+        },
+      }
+      yield evt
+      sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: evt })
+      if (isFirstWaive) {
+        // 首次：允许绕过（用户通过再次 submit 继续即可）
+        ctx.log.append({ role: "user", content: decision.prompt })
+        sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
+      }
+      // 始终返回 true（阻塞 done），用户可再次 submit 继续
+      return true
+    }
+
+    // block 模式：硬阻断
     gateState.continuationCount++
     ctx.log.append({ role: "user", content: decision.prompt })
     sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: ctx.buildMessages() })
@@ -278,7 +318,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
         changedFiles: taskLedger.changedFiles.length,
         continuationCount: gateState.continuationCount,
         requiresUser: decision.requiresUser,
-        verificationMode,
+        verificationMode: mode,
       },
     }
     yield evt
@@ -307,6 +347,28 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
     const isKeyless = provider === "kilo" || provider === "openai-compatible"
     const useMaxTokens = provider === "kilo" || provider === "openai-compatible"
     const supportsThinking = provider === "deepseek" || provider === "zen" || provider === "mimo"
+
+    // ADV-HAR-07: 根据 toolRouting 策略决定本轮注入的工具集
+    let routedTools: ToolSpec[] | undefined
+    if (toolSpecs.length > 0) {
+      const routingMode: ToolRoutingMode = toolRoutingMode === "two-stage" ? "two_stage" : "direct"
+      const routingCtx = {
+        allTools: toolSpecs,
+        contextWindow: ctx.getContextWindow(),
+        routingOverride: routingMode,
+      }
+      const routingDecision = resolveToolRouting(routingCtx)
+      routedTools = routingDecision.tools
+      if (routingDecision.schemaBudgetExceeded && diagnosticsEnabled) {
+        logger.info("loop.toolRouting", {
+          mode: routingDecision.mode,
+          stage: routingDecision.stage,
+          estimatedSchemaTokens: routingDecision.estimatedSchemaTokens,
+          toolCount: routedTools.length,
+        })
+      }
+    }
+
     for await (const event of client.chatCompletionsStream(ctx.buildMessages(), {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
@@ -316,7 +378,7 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<LoopEvent> {
       signal,
       keyless: isKeyless,
       useMaxCompletionTokens: !useMaxTokens,
-      tools: toolSpecs.length > 0 ? toolSpecs : undefined,
+      tools: routedTools,
       ...(supportsThinking ? createDeepSeekCapabilities(provider).mapMode(thinkingMode) : {}),
       traceContext: diagnosticsEnabled ? { submitId, turnCount } : undefined,
     })) {

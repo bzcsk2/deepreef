@@ -43,6 +43,9 @@ export interface OrchestrationState {
 /** 单个 Worker 的活动历史（有界队列） */
 const MAX_ACTIVITIES_PER_WORKER = 50;
 
+/** 终态 Worker 数量上限（completed / failed / cancelled） */
+const MAX_TERMINAL_WORKERS = 50;
+
 function createInitialOrchestrationState(): OrchestrationState {
   return {
     workers: new Map(),
@@ -107,6 +110,21 @@ export class OrchestrationStore extends SubscribeStore<OrchestrationState> {
       case 'worker_upsert': {
         const nextWorkers = new Map(prev.workers);
         nextWorkers.set(payload.worker.id, payload.worker);
+
+        // Prune terminal workers if exceeding limit
+        const terminalWorkers = Array.from(nextWorkers.entries())
+          .filter(([, w]) => w.status === 'completed' || w.status === 'failed' || w.status === 'cancelled');
+        if (terminalWorkers.length > MAX_TERMINAL_WORKERS) {
+          // Remove excess oldest terminal workers (sorted by elapsedMs descending = newest first)
+          const excess = terminalWorkers
+            .sort(([, a], [, b]) => b.elapsedMs - a.elapsedMs)
+            .slice(MAX_TERMINAL_WORKERS);
+          const excessIds = new Set(excess.map(([id]) => id));
+          for (const id of excessIds) {
+            nextWorkers.delete(id);
+          }
+        }
+
         // 记录活动
         const nextActivities = this.recordActivity(prev.activities, payload.worker.id, {
           type: 'state_change',

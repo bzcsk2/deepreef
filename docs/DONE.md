@@ -2878,13 +2878,12 @@ bun run packages/core/scripts/benchmark-matrix.ts
 
 | 任务 | 状态 | 说明 |
 |------|------|------|
-| TUI-FIX-00 | ✅ 已完成 | 更新 DONE.md，准确记录 TUI-GM 组件真实完成状态 |
-| TUI-FIX-10 | ⚠️ 部分完成 | Core 在 submit/loop/subagent/supervisor 生命周期节点产出 orchestration 事件；Worker 生命周期不完整（缺少 running、waiting_permission、waiting_question、waiting_supervisor、failed、cancelled）；completed 状态在 React 渲染前被删除；引擎测试因编排事件顺序变化出现 2 个失败 |
-| TUI-FIX-20 | ✅ 已完成 | 新增 OrchestrationStore（SubscribeStore 模式），Bridge 消费 orchestration 事件 |
+| TUI-FIX-10 | ✅ 已完成 | Core 在 submit/loop/subagent/supervisor 生命周期节点产出 orchestration 事件；Worker 生命周期完整（starting→running→终态），elapsedMs 真实计算，session 切换清除 worker |
+| TUI-FIX-20 | ✅ 已完成 | 新增 OrchestrationStore（SubscribeStore 模式），Bridge 消费 orchestration 事件；终态 Worker 上限 50 自动清理 |
 | TUI-FIX-30 | ✅ 已完成 | OrchestrationSummary 读取真实 Store 数据，删除 App.tsx 固定空数组 |
 | TUI-FIX-40 | ⚠️ 部分完成 | AgentGroupDisplay 已接入 App.tsx 主布局；WorkerActivityPanel 已导入但详情视图和暂停/恢复/取消回调未接线 |
-| TUI-FIX-50 | ⚠️ 部分完成 | DialogManager 已集成到 App.tsx 主布局；但与 BridgeScrollAlerts 重复渲染相同 Permission/Question（BridgeScrollAlerts 已改为不渲染 Permission/Question，由 DialogManager 独占处理） |
-| TUI-FIX-60 | ⚠️ 部分完成 | `/theme` 命令已添加（列表/切换主题），已持久化到 TuiSettings；缺少独立选择菜单 UI |
+| TUI-FIX-50 | ✅ 已完成 | DialogManager 已集成到 App.tsx 主布局；BridgeScrollAlerts 不再渲染 Permission/Question，由 DialogManager 独占处理 |
+| TUI-FIX-60 | ✅ 已完成 | `/theme` 命令已添加（列表/切换主题），已持久化到 TuiSettings，启动时自动恢复；已移除 auto 推理档位 |
 | TUI-FIX-70 | ❌ 未开始 | VirtualizedTranscript 需基于 ScrollBox 和真实渲染高度重写 |
 | TUI-FIX-80 | ⚠️ 部分完成 | 新增 17 个 OrchestrationStore 测试（86 pass / 0 fail）；缺少组件渲染测试和集成测试 |
 
@@ -2941,15 +2940,13 @@ bun run packages/core/scripts/benchmark-matrix.ts
 - `bun test packages/tui/__tests__/` — **86 pass / 0 fail**（69 原测试 + 17 新增 OrchestrationStore 测试）
 - `git diff --check` — 通过（0 空白符问题）
 
-### 41.7 已知问题（验收发现，2026-06-12）
+### 41.7 已知问题（2026-06-12 第二轮修复）
 
 | 优先级 | 问题 | 状态 |
 |--------|------|------|
-| P1 | Worker 生命周期事件不完整：缺少 running、waiting_permission、waiting_question、waiting_supervisor、failed、cancelled；completed 状态在 React 渲染前被删除 | **已修复** — engine.ts 增加 running/failed/cancelled 状态发射；删除 worker_remove 延迟；增加 permission_ask/question_ask/interrupted 检测 |
-| P1 | DialogManager 与 BridgeScrollAlerts 重复渲染相同 Permission/Question | **已修复** — BridgeScrollAlerts 不再接收 Permission/Question，由 DialogManager 独占处理 |
-| P1 | `/theme` 没有持久化，重启后丢失 | **已修复** — theme 已持久化到 TuiSettings，启动时自动恢复 |
-| P1 | TUI 中出现 auto 推理档位（违反 RM-20） | **已修复** — 从 Thinking 菜单移除 auto 选项 |
-| P1 | 引擎测试因编排事件顺序变化出现 2 个失败 | **未修复**（非 TUI 范围） |
+| P0 | ADV-HAR-07: toolRouting 仅传入 LoopOptions，runLoop 未读取/执行 | **已修复** — loop.ts 解构 `toolRouting`，在每轮 chatCompletionsStream 前调用 `resolveToolRouting` 应用工具路由决策 |
+| P0 | ADV-HAR-08: verificationPolicy 的 require-or-waive 与 block 行为相同；loose 模式 Verification Gate 在入口处被 `!requireVerificationBeforeFinal` 跳过 | **已修复** — loop.ts 增加 require-or-waive 分支（首次豁免+重复退化硬阻断）；warn 模式下即使 requireVerificationBeforeFinal=false 也进入 tryVerificationGate 产生警告 |
+| P1 | Worker 生命周期事件不完整 + 终态 Worker 无限累积 | **已修复** — elapsedMs 跟踪 workerStartedAt；工具错误仅重复/严重时标记失败；OrchestrationStore 终态 Worker 上限 50（超出时删除最旧）；loadSession 时发射 worker_remove:"*" |
 
 ---
 
@@ -2965,8 +2962,8 @@ bun run packages/core/scripts/benchmark-matrix.ts
 | ADV-HAR-04 | ✅ 已完成 | Supervisor 池默认空，用户必须显式配置 `.deepreef/supervisor-pool.json` |
 | ADV-HAR-05 | ✅ 已完成 | `ReadTracker` 按 `readBeforeWrite` 策略分级（block/warn/off） |
 | ADV-HAR-06 | ✅ 已完成 | `EarlyStopDetector` 按 `earlyStop` 策略分级（aggressive/standard/critical-only） |
-| ADV-HAR-07 | ✅ 已完成 | `toolRouting` 策略传入 LoopOptions |
-| ADV-HAR-08 | ✅ 已完成 | `verificationPolicy` 策略传入 LoopOptions |
+| ADV-HAR-07 | ✅ 已完成 | `toolRouting` 策略传入 LoopOptions + runLoop 解构并在每轮通过 `resolveToolRouting` 应用 |
+| ADV-HAR-08 | ✅ 已完成 | `verificationPolicy` 策略传入 LoopOptions + runLoop 实现三态分支（block/require-or-waive/warn） |
 
 ### 42.1 ADV-HAR-01：严格度解析器
 

@@ -301,6 +301,8 @@ export class ReasonixEngine implements CoreEngine {
     this.toolExecutor.setSessionId(sessionId)
     this.logger = this.logger.child({ sessionId })
     this.rebindSessionWriter(sessionId)
+    // TUI-FIX-10: 清除前一 session 的所有 worker
+    this.emitOrchestration?.({ role: "orchestration", orchestration: { kind: "worker_remove", workerId: "*" } })
     return this._loadSessionMessages(sessionId)
   }
 
@@ -813,6 +815,7 @@ export class ReasonixEngine implements CoreEngine {
   async spawnSubagent(options: SubagentRunOptions): Promise<SubagentRunResult> {
     const def = this.subagentRegistry.resolve(options.subagentType ?? "general-purpose")
     const workerId = `worker_${randomUUID().slice(0, 8)}`
+    const workerStartedAt = Date.now()
 
     // TUI-FIX-10: emit worker_upsert (starting)
     this.emitOrchestration?.({
@@ -824,7 +827,7 @@ export class ReasonixEngine implements CoreEngine {
           modelTarget: options.target ?? def.target ?? "default",
           status: "starting",
           currentTask: options.description,
-          elapsedMs: 0,
+          elapsedMs: Date.now() - workerStartedAt,
         },
       },
     })
@@ -872,6 +875,7 @@ export class ReasonixEngine implements CoreEngine {
       let usage = { promptTokens: 0, completionTokens: 0 }
       let workerFailed = false
       let workerCancelled = false
+      let workerErrorCount = 0
 
       // TUI-FIX-10: emit worker_upsert (running)
       this.emitOrchestration?.({
@@ -883,7 +887,7 @@ export class ReasonixEngine implements CoreEngine {
             modelTarget: options.target ?? def.target ?? "default",
             status: "running",
             currentTask: options.description,
-            elapsedMs: 0,
+            elapsedMs: Date.now() - workerStartedAt,
           },
         },
       })
@@ -898,7 +902,11 @@ export class ReasonixEngine implements CoreEngine {
         }
         if (event.role === "error") {
           warnings.push(event.content ?? "unknown error")
-          workerFailed = true
+          workerErrorCount++
+          // Only mark as failed on repeated errors or severe errors
+          if (workerErrorCount >= 2 || event.severity === "error") {
+            workerFailed = true
+          }
         }
         // TUI-FIX-10: detect waiting states from subagent events
         if (event.role === "permission_ask") {
@@ -911,7 +919,7 @@ export class ReasonixEngine implements CoreEngine {
                 modelTarget: options.target ?? def.target ?? "default",
                 status: "waiting_permission",
                 currentTask: options.description,
-                elapsedMs: 0,
+                elapsedMs: Date.now() - workerStartedAt,
               },
             },
           })
@@ -926,7 +934,7 @@ export class ReasonixEngine implements CoreEngine {
                 modelTarget: options.target ?? def.target ?? "default",
                 status: "waiting_question",
                 currentTask: options.description,
-                elapsedMs: 0,
+                elapsedMs: Date.now() - workerStartedAt,
               },
             },
           })
@@ -937,6 +945,7 @@ export class ReasonixEngine implements CoreEngine {
       }
 
       // TUI-FIX-10: emit final worker status (keep visible, don't remove)
+      const finalElapsedMs = Date.now() - workerStartedAt
       if (workerCancelled) {
         this.emitOrchestration?.({
           role: "orchestration",
@@ -947,7 +956,7 @@ export class ReasonixEngine implements CoreEngine {
               modelTarget: options.target ?? def.target ?? "default",
               status: "cancelled",
               currentTask: options.description,
-              elapsedMs: 0,
+              elapsedMs: finalElapsedMs,
             },
           },
         })
@@ -961,7 +970,7 @@ export class ReasonixEngine implements CoreEngine {
               modelTarget: options.target ?? def.target ?? "default",
               status: "failed",
               currentTask: options.description,
-              elapsedMs: 0,
+              elapsedMs: finalElapsedMs,
             },
           },
         })
@@ -975,7 +984,7 @@ export class ReasonixEngine implements CoreEngine {
               modelTarget: options.target ?? def.target ?? "default",
               status: "completed",
               currentTask: options.description,
-              elapsedMs: 0,
+              elapsedMs: finalElapsedMs,
             },
           },
         })
