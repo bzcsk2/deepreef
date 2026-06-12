@@ -302,6 +302,9 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
   useInput((_input, key, event: InputEvent) => {
     if (disabled) return;
 
+    // 忽略所有鼠标滚轮事件（SGR wheelup/wheeldown），防止触发上下翻历史
+    if (key.wheelUp || key.wheelDown) return;
+
     // Ctrl+C 触发取消（raw mode 下正常工作的 Ctrl+C 信号）
     // 检查条件：原生 \\x03 或 Ctrl+c 组合键
     if (_input === '\x03' || (key.ctrl && _input === 'c')) {
