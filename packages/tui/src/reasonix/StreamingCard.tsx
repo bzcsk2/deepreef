@@ -12,13 +12,12 @@
  *   - 完成回复和未完成的流式输出使用不同的视觉模板
  */
 
-import { Box, Text, useInterval } from '@deepreef/ink';
-import React, { useState, useMemo } from 'react';
+import { Text, useInterval } from '@deepreef/ink';
+import React, { useState } from 'react';
 import { Card } from './Card.js';
 import { CardHeader } from './CardHeader.js';
 import { Spinner } from './Spinner.js';
 import { Markdown } from './markdown.js';
-import { clipToCells } from './text-width.js';
 import { FG, TONE } from './tokens.js';
 import { t } from '../i18n/index.js';
 
@@ -32,27 +31,6 @@ interface StreamingCardProps {
   doneTitle?: string;
 }
 
-/**
- * 将文本按指定宽度换行，支持中英文字符混合场景
- * @param text 原始文本
- * @param width 每行最大字符数
- * @returns 换行后的行数组
- */
-function wrapLines(text: string, width: number): string[] {
-  if (!text) return [''];
-  const lines: string[] = [];
-  for (const line of text.split('\n')) {
-    if (line.length <= width) { lines.push(line); continue; }
-    let cur = '';
-    for (const ch of line) {
-      cur += ch;
-      if (cur.length >= width) { lines.push(cur); cur = ''; }
-    }
-    if (cur) lines.push(cur);
-  }
-  return lines.length > 0 ? lines : [''];
-}
-
 export function StreamingCard({ text, done = false, aborted = false, startTs, title, doneTitle }: StreamingCardProps): React.ReactElement {
   // 每 1000ms 触发一次重渲染，用于更新经过时间显示
   const [, setTick] = useState(0);
@@ -60,11 +38,6 @@ export function StreamingCard({ text, done = false, aborted = false, startTs, ti
 
   const elapsedMs = Date.now() - startTs;
   const elapsedSec = Math.floor(elapsedMs / 1000);
-
-  // 获取终端列数并计算每行可用字符数（减去两侧边距）
-  const cols = process.stdout.columns ?? 80;
-  const lineCells = Math.max(20, cols - 4);
-  const allLines = useMemo(() => wrapLines(text, lineCells), [text, lineCells]);
 
   const headColor = aborted ? TONE.err : TONE.brand;
   const glyph = aborted ? '\u2298' : '\u25CF';
@@ -98,12 +71,8 @@ export function StreamingCard({ text, done = false, aborted = false, startTs, ti
           </>
         }
       />
-      {allLines.map((line, i) => (
-        <Box key={i} flexDirection="row">
-          <Text color={aborted ? FG.meta : FG.body}>{clipToCells(line, lineCells)}</Text>
-          {!aborted && i === allLines.length - 1 && <Text color={TONE.ok}>{'\u258A'}</Text>}
-        </Box>
-      ))}
+      <Markdown text={text} />
+      {!aborted && <Text color={TONE.ok}>{'\u258A'}</Text>}
       {aborted && <Text color={FG.faint}>{t().truncatedByEsc}</Text>}
     </Card>
   );
