@@ -47,7 +47,7 @@
 
 **TUI（Gemini 风格移植 TUI-GM）**
 
-- 主题系统（23 内置主题）、动画组件、DialogManager、多 Agent 展示、VirtualizedTranscript。
+- 主题系统（23 内置主题）、动画组件、DialogManager、多 Agent 展示、VirtualizedTranscript（⚠️ 文件已移植，数据链路未接通 — 见 §40 评估）。
 
 **融合主线完成矩阵（2026-06-12）**
 
@@ -2737,17 +2737,20 @@ bun run packages/core/scripts/benchmark-matrix.ts
 
 ## 40. TUI-GM：Gemini CLI 风格移植
 
+**⚠️ 2026-06-12 评估：本阶段组件已完成文件移植但未接通真实数据链路，以下标记"部分完成"。**
+**🔄 2026-06-12 更新：TUI-FIX 任务已接入数据链路和主布局集成，以下为最新状态。**
+
 | 阶段 | 状态 | 说明 |
 |------|------|------|
 | TUI-GM-00 | ✅ 已完成 | 删除 OpenTUI 失败原型，清理 CLI 切换逻辑和依赖 |
-| TUI-GM-10 | ✅ 已完成 | 移植主题系统（23 文件）、语义色、ThemeManager |
-| TUI-GM-20 | ✅ 已完成 | 移植动画组件：GradientSpinner、RespondingSpinner、LoadingIndicator、ThemedGradient |
-| TUI-GM-30 | ✅ 已完成 | DialogManager 优先级弹窗管理器 + dialog-store |
-| TUI-GM-40 | ✅ 已完成 | 多 Agent 展示：OrchestrationSummary、AgentGroupDisplay、AgentProgressDisplay |
-| TUI-GM-50 | ✅ 已完成 | WorkerActivityPanel 后台 Worker 活动面板 |
-| TUI-GM-60 | ✅ 已完成 | VirtualizedTranscript 虚拟化聊天记录 |
-| TUI-GM-70 | ✅ 已完成 | 稳定性验收通过 |
-| TUI-GM-80 | ✅ 已完成 | App.tsx 集成：OrchestrationSummary、LoadingIndicator 接入主布局 |
+| TUI-GM-10 | ⚠️ 部分完成 | 主题系统（23 文件）、语义色、ThemeManager 已移植；`/theme` 命令已添加但缺少独立选择菜单 UI |
+| TUI-GM-20 | ⚠️ 部分完成 | 动画组件文件已移植；缺少终端失焦、低动画、测试模式和 NO_COLOR 降频机制 |
+| TUI-GM-30 | ⚠️ 部分完成 | DialogManager 文件已移植；已集成到 App.tsx 主布局（Permission/Question），BridgeScrollAlerts 仍保留为备用路径 |
+| TUI-GM-40 | ⚠️ 部分完成 | 多 Agent 展示组件文件已移植；OrchestrationSummary 已接入真实 Store 数据（不再使用固定空数组） |
+| TUI-GM-50 | ⚠️ 部分完成 | WorkerActivityPanel 文件已移植；已导入 App.tsx 但详情视图和暂停/恢复/取消回调尚未接线 |
+| TUI-GM-60 | ⚠️ 部分完成 | VirtualizedTranscript 文件已移植；按条目数量而非渲染高度计算窗口，未接入现有 ScrollBox |
+| TUI-GM-70 | ⚠️ 部分完成 | 新增 17 个 OrchestrationStore 测试（86 pass / 0 fail）；缺少组件渲染测试和集成测试 |
+| TUI-GM-80 | ⚠️ 部分完成 | OrchestrationSummary、AgentGroupDisplay、DialogManager 已集成到 App.tsx 主布局；WorkerActivityPanel 已导入但未激活 |
 
 ### 40.1 TUI-GM-00：OpenTUI 清理
 
@@ -2866,3 +2869,72 @@ bun run packages/core/scripts/benchmark-matrix.ts
 - 语义色统一：所有新组件使用 `getSemanticColors()` / `themeManager.getColors()`
 - 无 `@google/gemini-cli-core` 依赖
 - 无 OpenTUI 运行分支和依赖
+
+---
+
+## 41. TUI-FIX：多 Agent 可视化数据链路修复（2026-06-12）
+
+| 任务 | 状态 | 说明 |
+|------|------|------|
+| TUI-FIX-00 | ✅ 已完成 | 更新 DONE.md，准确记录 TUI-GM 组件真实完成状态 |
+| TUI-FIX-10 | ✅ 已完成 | Core 在 submit/loop/subagent/supervisor 生命周期节点产出 orchestration 事件 |
+| TUI-FIX-20 | ✅ 已完成 | 新增 OrchestrationStore（SubscribeStore 模式），Bridge 消费 orchestration 事件 |
+| TUI-FIX-30 | ✅ 已完成 | OrchestrationSummary 读取真实 Store 数据，删除 App.tsx 固定空数组 |
+| TUI-FIX-40 | ⚠️ 部分完成 | AgentGroupDisplay 已接入 App.tsx 主布局；WorkerActivityPanel 已导入但详情视图和暂停/恢复/取消回调未接线 |
+| TUI-FIX-50 | ✅ 已完成 | DialogManager 已集成到 App.tsx 主布局，管理 Permission/Question 弹窗 |
+| TUI-FIX-60 | ✅ 已完成 | `/theme` 命令已添加（列表/切换主题），`/help` 已包含 `/theme` 条目 |
+| TUI-FIX-70 | ❌ 未开始 | VirtualizedTranscript 需基于 ScrollBox 和真实渲染高度重写 |
+| TUI-FIX-80 | ⚠️ 部分完成 | 新增 17 个 OrchestrationStore 测试（86 pass / 0 fail）；缺少组件渲染测试和集成测试 |
+
+### 41.1 TUI-FIX-10：Core 编排事件
+
+**修改文件：**
+- `packages/core/src/engine.ts` — `setOnOrchestrationEvent` 回调；`submit()` 开始/结束时发射 `loop_transition`；`spawnSubagent()` 发射 `worker_upsert`/`worker_remove`
+- `packages/core/src/loop.ts` — loop 入口发射 `loop_transition`；早停信号处发射 `runtime_signal`；Supervisor 指导点发射 `supervisor_upsert`/`supervisor_advice`
+- `packages/core/src/supervisor/guided-loop.ts` — 扩展返回类型包含 `result`/`trigger` 字段
+
+### 41.2 TUI-FIX-20：OrchestrationStore
+
+**新增文件：**
+- `packages/tui/src/store/orchestration-store.ts` — OrchestrationStore 类（基于 SubscribeStore）
+
+**修改文件：**
+- `packages/tui/src/store/index.ts` — 导出 OrchestrationStore
+- `packages/tui/src/bridge.tsx` — 接受可选 `orchestrationStore` 参数；`case 'orchestration'` 转发到 Store
+- `packages/tui/src/App.tsx` — 创建 OrchestrationStore 实例；连接引擎回调；Session 切换时重置
+
+**支持事件类型：**
+- `worker_upsert` / `worker_remove` — Worker 创建/移除（幂等更新）
+- `supervisor_upsert` / `supervisor_advice` — Supervisor 状态/建议
+- `loop_transition` / `runtime_signal` — Loop 阶段/信号
+- `checkpoint` / `agent_tree_upsert` — 检查点/Agent 树
+
+**约束：**
+- 有界活动历史（50 条/Agent）
+- 非法 payload 安全忽略并记录诊断
+- Session 切换和 Bridge reset 时重置
+
+### 41.3 TUI-FIX-30：三栏总览
+
+**新增文件：**
+- `packages/tui/src/components/orchestration/OrchestrationContext.tsx` — React context + focused subscription hooks
+
+**修改文件：**
+- `packages/tui/src/App.tsx` — `OrchestrationSummaryFromStore` 组件；`OrchestrationStoreProvider` 包裹主布局
+
+### 41.4 TUI-FIX-50：DialogManager
+
+**修改文件：**
+- `packages/tui/src/App.tsx` — 导入 DialogManager，在 scrollableContent 中渲染；Permission/Question 通过 `bridgeState` 传递
+
+### 41.5 TUI-FIX-60：主题菜单
+
+**修改文件：**
+- `packages/tui/src/commands.ts` — 添加 `/theme` 命令类型、解析和帮助文本
+- `packages/tui/src/App.tsx` — `/theme` 命令处理器（无参数时列表，带参数时切换）
+
+### 41.6 验收
+
+- `bun run typecheck` — 通过（0 错误）
+- `bun test packages/tui/__tests__/` — **86 pass / 0 fail**（69 原测试 + 17 新增 OrchestrationStore 测试）
+- `git diff --check` — 通过（0 空白符问题）
