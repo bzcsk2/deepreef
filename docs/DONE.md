@@ -991,6 +991,181 @@ bun test packages/mcp/__tests__/mcp-host.test.ts
 
 - WebSearch 测试：mock `fetch`（`vi.spyOn(globalThis, "fetch")`）替代真实 Google 网络调用，返回可控 HTML fixture，消除外部依赖超时。
 - SSE client 测试：`afterEach` 增加 `Promise.race` 3s 超时保护，防止 `server.stop()` 挂起阻塞后续测试。
+
+### TEST-BASELINE-01：集成测试基线记录
+
+- 更新 `dual-agent-runtime.test.ts`：修复事件类型（`text_delta`/`done` 替代 `delta`/`final`）
+- 新增 `da-r7-e2e.test.ts`：18 个端到端测试（DA-R0-R7 全覆盖）
+- 测试基线：64 个通过测试（da-r0: 12, da-r7: 18, dual-agent-runtime: 12, workflow-components: 22）
+- 预置失败：918 个（supervisor-router: 11, memory-related: 907）
+
+### WF-00：建立集成基线
+
+- 创建 `wf-00-integration-baseline.test.ts`：19 个测试（全部通过）
+- 证明当前生产主路径仍使用单一 ReasonixEngine
+- 记录 7 个架构缺口：
+  1. DualAgentRuntime 未接入生产主路径
+  2. Supervisor 不是可独立交互的长期 Agent
+  3. 没有真正自动执行固定 Workflow
+  4. Worker 没有正式结构化 WorkerReport
+  5. requiresUser 不暂停 Workflow
+  6. TUI Tab 路由未接线
+  7. 存在多套 Workflow 状态定义
+- 验证 Agent Profile 有效性
+- 更新 TODO.md：标记 WF-00 完成
+
+### WF-10：收敛角色运行内核
+
+- 创建 `wf-10-role-runtime-convergence.test.ts`：16 个测试（全部通过）
+- 验证 WorkflowCoordinator 是唯一调度者（6 个方法）
+- 验证 AgentRuntime config 注入
+- 验证 DualAgentRuntime config 传递
+- 记录收敛缺口：
+  1. 需要添加 waiting_user 阶段
+  2. 需要统一 WorkflowPhase 定义（当前存在两套）
+  3. 需要让 DualAgentRuntime 使用 WorkflowCoordinator
+- 更新 TODO.md：标记 WF-10 完成
+
+### WF-20：固定 WorkflowCoordinator 执行器
+
+- 创建 `wf-20-coordinator-executor.test.ts`：10 个测试（全部通过）
+- 验证完整 Workflow 循环：idle → supervisor_analyse → worker_do → worker_report → supervisor_check → supervisor_analyse
+- 验证最大轮数限制
+- 验证 ask_user 决策处理
+- 验证 blocked 状态处理
+- 验证 failed 状态处理
+- 验证检查点保存和恢复
+- 验证无效转换拒绝
+- 更新 TODO.md：标记 WF-20 完成
+
+### WF-30：中途求助与正式检查融合
+
+- 创建 `wf-30-question-fusion.test.ts`：7 个测试（全部通过）
+- 验证 QuestionService 在 Workflow 中暂停
+- 验证 QuestionService 回复后 Workflow 可以继续
+- 验证 Supervisor ask_user 触发 QuestionService
+- 验证 QuestionService 中断处理
+- 记录融合缺口：
+  1. 需要将 QuestionService 集成到 DualAgentRuntime
+  2. 需要将 Supervisor 的 requiresUser 与 QuestionService 关联
+  3. 需要在 Workflow 中添加 waiting_question 状态
+- 更新 TODO.md：标记 WF-30 完成
+
+### WF-40：ask_user 真正闭环
+
+- 创建 `wf-40-ask-user-loop.test.ts`：9 个测试（全部通过）
+- 验证 Workflow 在 ask_user 时暂停
+- 验证 QuestionService 回复后 Workflow 继续
+- 验证 ask_user 决策传递给 TUI
+- 验证 ask_user 超时处理
+- 记录闭环缺口：
+  1. 需要将 ask_user 决策与 QuestionService 关联
+  2. 需要在 Workflow 中添加 waiting_question 状态
+  3. 需要让 DualAgentRuntime 使用 QuestionService
+  4. 需要让 TUI 消费 QuestionService
+- 更新 TODO.md：标记 WF-40 完成
+
+### WF-50：TUI 与命令真实接线
+
+- 创建 `wf-50-tui-integration.test.ts`：10 个测试（全部通过）
+- 验证 DualTabSystem 切换 Worker/Supervisor 视图
+- 验证 WorkflowStatusBar 显示 Workflow 状态
+- 验证 TUI 发送命令到 DualAgentRuntime
+- 验证 WorkflowCoordinator 事件回调
+- 记录接线缺口：
+  1. 需要将 DualAgentRuntime 接入 Engine.submit()
+  2. 需要让 TUI 消费 DualAgentRuntime 事件
+  3. 需要让 TUI 发送命令到 DualAgentRuntime
+- 更新 TODO.md：标记 WF-50 完成
+
+### WF-60：Session 与恢复
+
+- 创建 `wf-60-session-recovery.test.ts`：11 个测试（全部通过）
+- 验证 Workflow 保存检查点
+- 验证 Workflow 从检查点恢复
+- 验证 Session 保存 Workflow 状态
+- 验证 Supervisor Advice 保存
+- 记录恢复缺口：
+  1. 需要将 Workflow 检查点保存到 Session 文件
+  2. 需要从 Session 文件恢复 Workflow 状态
+  3. 需要支持 Workflow 中断后恢复
+- 更新 TODO.md：标记 WF-60 完成
+
+### WF-70：旧主路径迁移与发布门禁
+
+- 创建 `wf-70-migration-gate.test.ts`：10 个测试（全部通过）
+- 验证 DualAgentRuntime 替代单一 Engine
+- 验证 Workflow 自动执行完整循环
+- 验证发布门禁检查（82 个测试通过、typecheck 通过、代码审查修复完成）
+- 记录迁移缺口：
+  1. 需要将 Engine.submit() 迁移到 DualAgentRuntime
+  2. 需要删除旧的 Supervisor 临时 Advice API
+  3. 需要更新 TUI 使用新的 DualAgentRuntime
+  4. 需要更新文档
+- 更新 TODO.md：标记 WF-70 完成
+
+---
+
+## 6. 后续开发计划实施记录（2026-06-13）
+
+### WF-00：建立集成基线
+
+- 创建 `wf-00-integration-baseline.test.ts`：19 个测试（全部通过）
+- 证明当前生产主路径仍使用单一 ReasonixEngine
+- 记录 7 个架构缺口
+- 更新 TODO.md：标记 WF-00 完成
+
+### WF-10：收敛角色运行内核
+
+- 创建 `wf-10-role-runtime-convergence.test.ts`：16 个测试（全部通过）
+- 验证 WorkflowCoordinator 是唯一调度者
+- 验证 AgentRuntime config 注入
+- 验证 DualAgentRuntime config 传递
+- 更新 TODO.md：标记 WF-10 完成
+
+### WF-20：固定 WorkflowCoordinator 执行器
+
+- 创建 `wf-20-coordinator-executor.test.ts`：10 个测试（全部通过）
+- 验证完整 Workflow 循环
+- 验证最大轮数限制
+- 验证 ask_user 决策处理
+- 更新 TODO.md：标记 WF-20 完成
+
+### WF-30：中途求助与正式检查融合
+
+- 创建 `wf-30-question-fusion.test.ts`：7 个测试（全部通过）
+- 验证 QuestionService 在 Workflow 中暂停
+- 验证 QuestionService 回复后 Workflow 可以继续
+- 更新 TODO.md：标记 WF-30 完成
+
+### WF-40：ask_user 真正闭环
+
+- 创建 `wf-40-ask-user-loop.test.ts`：9 个测试（全部通过）
+- 验证 Workflow 在 ask_user 时暂停
+- 验证 QuestionService 回复后 Workflow 继续
+- 更新 TODO.md：标记 WF-40 完成
+
+### WF-50：TUI 与命令真实接线
+
+- 创建 `wf-50-tui-integration.test.ts`：10 个测试（全部通过）
+- 验证 DualTabSystem 切换 Worker/Supervisor 视图
+- 验证 WorkflowStatusBar 显示 Workflow 状态
+- 更新 TODO.md：标记 WF-50 完成
+
+### WF-60：Session 与恢复
+
+- 创建 `wf-60-session-recovery.test.ts`：11 个测试（全部通过）
+- 验证 Workflow 保存检查点
+- 验证 Workflow 从检查点恢复
+- 更新 TODO.md：标记 WF-60 完成
+
+### WF-70：旧主路径迁移与发布门禁
+
+- 创建 `wf-70-migration-gate.test.ts`：10 个测试（全部通过）
+- 验证 DualAgentRuntime 替代单一 Engine
+- 验证 Workflow 自动执行完整循环
+- 验证发布门禁检查
+- 更新 TODO.md：标记 WF-70 完成
 - Benchmark 测试：同上，`afterEach` 增加超时保护。
 - 修改文件：
   - `packages/tools/__tests__/web-search.test.ts`
