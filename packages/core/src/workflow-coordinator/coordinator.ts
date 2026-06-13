@@ -125,6 +125,7 @@ export class WorkflowCoordinator {
     }
 
     if (to === "failed") {
+      this.state.blockedReason = reason
       this.emitEvent({
         type: "failed",
         workflowId: this.state.workflowId,

@@ -4000,3 +4000,81 @@ const ProjectHarnessConfigSchema = z.object({
 - Tab 切换在覆盖层激活时被禁用
 - WorkflowStatusBar 正确显示工作流状态
 - 所有测试通过
+
+---
+
+## §59 DA-R7：端到端测试与发布门禁
+
+### 59.1 任务目标
+
+完成双角色运行时的端到端测试，验证所有组件集成正确，并建立发布门禁。
+
+### 59.2 实施内容
+
+#### 59.2.1 端到端测试文件
+
+创建 `packages/core/__tests__/da-r7-e2e.test.ts`，覆盖以下场景：
+
+1. **工作流状态转换**
+   - 完整工作流循环（idle → supervisor_analyse → worker_do → worker_report → supervisor_check）
+   - revise 决策处理
+   - approve 决策处理
+   - 失败场景处理
+
+2. **9 轮阻塞**
+   - 9 轮后阻塞验证
+   - 2 轮后阻塞验证（maxRounds=2）
+
+3. **Session 持久化与恢复**
+   - 正确保存和恢复 Session
+   - 路径穿越攻击防护
+   - 损坏文件处理
+
+4. **Agent Profile 验证**
+   - 有效 Profile 验证
+   - 未知字段拒绝（严格校验）
+   - 角色字段匹配强制
+
+5. **WorkflowCoordinator 验证**
+   - 合法转换验证
+   - 非法转换拒绝
+   - 无工作流状态处理
+
+6. **双角色独立通信**
+   - Worker 和 Supervisor 独立消息历史
+
+7. **重启恢复**
+   - 工作流状态恢复
+
+#### 59.2.2 WorkflowCoordinator 修复
+
+- `transition` 方法现在为 `failed` 状态设置 `blockedReason`
+
+### 59.3 测试结果
+
+| 测试套件 | 结果 |
+|----------|------|
+| `da-r0-baseline.test.ts` | **12 pass / 0 fail** ✅ |
+| `da-r7-e2e.test.ts` | **18 pass / 0 fail** ✅ |
+| `workflow-components.test.ts` | **22 pass / 0 fail** ✅ |
+| `bun run typecheck` | **通过** ✅ |
+
+### 59.4 发布门禁验证
+
+1. ✅ **typecheck 通过** - TypeScript 类型检查无错误
+2. ✅ **单元测试通过** - 所有 12 个基线测试通过
+3. ✅ **端到端测试通过** - 所有 18 个端到端测试通过
+4. ✅ **组件测试通过** - 所有 22 个组件测试通过
+5. ✅ **git diff --check 通过** - 无代码格式问题
+
+### 59.5 设计决策
+
+- **测试覆盖**：端到端测试覆盖所有核心组件集成场景
+- **场景驱动**：基于真实使用场景设计测试用例
+- **门禁验证**：建立明确的发布门禁标准
+
+### 59.6 验收
+
+- 所有端到端测试通过
+- 所有发布门禁验证通过
+- 双角色运行时完整集成并可工作
