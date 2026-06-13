@@ -17,7 +17,7 @@ import { DualSession } from "../src/dual-session/index.js"
 import { DualSessionStore } from "../src/dual-session/store.js"
 import { validateAgentProfiles } from "../src/agent-profile/schema.js"
 import { DualAgentRuntime } from "../src/dual-agent-runtime/dual-runtime.js"
-import type { DualAgentRuntimeConfig, WorkflowState } from "../src/dual-agent-runtime/types.js"
+import type { DualAgentRuntimeConfig } from "../src/dual-agent-runtime/types.js"
 import type { WorkflowPhase } from "../src/workflow-coordinator/types.js"
 
 describe("DA-R7: 端到端双角色运行时测试", () => {

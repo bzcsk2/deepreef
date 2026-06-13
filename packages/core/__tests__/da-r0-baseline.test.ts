@@ -114,18 +114,35 @@ describe("DA-R0: 真实基线测试", () => {
 
   describe("DualAgentRuntime 缺陷", () => {
     it("空模型参数应该被拒绝", () => {
-      const config: DualAgentRuntimeConfig = {
-        workerModelTarget: "",
-        supervisorModelTarget: "supervisor.test",
-        workerThinking: "high",
-        supervisorThinking: "off",
-        maxWorkflowRounds: 9,
-      }
-
-      // 期望：空模型参数应该抛出错误或使用默认值
-      // 当前：可能接受空参数
+      // 期望：空模型参数应该抛出错误
       expect(() => {
-        new DualAgentRuntime(config)
+        new DualAgentRuntime({
+          workerClient: {} as any,
+          supervisorClient: {} as any,
+          workerSystemPrompt: "worker prompt",
+          supervisorSystemPrompt: "supervisor prompt",
+          config: {
+            workerModelTarget: "",
+            supervisorModelTarget: "supervisor.test",
+            workerThinking: "high",
+            supervisorThinking: "off",
+            maxWorkflowRounds: 9,
+          },
+          workerConfig: {
+            apiKey: "",
+            baseUrl: "test",
+            model: "test",
+            maxTokens: 8192,
+            temperature: 0.3,
+          },
+          supervisorConfig: {
+            apiKey: "test",
+            baseUrl: "test",
+            model: "test",
+            maxTokens: 8192,
+            temperature: 0.3,
+          },
+        })
       }).toThrow()
     })
 
@@ -260,10 +277,26 @@ describe("DA-R0: 真实流事件测试", () => {
     // 这个测试需要 mock ChatClient，但应该测试真实的流事件处理
     // 当前：可能只测试了简化版本
 
+    const mockClient = {
+      chatCompletionsStream: (async function* () {
+        yield { type: "text_delta", delta: "Hello" }
+        yield { type: "done", finishReason: null }
+      }) as any,
+    }
+
     const runtime = new AgentRuntime({
-      model: "test-model",
-      provider: "test-provider",
       role: "worker",
+      client: mockClient,
+      systemPrompt: "You are a worker",
+      contextWindow: 128_000,
+      maxContextRounds: 20,
+      config: {
+        apiKey: "test-key",
+        baseUrl: "https://test.com",
+        model: "test-model",
+        maxTokens: 8192,
+        temperature: 0.3,
+      },
     })
 
     // 期望：应该能够处理真实流事件

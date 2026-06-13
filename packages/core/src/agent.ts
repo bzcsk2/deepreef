@@ -31,6 +31,20 @@ defaultAgentRegistry.register({
   toolNames: [...MAIN_MODES.plan.toolNames],
 })
 
+// DA-R6: 双角色 Agent 注册
+defaultAgentRegistry.register({
+  name: "worker",
+  label: "Worker",
+  systemPrompt: "You are the Worker agent. Execute tasks, call tools, and report results.",
+  toolNames: [...MAIN_MODES.build.toolNames],
+})
+defaultAgentRegistry.register({
+  name: "supervisor",
+  label: "Supervisor",
+  systemPrompt: "You are the Supervisor agent. Analyze goals, create plans, review evidence, and provide guidance. Do not call tools during workflow turns.",
+  toolNames: [],
+})
+
 /** Backward-compatible static snapshot */
 export const AGENTS: Record<string, AgentDefinition> = defaultAgentRegistry.snapshot()
 

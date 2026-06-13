@@ -37,24 +37,6 @@ export interface DualAgentRuntimeConfig {
   maxWorkflowRounds: number
 }
 
-export interface WorkflowState {
-  workflowId: string
-  currentRound: number
-  maxRounds: number
-  currentPhase: WorkflowPhase
-  history: WorkflowPhase[]
-}
-
-export type WorkflowPhase =
-  | "idle"
-  | "supervisor_analyse"
-  | "worker_do"
-  | "worker_report"
-  | "supervisor_check"
-  | "blocked"
-  | "completed"
-  | "failed"
-
 export interface SendToOptions {
   role: AgentRole
   input: string

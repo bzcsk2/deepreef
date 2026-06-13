@@ -128,9 +128,45 @@ describe("AgentRuntime", () => {
     runtime.interrupt()
     expect(runtime.getStatus()).toBe("idle")
   })
+
+  it("should have getEngine method", () => {
+    const client = createMockClient()
+    const runtime = new AgentRuntime({
+      role: "worker",
+      client,
+      systemPrompt: "You are a worker",
+      contextWindow: 128_000,
+      maxContextRounds: 20,
+      config: {
+        apiKey: "test-key",
+        baseUrl: "https://test.com",
+        model: "test-model",
+        maxTokens: 8192,
+        temperature: 0.3,
+      },
+    })
+
+    expect(runtime.getEngine()).toBeDefined()
+  })
 })
 
 describe("DualAgentRuntime", () => {
+  const defaultWorkerConfig = {
+    apiKey: "test-key",
+    baseUrl: "https://test.com",
+    model: "test-model",
+    maxTokens: 8192,
+    temperature: 0.3,
+  }
+
+  const defaultSupervisorConfig = {
+    apiKey: "test-key",
+    baseUrl: "https://test.com",
+    model: "test-model",
+    maxTokens: 8192,
+    temperature: 0.3,
+  }
+
   it("should create dual runtime with worker and supervisor", () => {
     const workerClient = createMockClient(["Worker response"])
     const supervisorClient = createMockClient(["Supervisor response"])
@@ -147,35 +183,13 @@ describe("DualAgentRuntime", () => {
         supervisorThinking: "off",
         maxWorkflowRounds: 9,
       },
+      workerConfig: defaultWorkerConfig,
+      supervisorConfig: defaultSupervisorConfig,
     })
 
     expect(runtime.getWorker().getRole()).toBe("worker")
     expect(runtime.getSupervisor().getRole()).toBe("supervisor")
     expect(runtime.getActiveRole()).toBe("worker")
-  })
-
-  it("should get workflow state", () => {
-    const workerClient = createMockClient()
-    const supervisorClient = createMockClient()
-
-    const runtime = new DualAgentRuntime({
-      workerClient,
-      supervisorClient,
-      workerSystemPrompt: "You are a worker",
-      supervisorSystemPrompt: "You are a supervisor",
-      config: {
-        workerModelTarget: "zen/mimo-v2.5-free",
-        supervisorModelTarget: "zen/mimo-v2.5-free",
-        workerThinking: "high",
-        supervisorThinking: "off",
-        maxWorkflowRounds: 9,
-      },
-    })
-
-    const workflow = runtime.getWorkflow()
-    expect(workflow.currentRound).toBe(0)
-    expect(workflow.maxRounds).toBe(9)
-    expect(workflow.currentPhase).toBe("idle")
   })
 
   it("should get state for specific role", () => {
@@ -194,6 +208,8 @@ describe("DualAgentRuntime", () => {
         supervisorThinking: "off",
         maxWorkflowRounds: 9,
       },
+      workerConfig: defaultWorkerConfig,
+      supervisorConfig: defaultSupervisorConfig,
     })
 
     const workerState = runtime.getState("worker")
@@ -201,62 +217,6 @@ describe("DualAgentRuntime", () => {
 
     expect(workerState.role).toBe("worker")
     expect(supervisorState.role).toBe("supervisor")
-  })
-
-  it("should transition workflow phases", () => {
-    const workerClient = createMockClient()
-    const supervisorClient = createMockClient()
-
-    const runtime = new DualAgentRuntime({
-      workerClient,
-      supervisorClient,
-      workerSystemPrompt: "You are a worker",
-      supervisorSystemPrompt: "You are a supervisor",
-      config: {
-        workerModelTarget: "zen/mimo-v2.5-free",
-        supervisorModelTarget: "zen/mimo-v2.5-free",
-        workerThinking: "high",
-        supervisorThinking: "off",
-        maxWorkflowRounds: 9,
-      },
-    })
-
-    runtime.transitionWorkflow("supervisor_analyse")
-    expect(runtime.getWorkflow().currentPhase).toBe("supervisor_analyse")
-    expect(runtime.getWorkflow().currentRound).toBe(1)
-
-    runtime.transitionWorkflow("worker_do")
-    expect(runtime.getWorkflow().currentPhase).toBe("worker_do")
-    expect(runtime.getWorkflow().currentRound).toBe(1)
-  })
-
-  it("should check if workflow can continue", () => {
-    const workerClient = createMockClient()
-    const supervisorClient = createMockClient()
-
-    const runtime = new DualAgentRuntime({
-      workerClient,
-      supervisorClient,
-      workerSystemPrompt: "You are a worker",
-      supervisorSystemPrompt: "You are a supervisor",
-      config: {
-        workerModelTarget: "zen/mimo-v2.5-free",
-        supervisorModelTarget: "zen/mimo-v2.5-free",
-        workerThinking: "high",
-        supervisorThinking: "off",
-        maxWorkflowRounds: 2,
-      },
-    })
-
-    expect(runtime.canContinue()).toBe(true)
-
-    runtime.transitionWorkflow("supervisor_analyse")
-    runtime.transitionWorkflow("worker_do")
-    expect(runtime.canContinue()).toBe(true)
-
-    runtime.transitionWorkflow("supervisor_analyse")
-    runtime.transitionWorkflow("worker_do")
-    expect(runtime.canContinue()).toBe(false)
   })
 
   it("should interrupt role", () => {
@@ -275,6 +235,8 @@ describe("DualAgentRuntime", () => {
         supervisorThinking: "off",
         maxWorkflowRounds: 9,
       },
+      workerConfig: defaultWorkerConfig,
+      supervisorConfig: defaultSupervisorConfig,
     })
 
     runtime.interruptRole({ role: "worker", reason: "Test interrupt" })
@@ -297,15 +259,39 @@ describe("DualAgentRuntime", () => {
         supervisorThinking: "off",
         maxWorkflowRounds: 9,
       },
+      workerConfig: defaultWorkerConfig,
+      supervisorConfig: defaultSupervisorConfig,
     })
-
-    runtime.transitionWorkflow("supervisor_analyse")
-    runtime.transitionWorkflow("worker_do")
 
     runtime.reset()
 
-    expect(runtime.getWorkflow().currentRound).toBe(0)
-    expect(runtime.getWorkflow().currentPhase).toBe("idle")
     expect(runtime.getActiveRole()).toBe("worker")
+  })
+
+  it("should not have duplicate workflow state", () => {
+    const workerClient = createMockClient()
+    const supervisorClient = createMockClient()
+
+    const runtime = new DualAgentRuntime({
+      workerClient,
+      supervisorClient,
+      workerSystemPrompt: "You are a worker",
+      supervisorSystemPrompt: "You are a supervisor",
+      config: {
+        workerModelTarget: "zen/mimo-v2.5-free",
+        supervisorModelTarget: "zen/mimo-v2.5-free",
+        workerThinking: "high",
+        supervisorThinking: "off",
+        maxWorkflowRounds: 9,
+      },
+      workerConfig: defaultWorkerConfig,
+      supervisorConfig: defaultSupervisorConfig,
+    })
+
+    // 新架构中，DualAgentRuntime 不再管理 workflow 状态
+    // workflow 状态由 WorkflowCoordinator 管理
+    expect((runtime as any).workflow).toBeUndefined()
+    expect(typeof (runtime as any).transitionWorkflow).toBe("undefined")
+    expect(typeof (runtime as any).canContinue).toBe("undefined")
   })
 })

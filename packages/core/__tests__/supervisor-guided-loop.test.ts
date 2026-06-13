@@ -59,6 +59,13 @@ function mockTarget(id = "supervisor.zen-free"): ModelTarget {
   }
 }
 
+const ENABLED_POOL = {
+  candidates: DEFAULT_SUPERVISOR_POOL.candidates.map((c) => ({
+    ...c,
+    enabled: true,
+  })),
+}
+
 function mockClient(responseText: string, error?: string): ChatClient {
   return {
     chatCompletionsStream: vi.fn(async function* () {
@@ -128,7 +135,7 @@ describe("requestSupervisorAdvice", () => {
     const result = await requestSupervisorAdvice({
       trigger: { shouldRequest: true, failureClass: "tool_format", reason: "error_signature_threshold" },
       ledger: mockLedger(),
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       state,
       resolveTarget: (id) => mockTarget(id),
@@ -149,7 +156,7 @@ describe("requestSupervisorAdvice", () => {
     const result = await requestSupervisorAdvice({
       trigger: { shouldRequest: true, failureClass: "unknown" },
       ledger: mockLedger(),
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       state,
       resolveTarget: (id) => mockTarget(id),
@@ -166,7 +173,7 @@ describe("requestSupervisorAdvice", () => {
     const first = await requestSupervisorAdvice({
       trigger: { shouldRequest: true, failureClass: "tool_format" },
       ledger: mockLedger(),
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget: new SupervisorBudgetTracker(),
       state: createSupervisorGuidanceState(),
       resolveTarget: (id) => mockTarget(id),
@@ -227,7 +234,7 @@ describe("evaluateAndRequestSupervisorAdvice", () => {
     state.recentFailures = [{ signature: "sig1", count: 5, lastError: "boom" }]
     const out = await evaluateAndRequestSupervisorAdvice(
       {
-        pool: DEFAULT_SUPERVISOR_POOL,
+        pool: ENABLED_POOL,
         budget: new SupervisorBudgetTracker(),
         state,
         resolveTarget: (id) => mockTarget(id),
@@ -253,7 +260,7 @@ describe("runSupervisorGuidanceAtSafePoint", () => {
 
     const outcome = await runSupervisorGuidanceAtSafePoint(
       {
-        pool: DEFAULT_SUPERVISOR_POOL,
+        pool: ENABLED_POOL,
         budget: new SupervisorBudgetTracker(),
         state,
         resolveTarget: (id) => mockTarget(id),

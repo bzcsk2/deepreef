@@ -296,6 +296,90 @@ describe("WorkflowCoordinator", () => {
 
   it("should not transition if no workflow in progress", () => {
     const coordinator = new WorkflowCoordinator()
-    expect(() => coordinator.transition("supervisor_analyse")).toThrow("No workflow in progress")
+    const result = coordinator.transition("supervisor_analyse")
+    expect(result.success).toBe(false)
+    expect(result.error).toBe("No workflow in progress")
+  })
+
+  describe("supervisor_intervene 中途干预", () => {
+    it("should transition to supervisor_intervene from worker_do", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "Fix all bugs" })
+
+      coordinator.transition("supervisor_analyse")
+      coordinator.transition("worker_do")
+
+      const result = coordinator.transition("supervisor_intervene")
+      expect(result.success).toBe(true)
+      expect(coordinator.getState()?.currentPhase).toBe("supervisor_intervene")
+    })
+
+    it("should emit supervisor_intervene event", () => {
+      const events: any[] = []
+      const coordinator = new WorkflowCoordinator({
+        onEvent: (event) => events.push(event),
+      })
+
+      coordinator.startWorkflow({ goal: "Fix all bugs" })
+      coordinator.transition("supervisor_analyse")
+      coordinator.transition("worker_do")
+      coordinator.transition("supervisor_intervene")
+
+      const interveneEvent = events.find((e) => e.type === "supervisor_intervene")
+      expect(interveneEvent).toBeDefined()
+      expect(interveneEvent.workflowId).toBeDefined()
+    })
+
+    it("should transition from supervisor_intervene back to worker_do", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "Fix all bugs" })
+
+      coordinator.transition("supervisor_analyse")
+      coordinator.transition("worker_do")
+      coordinator.transition("supervisor_intervene")
+
+      const result = coordinator.transition("worker_do")
+      expect(result.success).toBe(true)
+      expect(coordinator.getState()?.currentPhase).toBe("worker_do")
+    })
+
+    it("should transition from supervisor_intervene to supervisor_check", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "Fix all bugs" })
+
+      coordinator.transition("supervisor_analyse")
+      coordinator.transition("worker_do")
+      coordinator.transition("supervisor_intervene")
+
+      const result = coordinator.transition("supervisor_check")
+      expect(result.success).toBe(true)
+      expect(coordinator.getState()?.currentPhase).toBe("supervisor_check")
+    })
+
+    it("should track intervention count", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "Fix all bugs" })
+
+      coordinator.transition("supervisor_analyse")
+      coordinator.transition("worker_do")
+      coordinator.transition("supervisor_intervene")
+      coordinator.transition("worker_do")
+      coordinator.transition("supervisor_intervene")
+
+      expect(coordinator.getState()?.interventionCount).toBe(2)
+    })
+
+    it("should not transition to supervisor_intervene from supervisor_check", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "Fix all bugs" })
+
+      coordinator.transition("supervisor_analyse")
+      coordinator.transition("worker_do")
+      coordinator.transition("worker_report")
+      coordinator.transition("supervisor_check")
+
+      const result = coordinator.transition("supervisor_intervene")
+      expect(result.success).toBe(false)
+    })
   })
 })

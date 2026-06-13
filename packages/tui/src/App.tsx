@@ -413,12 +413,6 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
 
   // DA-R6: 双角色状态管理
   const [activeRole, setActiveRole] = useState<AgentRole>('worker');
-  const [workerMessages, setWorkerMessages] = useState<Array<{ role: AgentRole; content: string; ts: number }>>([]);
-  const [supervisorMessages, setSupervisorMessages] = useState<Array<{ role: AgentRole; content: string; ts: number }>>([]);
-  const [workerDraft, setWorkerDraft] = useState('');
-  const [supervisorDraft, setSupervisorDraft] = useState('');
-  const [workerScrollPosition, setWorkerScrollPosition] = useState(0);
-  const [supervisorScrollPosition, setSupervisorScrollPosition] = useState(0);
 
   // DA-R6: Workflow 状态
   const [workflowState, setWorkflowState] = useState<WorkflowState>({
@@ -609,10 +603,48 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       }
       return;
     }
+    // DA-R6: /run 命令 — 启动 Workflow
+    if (command?.name === 'run') {
+      setWorkflowState({
+        phase: 'supervisor_analyse',
+        iteration: 1,
+        maxRounds: 9,
+        goal: command.goal,
+        supervisorStatus: 'analyse',
+        workerStatus: 'idle',
+      });
+      appendMessage({
+        role: 'assistant' as const,
+        content: `Starting workflow for: ${command.goal}\nSupervisor analysing...`,
+      });
+      // Submit the goal to the supervisor via bridge
+      scrollRef.current?.scrollToBottom();
+      bridge.submit(command.goal, false, 'supervisor');
+      return;
+    }
+    // DA-R6: /talk 命令 — 切换输入目标角色
+    if (command?.name === 'talk') {
+      if (command.role) {
+        setActiveRole(command.role);
+        appendMessage({
+          role: 'assistant' as const,
+          content: `Input target switched to: ${command.role}`,
+        });
+      } else {
+        // Toggle between worker and supervisor
+        const newRole = activeRole === 'worker' ? 'supervisor' : 'worker';
+        setActiveRole(newRole);
+        appendMessage({
+          role: 'assistant' as const,
+          content: `Input target switched to: ${newRole}`,
+        });
+      }
+      return;
+    }
     const taggedSkillNames = extractSkillTags(submitted);
     if (taggedSkillNames.length === 0) {
       scrollRef.current?.scrollToBottom();
-      bridge.submit(submitted);
+      bridge.submit(submitted, false, activeRole);
       return;
     }
 
@@ -626,12 +658,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       engineRef.current.setActiveSkills(merged);
       scrollRef.current?.scrollToBottom();
       try {
-        await bridge.submit(submitted);
+        await bridge.submit(submitted, false, activeRole);
       } finally {
         engineRef.current.setActiveSkills(previousSkills);
       }
     })();
-  }, [activeAgent, appendMessage, bridge, thinkingMode]);
+  }, [activeAgent, activeRole, appendMessage, bridge, thinkingMode]);
 
   /** Agent 切换回调：调用引擎切换 Agent 并更新显示名称 */
   const handleAgentChoose = useCallback((next: string) => {
@@ -885,31 +917,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       <OrchestrationSummaryFromStore terminalWidth={process.stdout.columns ?? 80} />
       {/* TUI-FIX-40: Agent 活动组（展开时显示详细进度） */}
       <AgentGroupDisplayFromStore terminalWidth={process.stdout.columns ?? 80} />
-      {/* DA-R6: 双角色 Tab 系统 */}
+      {/* DA-R6: 双角色 Tab 系统 — 简化为输入目标选择器 */}
       <DualTabSystem
         activeRole={activeRole}
         onRoleChange={(role) => {
           // 仅在无覆盖层时允许切换
           if (!isOverlayActive) {
             setActiveRole(role);
-          }
-        }}
-        workerMessages={workerMessages}
-        supervisorMessages={supervisorMessages}
-        workerDraft={workerDraft}
-        supervisorDraft={supervisorDraft}
-        onDraftChange={(role, draft) => {
-          if (role === 'worker') {
-            setWorkerDraft(draft);
-          } else {
-            setSupervisorDraft(draft);
-          }
-        }}
-        onScrollPositionChange={(role, position) => {
-          if (role === 'worker') {
-            setWorkerScrollPosition(position);
-          } else {
-            setSupervisorScrollPosition(position);
           }
         }}
         disabled={isOverlayActive}

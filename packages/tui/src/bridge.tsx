@@ -1,4 +1,5 @@
 import type { ChatMessage, ReasonixEngine, QuestionRequest, PermissionRequest, PermissionReply } from '@deepreef/core';
+import type { AgentRole } from '@deepreef/core/agent-profile/types.js';
 import { setTUIState } from './App.js';
 import { DeltaBatcher, resolveDeltaFlushMs } from './delta-batcher.js';
 import { t } from './i18n/index.js';
@@ -22,10 +23,10 @@ export interface ToolStatus {
 }
 
 export type TimelineItem =
-  | { id: string; kind: 'message'; message: ChatMessage }
-  | { id: string; kind: 'assistant_text'; roundId: string; text: string; isStreaming: boolean; startTs: number }
-  | { id: string; kind: 'reasoning'; roundId: string; text: string; isStreaming: boolean; startTs: number }
-  | { id: string; kind: 'tool'; roundId: string; tool: ToolStatus };
+  | { id: string; kind: 'message'; message: ChatMessage; role?: AgentRole }
+  | { id: string; kind: 'assistant_text'; roundId: string; text: string; isStreaming: boolean; startTs: number; role?: AgentRole }
+  | { id: string; kind: 'reasoning'; roundId: string; text: string; isStreaming: boolean; startTs: number; role?: AgentRole }
+  | { id: string; kind: 'tool'; roundId: string; tool: ToolStatus; role?: AgentRole };
 
 export interface BridgeState {
   timeline: TimelineItem[];
@@ -141,7 +142,7 @@ export function createBridge(
   beforeSubmit?: () => Promise<void>,
   orchestrationStore?: import('./store/orchestration-store.js').OrchestrationStore,
 ): {
-  submit: (text: string) => Promise<void>;
+  submit: (text: string, isQueueResubmit?: boolean, role?: AgentRole) => Promise<void>;
   cancel: () => void;
   respondPermission: (reply: PermissionReply, message?: string) => void;
   respondQuestion: (requestId: string, answers: string[][]) => void;
@@ -281,7 +282,7 @@ export function createBridge(
     });
   };
 
-  const submit = async (text: string, isQueueResubmit = false) => {
+  const submit = async (text: string, isQueueResubmit = false, role?: AgentRole) => {
     if (running) {
       const result = engine.enqueueInstruction(text);
       if (result.status === 'ignored') return;
@@ -311,6 +312,7 @@ export function createBridge(
 
     running = true;
     const requestId = ++activeRequest;
+    const submitRole: AgentRole | undefined = role;
     let roundNumber = 0;
     let roundId = '';
     let assistantId: string | null = null;
@@ -345,6 +347,7 @@ export function createBridge(
             text: assistantText,
             isStreaming: true,
             startTs: assistantStartTs,
+            role: submitRole,
           });
         }
 
@@ -357,6 +360,7 @@ export function createBridge(
             text: reasoningText,
             isStreaming: true,
             startTs: reasoningStartTs,
+            role: submitRole,
           });
         }
 
@@ -406,6 +410,7 @@ export function createBridge(
             text: assistantText,
             isStreaming: false,
             startTs: assistantStartTs || Date.now(),
+            role: submitRole,
           }, existing => existing.kind === 'assistant_text'
             ? { ...existing, text: assistantText, isStreaming: false }
             : existing);
@@ -427,6 +432,7 @@ export function createBridge(
             text: reasoningText,
             isStreaming: false,
             startTs: reasoningStartTs || Date.now(),
+            role: submitRole,
           }, existing => existing.kind === 'reasoning'
             ? { ...existing, text: reasoningText, isStreaming: false }
             : existing);
@@ -493,6 +499,7 @@ export function createBridge(
         kind: 'tool',
         roundId,
         tool: mergedTool,
+        role: submitRole,
       }, existing => {
         if (existing.kind !== 'tool') return existing;
         return {
@@ -513,6 +520,7 @@ export function createBridge(
         id: `user-${requestId}-${crypto.randomUUID()}`,
         kind: 'message',
         message: { role: 'user', content: text },
+        role: submitRole,
       };
 
       if (transcriptStore) {
@@ -547,7 +555,7 @@ export function createBridge(
 
     try {
       await beforeSubmit?.();
-      for await (const event of engine.submit(text)) {
+      for await (const event of engine.submit(text, undefined, submitRole)) {
         if (requestId !== activeRequest) continue;
 
         switch (event.role) {

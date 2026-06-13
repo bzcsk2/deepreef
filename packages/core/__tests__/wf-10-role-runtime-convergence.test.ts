@@ -5,17 +5,53 @@
  *
  * 测试内容：
  * 1. 验证 WorkflowCoordinator 是唯一调度者
- * 2. 验证 AgentRuntime 的 config 注入
- * 3. 验证 DualAgentRuntime 的 config 传递
- * 4. 验证 WorkflowPhase 定义收敛
+ * 2. 验证 AgentRuntime 委托给 ReasonixEngine
+ * 3. 验证 DualAgentRuntime 管理两个 Runtime
+ * 4. 验证 WorkflowPhase 定义包含 waiting_user
  */
 
-import { describe, it, expect, beforeEach, mock } from "bun:test"
+import { describe, it, expect, mock } from "bun:test"
 import { AgentRuntime } from "../src/dual-agent-runtime/runtime.js"
 import { DualAgentRuntime } from "../src/dual-agent-runtime/dual-runtime.js"
 import { WorkflowCoordinator } from "../src/workflow-coordinator/coordinator.js"
 import type { WorkflowPhase } from "../src/workflow-coordinator/types.js"
 import type { ChatClient } from "../src/interface.js"
+
+function createMockClient(): ChatClient {
+  return {
+    chatCompletionsStream: mock(() => (async function* () {})()),
+  }
+}
+
+function createDualRuntime() {
+  return new DualAgentRuntime({
+    workerClient: createMockClient(),
+    supervisorClient: createMockClient(),
+    workerSystemPrompt: "You are a worker",
+    supervisorSystemPrompt: "You are a supervisor",
+    config: {
+      workerModelTarget: "deepseek-chat",
+      supervisorModelTarget: "deepseek-reasoner",
+      workerThinking: "high",
+      supervisorThinking: "off",
+      maxWorkflowRounds: 9,
+    },
+    workerConfig: {
+      apiKey: "worker-key",
+      baseUrl: "https://api.worker.com",
+      model: "worker-model",
+      maxTokens: 4096,
+      temperature: 0.7,
+    },
+    supervisorConfig: {
+      apiKey: "supervisor-key",
+      baseUrl: "https://api.supervisor.com",
+      model: "supervisor-model",
+      maxTokens: 8192,
+      temperature: 0.3,
+    },
+  })
+}
 
 describe("WF-10: 角色运行内核收敛测试", () => {
   describe("测试 1: WorkflowCoordinator 是唯一调度者", () => {
@@ -48,17 +84,28 @@ describe("WF-10: 角色运行内核收敛测试", () => {
       const coordinator = new WorkflowCoordinator()
       expect(typeof coordinator.restoreCheckpoint).toBe("function")
     })
+
+    it("WorkflowCoordinator 应该有 runWorkflow 方法", () => {
+      const coordinator = new WorkflowCoordinator()
+      expect(typeof coordinator.runWorkflow).toBe("function")
+    })
+
+    it("WorkflowCoordinator 应该有 setRuntime 方法", () => {
+      const coordinator = new WorkflowCoordinator()
+      expect(typeof coordinator.setRuntime).toBe("function")
+    })
+
+    it("WorkflowCoordinator 应该有 setQuestionService 方法", () => {
+      const coordinator = new WorkflowCoordinator()
+      expect(typeof coordinator.setQuestionService).toBe("function")
+    })
   })
 
-  describe("测试 2: AgentRuntime config 注入", () => {
-    it("AgentRuntime 应该接收 config", () => {
-      const mockClient: ChatClient = {
-        chatCompletionsStream: mock(() => (async function* () {})()),
-      }
-
+  describe("测试 2: AgentRuntime 委托给 ReasonixEngine", () => {
+    it("AgentRuntime 应该接收 config 并创建 ReasonixEngine", () => {
       const runtime = new AgentRuntime({
         role: "worker",
-        client: mockClient,
+        client: createMockClient(),
         systemPrompt: "You are a worker",
         contextWindow: 128_000,
         maxContextRounds: 20,
@@ -73,16 +120,13 @@ describe("WF-10: 角色运行内核收敛测试", () => {
 
       expect(runtime.getRole()).toBe("worker")
       expect(runtime.getStatus()).toBe("idle")
+      expect(runtime.getEngine()).toBeDefined()
     })
 
     it("AgentRuntime 应该有 reset 方法", () => {
-      const mockClient: ChatClient = {
-        chatCompletionsStream: mock(() => (async function* () {})()),
-      }
-
       const runtime = new AgentRuntime({
         role: "worker",
-        client: mockClient,
+        client: createMockClient(),
         systemPrompt: "You are a worker",
         contextWindow: 128_000,
         maxContextRounds: 20,
@@ -97,148 +141,111 @@ describe("WF-10: 角色运行内核收敛测试", () => {
 
       expect(typeof runtime.reset).toBe("function")
     })
-  })
 
-  describe("测试 3: DualAgentRuntime config 传递", () => {
-    it("DualAgentRuntime 应该接收 worker 和 supervisor 的 config", () => {
-      const mockWorkerClient: ChatClient = {
-        chatCompletionsStream: mock(() => (async function* () {})()),
-      }
-
-      const mockSupervisorClient: ChatClient = {
-        chatCompletionsStream: mock(() => (async function* () {})()),
-      }
-
-      const dualRuntime = new DualAgentRuntime({
-        workerClient: mockWorkerClient,
-        supervisorClient: mockSupervisorClient,
-        workerSystemPrompt: "You are a worker",
-        supervisorSystemPrompt: "You are a supervisor",
+    it("AgentRuntime 应该有 interrupt 方法", () => {
+      const runtime = new AgentRuntime({
+        role: "worker",
+        client: createMockClient(),
+        systemPrompt: "You are a worker",
+        contextWindow: 128_000,
+        maxContextRounds: 20,
         config: {
-          workerModelTarget: "deepseek-chat",
-          supervisorModelTarget: "deepseek-reasoner",
-          workerThinking: "high",
-          supervisorThinking: "off",
-          maxWorkflowRounds: 9,
-        },
-        workerConfig: {
-          apiKey: "worker-key",
-          baseUrl: "https://api.worker.com",
-          model: "worker-model",
+          apiKey: "test-key",
+          baseUrl: "https://api.test.com",
+          model: "test-model",
           maxTokens: 4096,
           temperature: 0.7,
         },
-        supervisorConfig: {
-          apiKey: "supervisor-key",
-          baseUrl: "https://api.supervisor.com",
-          model: "supervisor-model",
-          maxTokens: 8192,
-          temperature: 0.3,
+      })
+
+      expect(typeof runtime.interrupt).toBe("function")
+    })
+
+    it("AgentRuntime 应该有 submit 方法", () => {
+      const runtime = new AgentRuntime({
+        role: "worker",
+        client: createMockClient(),
+        systemPrompt: "You are a worker",
+        contextWindow: 128_000,
+        maxContextRounds: 20,
+        config: {
+          apiKey: "test-key",
+          baseUrl: "https://api.test.com",
+          model: "test-model",
+          maxTokens: 4096,
+          temperature: 0.7,
         },
       })
+
+      expect(typeof runtime.submit).toBe("function")
+    })
+  })
+
+  describe("测试 3: DualAgentRuntime 管理两个 Runtime", () => {
+    it("DualAgentRuntime 应该接收 worker 和 supervisor 的 config", () => {
+      const dualRuntime = createDualRuntime()
 
       expect(dualRuntime.getWorker()).toBeDefined()
       expect(dualRuntime.getSupervisor()).toBeDefined()
     })
 
-    it("DualAgentRuntime 应该有 getWorkflow 方法", () => {
-      const mockWorkerClient: ChatClient = {
-        chatCompletionsStream: mock(() => (async function* () {})()),
-      }
+    it("DualAgentRuntime 应该有 sendDirect 方法", () => {
+      const dualRuntime = createDualRuntime()
+      expect(typeof dualRuntime.sendDirect).toBe("function")
+    })
 
-      const mockSupervisorClient: ChatClient = {
-        chatCompletionsStream: mock(() => (async function* () {})()),
-      }
-
-      const dualRuntime = new DualAgentRuntime({
-        workerClient: mockWorkerClient,
-        supervisorClient: mockSupervisorClient,
-        workerSystemPrompt: "You are a worker",
-        supervisorSystemPrompt: "You are a supervisor",
-        config: {
-          workerModelTarget: "deepseek-chat",
-          supervisorModelTarget: "deepseek-reasoner",
-          workerThinking: "high",
-          supervisorThinking: "off",
-          maxWorkflowRounds: 9,
-        },
-        workerConfig: {
-          apiKey: "worker-key",
-          baseUrl: "https://api.worker.com",
-          model: "worker-model",
-          maxTokens: 4096,
-          temperature: 0.7,
-        },
-        supervisorConfig: {
-          apiKey: "supervisor-key",
-          baseUrl: "https://api.supervisor.com",
-          model: "supervisor-model",
-          maxTokens: 8192,
-          temperature: 0.3,
-        },
-      })
-
-      const workflow = dualRuntime.getWorkflow()
-      expect(workflow).toBeDefined()
-      expect(workflow.maxRounds).toBe(9)
-      expect(workflow.currentPhase).toBe("idle")
+    it("DualAgentRuntime 应该有 interruptRole 方法", () => {
+      const dualRuntime = createDualRuntime()
+      expect(typeof dualRuntime.interruptRole).toBe("function")
     })
 
     it("DualAgentRuntime 应该有 reset 方法", () => {
-      const mockWorkerClient: ChatClient = {
-        chatCompletionsStream: mock(() => (async function* () {})()),
-      }
-
-      const mockSupervisorClient: ChatClient = {
-        chatCompletionsStream: mock(() => (async function* () {})()),
-      }
-
-      const dualRuntime = new DualAgentRuntime({
-        workerClient: mockWorkerClient,
-        supervisorClient: mockSupervisorClient,
-        workerSystemPrompt: "You are a worker",
-        supervisorSystemPrompt: "You are a supervisor",
-        config: {
-          workerModelTarget: "deepseek-chat",
-          supervisorModelTarget: "deepseek-reasoner",
-          workerThinking: "high",
-          supervisorThinking: "off",
-          maxWorkflowRounds: 9,
-        },
-        workerConfig: {
-          apiKey: "worker-key",
-          baseUrl: "https://api.worker.com",
-          model: "worker-model",
-          maxTokens: 4096,
-          temperature: 0.7,
-        },
-        supervisorConfig: {
-          apiKey: "supervisor-key",
-          baseUrl: "https://api.supervisor.com",
-          model: "supervisor-model",
-          maxTokens: 8192,
-          temperature: 0.3,
-        },
-      })
-
+      const dualRuntime = createDualRuntime()
       expect(typeof dualRuntime.reset).toBe("function")
+    })
+
+    it("DualAgentRuntime 应该有 getState 方法", () => {
+      const dualRuntime = createDualRuntime()
+      expect(typeof dualRuntime.getState).toBe("function")
+    })
+
+    it("DualAgentRuntime 应该获取特定角色的状态", () => {
+      const dualRuntime = createDualRuntime()
+
+      const workerState = dualRuntime.getState("worker")
+      expect(workerState).toBeDefined()
+      expect(workerState.role).toBe("worker")
+
+      const supervisorState = dualRuntime.getState("supervisor")
+      expect(supervisorState).toBeDefined()
+      expect(supervisorState.role).toBe("supervisor")
+    })
+
+    it("DualAgentRuntime 不应该有重复的 workflow 状态", () => {
+      const dualRuntime = createDualRuntime()
+
+      // 新架构中，DualAgentRuntime 不再管理 workflow 状态
+      // workflow 状态由 WorkflowCoordinator 管理
+      expect((dualRuntime as any).workflow).toBeUndefined()
+      expect(typeof (dualRuntime as any).transitionWorkflow).toBe("undefined")
+      expect(typeof (dualRuntime as any).canContinue).toBe("undefined")
     })
   })
 
   describe("测试 4: WorkflowPhase 定义收敛", () => {
-    it("WorkflowPhase 应该包含所有必要的阶段", () => {
+    it("WorkflowPhase 应该包含 waiting_user 阶段", () => {
       const requiredPhases: WorkflowPhase[] = [
         "idle",
         "supervisor_analyse",
         "worker_do",
         "worker_report",
         "supervisor_check",
+        "waiting_user",
         "blocked",
         "completed",
         "failed",
       ]
 
-      // 验证 WorkflowCoordinator 使用的 WorkflowPhase
       const coordinator = new WorkflowCoordinator()
       coordinator.startWorkflow({ goal: "test" })
 
@@ -247,44 +254,55 @@ describe("WF-10: 角色运行内核收敛测试", () => {
       expect(requiredPhases).toContain(state!.currentPhase)
     })
 
-    it("WorkflowPhase 应该有 waiting_user 阶段（当前缺失）", () => {
-      // 当前 WorkflowPhase 没有 waiting_user
-      // 这是一个已知缺口，需要在后续实现中添加
-      const currentPhases: WorkflowPhase[] = [
-        "idle",
-        "supervisor_analyse",
-        "worker_do",
-        "worker_report",
-        "supervisor_check",
-        "blocked",
-        "completed",
-        "failed",
-      ]
+    it("WorkflowCoordinator 应该支持 waiting_user 转换", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "test" })
 
-      // 验证当前没有 waiting_user
-      expect(currentPhases).not.toContain("waiting_user")
+      // 从 idle 转换到 supervisor_analyse
+      coordinator.transition("supervisor_analyse")
+
+      // 从 supervisor_analyse 转换到 waiting_user
+      const result = coordinator.transition("waiting_user")
+      expect(result.success).toBe(true)
+
+      const state = coordinator.getState()
+      expect(state!.currentPhase).toBe("waiting_user")
     })
   })
 
-  describe("测试 5: 收敛缺口记录", () => {
-    it("记录: 需要添加 waiting_user 阶段", () => {
-      // 当前实现中，ask_user 只是 metadata
-      // 需要添加 waiting_user 阶段来真正暂停 Workflow
-      expect(true).toBe(true) // 占位测试
+  describe("测试 5: Workflow 状态管理", () => {
+    it("WorkflowCoordinator 应该从 waiting_user 恢复到 supervisor_analyse", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "test" })
+
+      coordinator.transition("supervisor_analyse")
+      coordinator.transition("waiting_user")
+
+      // 从 waiting_user 恢复到 supervisor_analyse
+      const result = coordinator.transition("supervisor_analyse")
+      expect(result.success).toBe(true)
+
+      const state = coordinator.getState()
+      expect(state!.currentPhase).toBe("supervisor_analyse")
     })
 
-    it("记录: 需要统一 WorkflowPhase 定义", () => {
-      // 当前存在两套 WorkflowPhase：
-      // 1. workflow-coordinator/types.ts
-      // 2. dual-agent-runtime/types.ts
-      // 需要收敛为单一定义
-      expect(true).toBe(true) // 占位测试
-    })
+    it("WorkflowCoordinator 应该支持 checkpoint 保存和恢复", () => {
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "test" })
 
-    it("记录: 需要让 DualAgentRuntime 使用 WorkflowCoordinator", () => {
-      // 当前 DualAgentRuntime 有自己的 workflow 状态管理
-      // 需要让 DualAgentRuntime 使用 WorkflowCoordinator 作为唯一调度者
-      expect(true).toBe(true) // 占位测试
+      coordinator.transition("supervisor_analyse")
+      coordinator.transition("worker_do")
+
+      const checkpoint = coordinator.saveCheckpoint()
+      expect(checkpoint).toBeDefined()
+      expect(checkpoint.state.currentPhase).toBe("worker_do")
+
+      const newCoordinator = new WorkflowCoordinator()
+      newCoordinator.restoreCheckpoint(checkpoint)
+
+      const restoredState = newCoordinator.getState()
+      expect(restoredState!.currentPhase).toBe("worker_do")
+      expect(restoredState!.goal).toBe("test")
     })
   })
 })

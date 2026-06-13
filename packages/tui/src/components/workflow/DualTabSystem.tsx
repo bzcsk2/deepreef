@@ -1,15 +1,18 @@
 /**
- * DualTabSystem — 双角色 Tab 系统组件
+ * DualTabSystem — 双角色输入目标选择器
  *
  * 功能：
- * - Tab 切换 Supervisor/Worker 对话和输入目标
- * - 两个 Tab 分别保存草稿、消息列表和滚动锁定位置
+ * - Tab 切换输入目标（Worker/Supervisor）
+ * - 显示当前活跃角色指示
  * - 无覆盖层、无 Question/Permission、无自动补全候选时，Tab 切换目标
  * - 自动补全打开时 Tab 保留原用途；Question、Permission 和危险确认优先
+ *
+ * 注意：根据设计文档 6.3，Tab 只切换输入目标，不切换主时间线。
+ * 统一时间线由 DeepiMessages 组件渲染。
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { Box, Text, useInput } from '@deepreef/ink';
+import { useInput } from '@deepreef/ink';
+import { Box, Text } from '@deepreef/ink';
 import { FG, TONE } from '../../reasonix/tokens.js';
 
 /** 角色类型 */
@@ -18,7 +21,6 @@ export type AgentRole = 'worker' | 'supervisor';
 /** Tab 状态 */
 export interface TabState {
   role: AgentRole;
-  messages: Array<{ role: AgentRole; content: string; ts: number }>;
   draft: string;
   scrollPosition: number;
 }
@@ -29,18 +31,6 @@ export interface DualTabSystemProps {
   activeRole: AgentRole;
   /** Tab 切换回调 */
   onRoleChange: (role: AgentRole) => void;
-  /** Worker 消息列表 */
-  workerMessages: Array<{ role: AgentRole; content: string; ts: number }>;
-  /** Supervisor 消息列表 */
-  supervisorMessages: Array<{ role: AgentRole; content: string; ts: number }>;
-  /** Worker 草稿 */
-  workerDraft?: string;
-  /** Supervisor 草稿 */
-  supervisorDraft?: string;
-  /** 草稿更新回调 */
-  onDraftChange?: (role: AgentRole, draft: string) => void;
-  /** 滚动位置更新回调 */
-  onScrollPositionChange?: (role: AgentRole, position: number) => void;
   /** 是否禁用 Tab 切换 */
   disabled?: boolean;
   /** 终端宽度 */
@@ -48,23 +38,14 @@ export interface DualTabSystemProps {
 }
 
 /**
- * DualTabSystem 组件
+ * DualTabSystem 组件 — 简化为输入目标选择器
  */
 export function DualTabSystem({
   activeRole,
   onRoleChange,
-  workerMessages,
-  supervisorMessages,
-  workerDraft = '',
-  supervisorDraft = '',
-  onDraftChange,
-  onScrollPositionChange,
   disabled = false,
   width = 80,
 }: DualTabSystemProps) {
-  const workerTabRef = useRef<any>(null);
-  const supervisorTabRef = useRef<any>(null);
-
   // 处理 Tab 键切换
   useInput(
     (input, key) => {
@@ -81,102 +62,38 @@ export function DualTabSystem({
   const tabTitleWidth = Math.floor(width / 2);
 
   return (
-    <Box width="100%" flexDirection="column">
-      {/* Tab 标题栏 */}
-      <Box width="100%" flexDirection="row">
-        <Box
-          width={tabTitleWidth}
-          justifyContent="center"
-          borderStyle="round"
-          borderColor={activeRole === 'supervisor' ? TONE.brand : FG.faint}
-          paddingX={1}
+    <Box width="100%" flexDirection="row">
+      <Box
+        width={tabTitleWidth}
+        justifyContent="center"
+        borderStyle="round"
+        borderColor={activeRole === 'supervisor' ? TONE.brand : FG.faint}
+        paddingX={1}
+      >
+        <Text
+          bold={activeRole === 'supervisor'}
+          color={activeRole === 'supervisor' ? TONE.brand : FG.faint}
         >
-          <Text
-            bold={activeRole === 'supervisor'}
-            color={activeRole === 'supervisor' ? TONE.brand : FG.faint}
-          >
-            Supervisor
-          </Text>
-        </Box>
-        <Box
-          width={tabTitleWidth}
-          justifyContent="center"
-          borderStyle="round"
-          borderColor={activeRole === 'worker' ? TONE.ok : FG.faint}
-          paddingX={1}
+          Supervisor
+        </Text>
+      </Box>
+      <Box
+        width={tabTitleWidth}
+        justifyContent="center"
+        borderStyle="round"
+        borderColor={activeRole === 'worker' ? TONE.ok : FG.faint}
+        paddingX={1}
+      >
+        <Text
+          bold={activeRole === 'worker'}
+          color={activeRole === 'worker' ? TONE.ok : FG.faint}
         >
-          <Text
-            bold={activeRole === 'worker'}
-            color={activeRole === 'worker' ? TONE.ok : FG.faint}
-          >
-            Worker
-          </Text>
-        </Box>
-        <Box flexGrow={1} justifyContent="flex-end">
-          <Text color={FG.faint}>{`active: ${activeRole === 'worker' ? 'Worker' : 'Supervisor'}`}</Text>
-        </Box>
+          Worker
+        </Text>
       </Box>
-
-      {/* 消息显示区域（根据当前 Tab 显示对应消息） */}
-      <Box width="100%" flexDirection="column" marginTop={1}>
-        {activeRole === 'worker' ? (
-          <WorkerMessages messages={workerMessages} width={width} />
-        ) : (
-          <SupervisorMessages messages={supervisorMessages} width={width} />
-        )}
+      <Box flexGrow={1} justifyContent="flex-end">
+        <Text color={FG.faint}>{`→ ${activeRole === 'worker' ? 'Worker' : 'Supervisor'}`}</Text>
       </Box>
-    </Box>
-  );
-}
-
-/**
- * Worker 消息显示组件
- */
-function WorkerMessages({
-  messages,
-  width,
-}: {
-  messages: Array<{ role: AgentRole; content: string; ts: number }>;
-  width: number;
-}) {
-  return (
-    <Box width="100%" flexDirection="column">
-      {messages.length === 0 ? (
-        <Text color={FG.faint}>No messages yet. Send a message to Worker.</Text>
-      ) : (
-        messages.map((msg, index) => (
-          <Box key={index} width="100%" flexDirection="column" marginBottom={1}>
-            <Text color={TONE.ok}>Worker:</Text>
-            <Text color={FG.sub}>{msg.content}</Text>
-          </Box>
-        ))
-      )}
-    </Box>
-  );
-}
-
-/**
- * Supervisor 消息显示组件
- */
-function SupervisorMessages({
-  messages,
-  width,
-}: {
-  messages: Array<{ role: AgentRole; content: string; ts: number }>;
-  width: number;
-}) {
-  return (
-    <Box width="100%" flexDirection="column">
-      {messages.length === 0 ? (
-        <Text color={FG.faint}>No messages yet. Send a message to Supervisor.</Text>
-      ) : (
-        messages.map((msg, index) => (
-          <Box key={index} width="100%" flexDirection="column" marginBottom={1}>
-            <Text color={TONE.brand}>Supervisor:</Text>
-            <Text color={FG.sub}>{msg.content}</Text>
-          </Box>
-        ))
-      )}
     </Box>
   );
 }
@@ -198,7 +115,6 @@ export function TabHeader({
       borderStyle="round"
       borderColor={isActive ? (role === 'worker' ? TONE.ok : TONE.brand) : FG.faint}
       paddingX={1}
-      onClick={onClick}
     >
       <Text
         bold={isActive}
@@ -206,38 +122,6 @@ export function TabHeader({
       >
         {role === 'worker' ? 'Worker' : 'Supervisor'}
       </Text>
-    </Box>
-  );
-}
-
-/**
- * 消息列表组件
- */
-export function MessageList({
-  messages,
-  role,
-  width,
-}: {
-  messages: Array<{ role: AgentRole; content: string; ts: number }>;
-  role: AgentRole;
-  width: number;
-}) {
-  const color = role === 'worker' ? TONE.ok : TONE.brand;
-
-  return (
-    <Box width="100%" flexDirection="column">
-      {messages.length === 0 ? (
-        <Text color={FG.faint}>No messages yet.</Text>
-      ) : (
-        messages.map((msg, index) => (
-          <Box key={index} width="100%" flexDirection="column" marginBottom={1}>
-            <Text bold color={color}>
-              {role === 'worker' ? 'Worker' : 'Supervisor'}:
-            </Text>
-            <Text color={FG.sub}>{msg.content}</Text>
-          </Box>
-        ))
-      )}
     </Box>
   );
 }

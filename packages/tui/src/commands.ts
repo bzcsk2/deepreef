@@ -18,6 +18,8 @@ export type SlashCommand =
   | { name: "context" }
   | { name: "harness"; subcommand?: "status" | "strict" | "normal" | "loose" | "project"; arg?: string }
   | { name: "theme"; themeName?: string }
+  | { name: "run"; goal: string }
+  | { name: "talk"; role?: "worker" | "supervisor" }
 
 const THINKING_MODES = ["off", "open", "high"]
 
@@ -60,6 +62,19 @@ export function parseSlashCommand(text: string): SlashCommand | null {
       return { name: "harness" as const, subcommand: "project" as const, arg: parts[2] }
     }
     return { name: "harness" as const }
+  }
+
+  if (trimmed.startsWith("/run")) {
+    const goal = trimmed.slice(4).trim()
+    if (!goal) return null
+    return { name: "run", goal }
+  }
+
+  if (trimmed.startsWith("/talk")) {
+    const parts = trimmed.split(/\s+/)
+    const role = parts[1] as "worker" | "supervisor" | undefined
+    if (role && role !== "worker" && role !== "supervisor") return null
+    return { name: "talk", role }
   }
 
   return null
@@ -131,6 +146,8 @@ export function buildHelpText(activeAgent: string, cmdStrings: HelpCommandString
     `  /context     — ${cmdStrings.cmdContext}`,
     `  /theme       — list or switch theme`,
     `  /thinking    — set thinking mode`,
+    `  /run <goal>  — start workflow with goal`,
+    `  /talk [role] — switch input target (worker|supervisor)`,
     "",
     "Agents:",
     agentList,

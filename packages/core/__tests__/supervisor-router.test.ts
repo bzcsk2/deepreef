@@ -9,14 +9,21 @@ import {
 
 const configuredTargets = new Set(["supervisor.zen-free", "supervisor.mimo-free"])
 
+const ENABLED_POOL = {
+  candidates: DEFAULT_SUPERVISOR_POOL.candidates.map((c) => ({
+    ...c,
+    enabled: true,
+  })),
+}
+
 describe("scoreSupervisorCandidate", () => {
   it("高优先级候选得分更高", () => {
     const budget = new SupervisorBudgetTracker()
-    const deepseek = DEFAULT_SUPERVISOR_POOL.candidates.find((c) => c.id === "zen-deepseek")!
-    const mimo = DEFAULT_SUPERVISOR_POOL.candidates.find((c) => c.id === "zen-mimo")!
+    const deepseek = ENABLED_POOL.candidates.find((c) => c.id === "zen-deepseek")!
+    const mimo = ENABLED_POOL.candidates.find((c) => c.id === "zen-mimo")!
 
     const input = {
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       isTargetConfigured: (t: string) => configuredTargets.has(t),
     }
@@ -28,17 +35,16 @@ describe("scoreSupervisorCandidate", () => {
 
   it("requiresStructuredJson 时无 structuredJson 能力扣分", () => {
     const budget = new SupervisorBudgetTracker()
-    const stepfun = DEFAULT_SUPERVISOR_POOL.candidates.find((c) => c.id === "stepfun-3.5")!
-    const enabledStepfun = { ...stepfun, enabled: true }
+    const stepfun = ENABLED_POOL.candidates.find((c) => c.id === "stepfun-3.5")!
 
-    const withReq = scoreSupervisorCandidate(enabledStepfun, {
-      pool: DEFAULT_SUPERVISOR_POOL,
+    const withReq = scoreSupervisorCandidate(stepfun, {
+      pool: ENABLED_POOL,
       budget,
       requiresStructuredJson: true,
       isTargetConfigured: () => true,
     })
-    const withoutReq = scoreSupervisorCandidate(enabledStepfun, {
-      pool: DEFAULT_SUPERVISOR_POOL,
+    const withoutReq = scoreSupervisorCandidate(stepfun, {
+      pool: ENABLED_POOL,
       budget,
       requiresStructuredJson: false,
       isTargetConfigured: () => true,
@@ -50,7 +56,7 @@ describe("scoreSupervisorCandidate", () => {
   it("冷却中候选被大幅扣分", () => {
     const budget = new SupervisorBudgetTracker({ defaultCooldownMs: 60_000 })
     const now = Date.now()
-    const candidate = DEFAULT_SUPERVISOR_POOL.candidates.find((c) => c.id === "zen-deepseek")!
+    const candidate = ENABLED_POOL.candidates.find((c) => c.id === "zen-deepseek")!
 
     budget.recordRequest({
       targetId: candidate.target,
@@ -61,7 +67,7 @@ describe("scoreSupervisorCandidate", () => {
     })
 
     const scored = scoreSupervisorCandidate(candidate, {
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       now: now + 1000,
       isTargetConfigured: (t) => configuredTargets.has(t),
@@ -71,10 +77,10 @@ describe("scoreSupervisorCandidate", () => {
 
   it("未配置 target 被排除", () => {
     const budget = new SupervisorBudgetTracker()
-    const candidate = DEFAULT_SUPERVISOR_POOL.candidates.find((c) => c.id === "zen-mimo")!
+    const candidate = ENABLED_POOL.candidates.find((c) => c.id === "zen-mimo")!
 
     const scored = scoreSupervisorCandidate(candidate, {
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       isTargetConfigured: () => false,
     })
@@ -84,10 +90,10 @@ describe("scoreSupervisorCandidate", () => {
 
   it("metrics 影响得分：高成功率与低延迟加分", () => {
     const budget = new SupervisorBudgetTracker()
-    const candidate = DEFAULT_SUPERVISOR_POOL.candidates.find((c) => c.id === "zen-mimo")!
+    const candidate = ENABLED_POOL.candidates.find((c) => c.id === "zen-mimo")!
 
     const base = scoreSupervisorCandidate(candidate, {
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       isTargetConfigured: (t) => configuredTargets.has(t),
     })
@@ -95,7 +101,7 @@ describe("scoreSupervisorCandidate", () => {
     const boosted = scoreSupervisorCandidate(
       candidate,
       {
-        pool: DEFAULT_SUPERVISOR_POOL,
+        pool: ENABLED_POOL,
         budget,
         isTargetConfigured: (t) => configuredTargets.has(t),
       },
@@ -113,7 +119,7 @@ describe("selectSupervisorCandidate", () => {
   it("选择得分最高且可用的候选", () => {
     const budget = new SupervisorBudgetTracker()
     const result = selectSupervisorCandidate({
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       isTargetConfigured: (t) => configuredTargets.has(t),
     })
@@ -121,7 +127,7 @@ describe("selectSupervisorCandidate", () => {
     expect(result.candidate).not.toBeNull()
     expect(result.candidate!.id).toBe("zen-deepseek")
     expect(result.score).toBeDefined()
-    expect(result.scored.length).toBe(DEFAULT_SUPERVISOR_POOL.candidates.length)
+    expect(result.scored.length).toBe(ENABLED_POOL.candidates.length)
   })
 
   it("failure signature 预算耗尽时无可用候选", () => {
@@ -146,7 +152,7 @@ describe("selectSupervisorCandidate", () => {
     })
 
     const result = selectSupervisorCandidate({
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       failureSignature: sig,
       isTargetConfigured: (t) => configuredTargets.has(t),
@@ -167,7 +173,7 @@ describe("selectSupervisorCandidate", () => {
     })
 
     const result = selectSupervisorCandidate({
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       isTargetConfigured: (t) => configuredTargets.has(t),
     })
@@ -178,7 +184,7 @@ describe("selectSupervisorCandidate", () => {
   it("evidence token 超限排除候选", () => {
     const budget = new SupervisorBudgetTracker()
     const result = selectSupervisorCandidate({
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       evidenceTokenEstimate: 10_000,
       isTargetConfigured: (t) => configuredTargets.has(t),
@@ -191,7 +197,7 @@ describe("selectSupervisorCandidate", () => {
   it("冷却时 fallback 到次优候选", () => {
     const budget = new SupervisorBudgetTracker({ defaultCooldownMs: 60_000 })
     const now = Date.now()
-    const deepseek = DEFAULT_SUPERVISOR_POOL.candidates.find((c) => c.id === "zen-deepseek")!
+    const deepseek = ENABLED_POOL.candidates.find((c) => c.id === "zen-deepseek")!
 
     budget.recordRequest({
       targetId: deepseek.target,
@@ -202,7 +208,7 @@ describe("selectSupervisorCandidate", () => {
     })
 
     const result = selectSupervisorCandidate({
-      pool: DEFAULT_SUPERVISOR_POOL,
+      pool: ENABLED_POOL,
       budget,
       now: now + 1000,
       isTargetConfigured: (t) => configuredTargets.has(t),
@@ -214,7 +220,7 @@ describe("selectSupervisorCandidate", () => {
   it("禁用候选不被选中", () => {
     const budget = new SupervisorBudgetTracker()
     const pool = {
-      candidates: DEFAULT_SUPERVISOR_POOL.candidates.map((c) =>
+      candidates: ENABLED_POOL.candidates.map((c) =>
         c.id === "zen-deepseek" ? { ...c, enabled: false } : c,
       ),
     }

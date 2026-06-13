@@ -1,15 +1,12 @@
 import type { AgentRole } from "../agent-profile/types.js"
-import type { LoopEvent, ChatClient } from "../interface.js"
+import type { LoopEvent, ChatClient, AgentTool } from "../interface.js"
 import { AgentRuntime } from "./runtime.js"
 import type {
   AgentRuntimeState,
   DualAgentRuntimeConfig,
-  WorkflowState,
-  WorkflowPhase,
   SendToOptions,
   InterruptRoleOptions,
 } from "./types.js"
-import { randomUUID } from "node:crypto"
 
 export interface DualAgentRuntimeOptions {
   workerClient: ChatClient
@@ -33,17 +30,26 @@ export interface DualAgentRuntimeOptions {
     temperature: number
     provider?: string
   }
+  workerTools?: AgentTool[]
+  supervisorTools?: AgentTool[]
 }
 
 export class DualAgentRuntime {
   private worker: AgentRuntime
   private supervisor: AgentRuntime
   private config: DualAgentRuntimeConfig
-  private workflow: WorkflowState
   private activeRole: AgentRole = "worker"
 
   constructor(options: DualAgentRuntimeOptions) {
     this.config = options.config
+
+    // Validate required fields
+    if (!options.workerConfig?.apiKey || !options.workerConfig?.baseUrl || !options.workerConfig?.model) {
+      throw new Error("workerConfig is required with apiKey, baseUrl, and model")
+    }
+    if (!options.supervisorConfig?.apiKey || !options.supervisorConfig?.baseUrl || !options.supervisorConfig?.model) {
+      throw new Error("supervisorConfig is required with apiKey, baseUrl, and model")
+    }
 
     this.worker = new AgentRuntime({
       role: "worker",
@@ -52,6 +58,7 @@ export class DualAgentRuntime {
       contextWindow: 128_000,
       maxContextRounds: 20,
       config: options.workerConfig,
+      tools: options.workerTools,
     })
 
     this.supervisor = new AgentRuntime({
@@ -61,15 +68,8 @@ export class DualAgentRuntime {
       contextWindow: 128_000,
       maxContextRounds: 20,
       config: options.supervisorConfig,
+      tools: options.supervisorTools,
     })
-
-    this.workflow = {
-      workflowId: randomUUID(),
-      currentRound: 0,
-      maxRounds: this.config.maxWorkflowRounds,
-      currentPhase: "idle",
-      history: [],
-    }
   }
 
   getWorker(): AgentRuntime {
@@ -84,15 +84,11 @@ export class DualAgentRuntime {
     return this.activeRole
   }
 
-  getWorkflow(): WorkflowState {
-    return { ...this.workflow }
-  }
-
   getState(role: AgentRole): AgentRuntimeState {
     return role === "worker" ? this.worker.getState() : this.supervisor.getState()
   }
 
-  async *sendTo(options: SendToOptions): AsyncGenerator<LoopEvent> {
+  async *sendDirect(options: SendToOptions): AsyncGenerator<LoopEvent> {
     const { role, input } = options
     this.activeRole = role
 
@@ -115,36 +111,19 @@ export class DualAgentRuntime {
     }
   }
 
-  interruptRole(options: InterruptRoleOptions): void {
-    const { role } = options
+  async *sendTo(role: AgentRole, input: string): AsyncGenerator<LoopEvent> {
+    yield* this.sendDirect({ role, input })
+  }
+
+  interruptRole(options: InterruptRoleOptions | string): void {
+    const role = typeof options === "string" ? options : options.role
     const runtime = role === "worker" ? this.worker : this.supervisor
     runtime.interrupt()
-  }
-
-  transitionWorkflow(to: WorkflowPhase): void {
-    const from = this.workflow.currentPhase
-    this.workflow.history.push(from)
-    this.workflow.currentPhase = to
-
-    if (to === "supervisor_analyse") {
-      this.workflow.currentRound++
-    }
-  }
-
-  canContinue(): boolean {
-    return this.workflow.currentRound < this.workflow.maxRounds
   }
 
   reset(): void {
     this.worker.reset()
     this.supervisor.reset()
     this.activeRole = "worker"
-    this.workflow = {
-      workflowId: randomUUID(),
-      currentRound: 0,
-      maxRounds: this.config.maxWorkflowRounds,
-      currentPhase: "idle",
-      history: [],
-    }
   }
 }

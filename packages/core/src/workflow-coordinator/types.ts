@@ -6,6 +6,8 @@ export type WorkflowPhase =
   | "worker_do"
   | "worker_report"
   | "supervisor_check"
+  | "supervisor_intervene"
+  | "waiting_user"
   | "blocked"
   | "completed"
   | "failed"
@@ -42,8 +44,66 @@ export interface WorkflowLoopState {
   workerReport?: string
   lastDecision?: WorkflowDecision
   blockedReason?: string
+  waitingUserRequestId?: string
+  waitingUserQuestion?: string
+  waitingUserRole?: AgentRole
+  /** 中途 Supervisor 干预次数 */
+  interventionCount: number
+  /** 最近一次干预的原因 */
+  lastInterventionReason?: string
   createdAt: number
   updatedAt: number
+}
+
+export interface SupervisorPlan {
+  version: 1
+  workflowId: string
+  iteration: number
+  goal: string
+  summary: string
+  steps: Array<{ id: string; description: string; verification?: string[] }>
+  constraints: string[]
+  risks: string[]
+}
+
+export interface WorkerCommand {
+  workflowId: string
+  iteration: number
+  ledgerVersion: number
+  goal: string
+  plan: SupervisorPlan
+  advice?: WorkflowSupervisorAdvice
+}
+
+export interface WorkerReport {
+  version: 1
+  workflowId: string
+  iteration: number
+  basedOnLedgerVersion: number
+  summary: string
+  completedSteps: string[]
+  changedFiles: string[]
+  verification: {
+    passed: boolean
+    commands: string[]
+    summary: string
+  }
+  blockers: string[]
+  requestsSupervisor: boolean
+}
+
+export interface SupervisorDecision {
+  version: 1
+  workflowId: string
+  iteration: number
+  basedOnLedgerVersion: number
+  decision: WorkflowDecision
+  diagnosis: string
+  nextActions: string[]
+  constraints: string[]
+  verification: string[]
+  revisedGoal?: string
+  question?: string
 }
 
 export interface WorkflowEvidence {
@@ -105,10 +165,20 @@ export interface StartWorkflowOptions {
 }
 
 export interface WorkflowEvent {
-  type: "phase_change" | "iteration_change" | "blocked" | "completed" | "failed" | "ask_user"
+  type: "phase_change" | "iteration_change" | "blocked" | "completed" | "failed" | "ask_user" | "supervisor_intervene"
   workflowId: string
   phase?: WorkflowPhase
   iteration?: number
   reason?: string
+  requestId?: string
+  question?: string
+  /** 中途干预时的 advice 摘要 */
+  adviceSummary?: string
   timestamp: number
 }
+
+export const SUPERVISOR_WORKFLOW_PROMPT = `You are the Supervisor in a managed workflow.
+Analyze, plan, review evidence, and return the requested structured result.
+Do not call tools during this workflow turn.
+Do not modify files or execute commands.
+If the workflow cannot safely continue, return ask_user with a clear question.`

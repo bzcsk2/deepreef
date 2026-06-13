@@ -56,7 +56,11 @@ describe("WF-70: 旧主路径迁移与发布门禁测试", () => {
       // 验证可以获取 Worker 和 Supervisor
       expect(dualRuntime.getWorker()).toBeDefined()
       expect(dualRuntime.getSupervisor()).toBeDefined()
-      expect(dualRuntime.getWorkflow()).toBeDefined()
+
+      // 新架构中，Workflow 状态由 WorkflowCoordinator 管理
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({ goal: "test goal" })
+      expect(coordinator).toBeDefined()
     })
   })
 

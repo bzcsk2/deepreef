@@ -188,9 +188,13 @@ export class RoleCapabilityView {
 
     tools = this.applyAllowDenyFilter(tools)
 
-    // 强制 Supervisor 只读：移除所有 write 和 exec 级别的工具
+    // Supervisor 强制只读：当 deny 列表存在时（默认 profile），额外移除 write/exec 工具
+    // 当 deny 列表被用户显式清空或覆盖时，不强制过滤
     if (this.options.role === "supervisor") {
-      tools = tools.filter((cap) => cap.tier === "read")
+      const hasExplicitDeny = this.options.profile.tools?.deny && this.options.profile.tools.deny.length > 0
+      if (hasExplicitDeny) {
+        tools = tools.filter((cap) => cap.tier === "read")
+      }
     }
 
     return tools

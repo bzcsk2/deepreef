@@ -590,7 +590,7 @@ export class ReasonixEngine implements CoreEngine {
     }
   }
 
-  async *submit(userInput: string, agentConfig?: AgentConfig): AsyncGenerator<LoopEvent> {
+  async *submit(userInput: string, agentConfig?: AgentConfig, role?: "worker" | "supervisor"): AsyncGenerator<LoopEvent> {
     const diagnosticsEnabled = this.logger.isEnabled("error")
     const submitStartedAt = diagnosticsEnabled ? Date.now() : 0
     const submitId = diagnosticsEnabled ? randomUUID() : undefined
@@ -604,8 +604,9 @@ export class ReasonixEngine implements CoreEngine {
     // worker 生命周期由 spawnSubagent 管理，completed/failed/cancelled 状态保留供 React 渲染
     // worker_remove 仅在 session 切换时调用
 
-    // 合并 agent 配置：优先使用传入的 agentConfig，否则用当前 agent 的默认配置
-    const ac = agentConfig ?? agentConfigFor(this.currentAgent)
+    // 合并 agent 配置：优先使用传入的 agentConfig，否则用 role 或 currentAgent 的默认配置
+    const agentName = role ?? this.currentAgent
+    const ac = agentConfig ?? agentConfigFor(agentName)
     const baseSystemPrompt = ac.systemPrompt ?? this.ctx.prefix.messages[0]?.content ?? ""
     const activeSkillsPrompt = this.buildActiveSkillsPrompt()
     const systemPrompt = [baseSystemPrompt, activeSkillsPrompt].filter(Boolean).join("\n\n")

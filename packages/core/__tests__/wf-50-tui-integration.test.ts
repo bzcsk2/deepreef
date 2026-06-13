@@ -137,10 +137,16 @@ describe("WF-50: TUI 与命令真实接线测试", () => {
         },
       })
 
-      const workflow = dualRuntime.getWorkflow()
-      expect(workflow.maxRounds).toBe(9)
-      expect(workflow.currentPhase).toBe("idle")
-      expect(workflow.currentRound).toBe(0)
+      // 新架构中，Workflow 状态由 WorkflowCoordinator 管理
+      const coordinator = new WorkflowCoordinator()
+      coordinator.startWorkflow({
+        workflowId: "test-workflow",
+        goal: "test goal",
+        maxRounds: 9,
+      })
+
+      expect(coordinator.canContinue()).toBe(true)
+      expect(coordinator.getCurrentPhase()).toBe("idle")
     })
   })
 

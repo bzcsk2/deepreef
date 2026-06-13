@@ -2,8 +2,6 @@ export type {
   AgentRuntimeStatus,
   AgentRuntimeState,
   DualAgentRuntimeConfig,
-  WorkflowState,
-  WorkflowPhase,
   SendToOptions,
   InterruptRoleOptions,
 } from "./types.js"

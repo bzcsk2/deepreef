@@ -19,8 +19,6 @@ export type {
   AgentRuntimeOptions,
   DualAgentRuntimeConfig,
   DualAgentRuntimeOptions,
-  WorkflowState,
-  WorkflowPhase,
   SendToOptions,
   InterruptRoleOptions,
 } from "./dual-agent-runtime/index.js"
@@ -33,6 +31,10 @@ export type {
   WorkflowDecision,
   WorkflowConfig,
   WorkflowLoopState,
+  SupervisorPlan,
+  WorkerCommand,
+  WorkerReport,
+  SupervisorDecision,
   WorkflowEvidence,
   WorkflowEvidenceToolEntry,
   WorkflowEvidenceFailureEntry,
@@ -43,7 +45,7 @@ export type {
   WorkflowEvent,
   WorkflowCoordinatorOptions,
 } from "./workflow-coordinator/index.js"
-export { DEFAULT_WORKFLOW_CONFIG } from "./workflow-coordinator/index.js"
+export { DEFAULT_WORKFLOW_CONFIG, SUPERVISOR_WORKFLOW_PROMPT } from "./workflow-coordinator/index.js"
 
 export {
   DualSession,
