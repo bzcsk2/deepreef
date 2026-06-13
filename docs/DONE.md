@@ -4212,14 +4212,40 @@ DA-R 系列任务（DA-R0 到 DA-R7）已完成双角色运行时的修复、集
 | 任务 | 描述 | 优先级 |
 |------|------|--------|
 | DA-06 | 引擎端集成 | P0 |
-| DA-R7 | ask_user 多路分发 | P0 |
+| DA-R7b | ask_user 多路分发 | P0 |
 | DA-R8 | 执行拆分 | P0 |
 | DA-R9 | 角色工具权限隔离 | P1 |
 | DA-R10 | Supervisor Plan 预览 | P2 |
 | DA-R11 | Worker 死循环检测 | P2 |
 | DA-R12 | 对话历史线程化 | P3 |
 
-### 61.5 建议优先级
+### 61.5 已修复 Bug
+
+#### Bug #1 — AgentRuntime.submit() 事件类型与客户端约定不匹配
+
+| 属性 | 描述 |
+|------|------|
+| **修复日期** | 2026-06-13 |
+| **修复提交** | `95d3dcf` |
+| **修复内容** | 测试 mock 事件类型对齐 `client.ts` 中 `DeepSeekStreamEvent` 定义 |
+| **修改文件** | `packages/core/__tests__/dual-agent-runtime.test.ts` |
+
+修复详情：
+- `{ type: "delta", content: response }` → `{ type: "text_delta", delta: response }`
+- `{ type: "final", content: response }` → `{ type: "done", finishReason: null }`
+- 添加 AgentRuntime 所需的 config 参数
+- 更新测试期望以包含 system prompt
+
+### 61.6 待修复 Bug
+
+| Bug | 优先级 | 描述 |
+|-----|--------|------|
+| Bug #2 | P1 | WorkflowPhase 类型不一致 |
+| Bug #3 | P1 | DualTabSystem 数据源孤立 |
+| Bug #4 | P3 | getState 快照一致性不足 |
+| Bug #5 | P3 | QuestionService.ask() 无超时机制 |
+
+### 61.7 建议优先级
 
 | 优先级 | 任务 | 说明 |
 |--------|------|------|
