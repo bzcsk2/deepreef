@@ -539,6 +539,16 @@ export class ReasonixEngine implements CoreEngine {
     }
   }
 
+  /** 获取当前模型名（用于 UI 显示与 per-role 状态同步） */
+  getModel(): string {
+    return this.config.model
+  }
+
+  /** 获取当前 provider（用于 UI 显示与 per-role 状态同步） */
+  getProvider(): string {
+    return this.config.provider ?? 'zen'
+  }
+
   /** 切换 agent，返回 agent label */
   switchAgent(agentName: string): string {
     const def = getAgent(agentName)

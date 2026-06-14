@@ -4,7 +4,7 @@ import type { ScrollBoxHandle } from '@deepreef/ink';
 import { writeSync } from 'node:fs';
 import type { ReasonixEngine } from '@deepreef/core';
 import type { ChatMessage, DeepreefConfig } from '@deepreef/core';
-import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig } from '@deepreef/core';
+import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig } from '@deepreef/core';
 import { resolveHarnessStrictness, readProjectHarnessConfig, writeProjectHarnessConfig } from '@deepreef/core';
 import { createBridge, timelineFromMessages, type BridgeState } from './bridge.js';
 import type { DualAgentRuntime } from '@deepreef/core/dual-agent-runtime/dual-runtime.js';
@@ -42,8 +42,8 @@ import { AgentGroupDisplay } from './components/agents/AgentGroupDisplay.js';
 import { WorkerActivityPanel } from './components/workers/WorkerActivityPanel.js';
 import { DialogManager } from './components/dialogs/DialogManager.js';
 // DA-R6: 双角色组件
-import { DualTabSystem, WorkflowStatusBar } from './components/workflow/index.js';
-import type { AgentRole, WorkflowPhase, WorkflowState } from './components/workflow/index.js';
+import { WorkflowStatusBar } from './components/workflow/index.js';
+import type { WorkflowPhase, WorkflowState } from './components/workflow/index.js';
 // TUI-FIX-20: 编排状态存储
 import { OrchestrationStore } from './store/orchestration-store.js';
 // TUI-FIX-30: 编排状态 hooks
@@ -351,8 +351,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const scrollRef = useRef<ScrollBoxHandle | null>(null);
   const promptInputRef = useRef<DeepiPromptInputHandle>(null);
 
-  const [activeProvider, setActiveProvider] = useState(config.provider ?? 'zen'); // 当前选中的 LLM 提供商
-  const [activeModel, setActiveModel] = useState(config.model);                  // 当前选中的模型名称
+  // per-role 模型配置：worker / supervisor 各持一份 provider/model。
+  // activeModel/activeProvider 改为从 roleConfig[activeRole] 派生（见 activeRole 定义之后）。
+  const [roleConfig, setRoleConfig] = useState<Record<'worker' | 'supervisor', { provider: string; model: string }>>({
+    worker: { provider: config.provider ?? 'zen', model: config.model },
+    supervisor: { provider: config.provider ?? 'zen', model: config.model },
+  });
   const [inputText, setInputText] = useState('');                                // 用户输入框当前文本
   const [showAutocomplete, setShowAutocomplete] = useState(false);               // 是否显示命令自动补全面板
   const [showModelPicker, setShowModelPicker] = useState(false);                 // 是否显示模型选择器覆盖层
@@ -396,7 +400,14 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | undefined>();
 
   // DA-R6: 双角色状态管理
+  // AgentRole 原由 DualTabSystem 导出，组件移除后内联于此（底部 WorkflowStatusBar
+  // 自行内联同名联合类型，不依赖此处）。
+  type AgentRole = 'worker' | 'supervisor';
   const [activeRole, setActiveRole] = useState<AgentRole>('worker');
+
+  // 当前 role 的模型/提供商：从 roleConfig 按 activeRole 派生，Tab 切换时自动跟随
+  const activeProvider = roleConfig[activeRole].provider;
+  const activeModel = roleConfig[activeRole].model;
 
   // DA-R6: Workflow 状态
   const [workflowState, setWorkflowState] = useState<WorkflowState>({
@@ -420,6 +431,16 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     || showHarnessMenu
     || !!bridgeState.permissionPrompt
     || !!bridgeState.questionPrompt;
+
+  // DA-R6: Tab 键切换输入目标（Worker ↔ Supervisor）。原由 DualTabSystem 组件
+  // 通过 useInput 注册，组件移除后挪至此处保留交互；视觉指示改由底部
+  // WorkflowStatusBar 承担。覆盖层激活时不响应，与原组件 disabled 行为一致。
+  useInput((input, key) => {
+    if (isOverlayActive) return;
+    if (key.tab) {
+      setActiveRole(prev => (prev === 'worker' ? 'supervisor' : 'worker'));
+    }
+  });
 
   useEffect(() => {
     if (persistedAgent) {
@@ -696,22 +717,29 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     appendMessage({ role: 'assistant' as const, content: `Thinking mode set to: ${mode}` });
   }, [appendMessage, thinkingMode]);
 
-  /** 模型选择回调：更新引擎配置并保存至持久化存储 */
+  /** 模型选择回调：按当前 activeRole 更新对应引擎配置并持久化（per-role） */
   const handleModelSelect = useCallback((sel: { provider: string; model: string; apiKey: string; baseUrl: string }) => {
     const contextWindow = getModelContextWindow(sel.provider, sel.model);
-    engineRef.current.updateConfig({
+    // 目标引擎：supervisor role 且 dualRuntime 可用时取 supervisor engine，否则 worker engine
+    const targetEngine = (activeRole === 'supervisor' && dualRuntime)
+      ? dualRuntime.getSupervisor().getEngine()
+      : engineRef.current;
+    targetEngine.updateConfig({
       provider: sel.provider,
       model: sel.model,
       apiKey: sel.apiKey,
       baseUrl: sel.baseUrl,
       contextWindow,
     });
-    setActiveProvider(sel.provider);
-    setActiveModel(sel.model);
+    // 只更新当前 role 的配置状态（另一 role 不受影响）
+    setRoleConfig(prev => ({ ...prev, [activeRole]: { provider: sel.provider, model: sel.model } }));
+    // per-role 持久化（role-config.json）；同时写 last-config.json 作为全局 fallback
+    saveRoleConfig(activeRole, { provider: sel.provider, model: sel.model, baseUrl: sel.baseUrl });
     saveLastConfig({ provider: sel.provider, model: sel.model, baseUrl: sel.baseUrl });
     setShowModelPicker(false);
-    appendMessage({ role: 'assistant' as const, content: t().switchedModel(PROVIDERS[sel.provider]?.label ?? sel.provider, sel.model) });
-  }, [appendMessage]);
+    const roleLabel = activeRole === 'supervisor' ? ' [supervisor]' : '';
+    appendMessage({ role: 'assistant' as const, content: `${t().switchedModel(PROVIDERS[sel.provider]?.label ?? sel.provider, sel.model)}${roleLabel}` });
+  }, [appendMessage, activeRole, dualRuntime]);
 
   /** 模型选择取消回调：关闭选择器覆盖层 */
   const handleModelCancel = useCallback(() => {
@@ -920,18 +948,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       />
       {/* TUI-FIX-40: Agent 活动组（展开时显示详细进度） */}
       <AgentGroupDisplayFromStore terminalWidth={process.stdout.columns ?? 80} />
-      {/* DA-R6: 双角色 Tab 系统 — 简化为输入目标选择器 */}
-      <DualTabSystem
-        activeRole={activeRole}
-        onRoleChange={(role) => {
-          // 仅在无覆盖层时允许切换
-          if (!isOverlayActive) {
-            setActiveRole(role);
-          }
-        }}
-        disabled={isOverlayActive}
-        width={process.stdout.columns ?? 80}
-      />
+      {/* DA-R6: 双角色 Tab 指示器已移除；Tab 切换交互保留（见 useInput），
+          当前角色由底部 WorkflowStatusBar 显示 */}
       <DeepiMessages
         timeline={timelineProp}
         scrollRef={scrollRef}

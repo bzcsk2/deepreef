@@ -1,7 +1,7 @@
 import { stdin as input, stdout as output, stderr as errorOutput } from "node:process"
 import { readFileSync, writeSync } from "node:fs"
 import { resolve } from "node:path"
-import { loadConfig, ReasonixEngine, SessionLoader, defaultAgentRegistry } from "@deepreef/core"
+import { loadConfig, loadRoleConfig, getModelContextWindow, ReasonixEngine, SessionLoader, defaultAgentRegistry } from "@deepreef/core"
 import { buildSystemPrompt } from "@deepreef/core"
 import { DualAgentRuntime } from "@deepreef/core/dual-agent-runtime/dual-runtime.js"
 import { WorkflowCoordinator } from "@deepreef/core/workflow-coordinator/coordinator.js"
@@ -215,8 +215,40 @@ async function main(): Promise<void> {
 
     // WF-FIX-10: Create supervisor engine and wire DualAgentRuntime
     await Promise.all([pluginReady, memoryReady])
-    const supervisorEngine = new ReasonixEngine(config, clearReadTracker)
+
+    // per-role 模型配置：优先读取持久化的 role-config.json，缺省回退到全局 config。
+    // worker 引擎即传入的 engine（已按 config 创建），其模型在 App 的 /model 命令里
+    // 会通过 updateConfig 热更新；supervisor 引擎在此按其 role config 独立创建。
+    const workerRoleCfg = loadRoleConfig("worker")
+    const supervisorRoleCfg = loadRoleConfig("supervisor")
+
+    // 若 worker 持久化了不同的 provider/model/baseUrl，热更新 worker 引擎使其生效
+    if (workerRoleCfg && (workerRoleCfg.model !== config.model || workerRoleCfg.provider !== (config.provider ?? "zen"))) {
+      engine.updateConfig({
+        provider: workerRoleCfg.provider,
+        model: workerRoleCfg.model,
+        baseUrl: workerRoleCfg.baseUrl,
+        contextWindow: getModelContextWindow(workerRoleCfg.provider, workerRoleCfg.model),
+      })
+    }
+
+    // supervisor 引擎：用 supervisor role config（若有）覆盖，否则与全局 config 一致
+    const supervisorConfig: typeof config = supervisorRoleCfg
+      ? {
+          ...config,
+          provider: supervisorRoleCfg.provider,
+          model: supervisorRoleCfg.model,
+          baseUrl: supervisorRoleCfg.baseUrl,
+          contextWindow: getModelContextWindow(supervisorRoleCfg.provider, supervisorRoleCfg.model),
+        }
+      : config
+    const supervisorEngine = new ReasonixEngine(supervisorConfig, clearReadTracker)
     supervisorEngine.setSystemPrompt(baseSystemPrompt)
+
+    // worker/supervisor 的 config 块：反映各自实际生效的 provider/model/baseUrl
+    const workerEffectiveModel = workerRoleCfg?.model ?? config.model
+    const workerEffectiveProvider = workerRoleCfg?.provider ?? config.provider
+    const workerEffectiveBaseUrl = workerRoleCfg?.baseUrl ?? config.baseUrl
 
     const dualRuntime = new DualAgentRuntime({
       workerClient: engine as unknown as import("@deepreef/core").ChatClient,
@@ -225,26 +257,26 @@ async function main(): Promise<void> {
       supervisorSystemPrompt: baseSystemPrompt,
       config: {
         maxWorkflowRounds: 9,
-        workerModelTarget: config.model,
-        supervisorModelTarget: config.model,
+        workerModelTarget: workerEffectiveModel,
+        supervisorModelTarget: supervisorConfig.model,
         workerThinking: 'off' as const,
         supervisorThinking: 'off' as const,
       },
       workerConfig: {
         apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        model: config.model,
+        baseUrl: workerEffectiveBaseUrl,
+        model: workerEffectiveModel,
         maxTokens: config.maxTokens,
         temperature: config.temperature,
-        provider: config.provider,
+        provider: workerEffectiveProvider,
       },
       supervisorConfig: {
         apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        model: config.model,
+        baseUrl: supervisorConfig.baseUrl,
+        model: supervisorConfig.model,
         maxTokens: config.maxTokens,
         temperature: config.temperature,
-        provider: config.provider,
+        provider: supervisorConfig.provider,
       },
       workerEngine: engine,
       supervisorEngine: supervisorEngine,

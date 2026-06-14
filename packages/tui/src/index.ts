@@ -20,5 +20,3 @@ export { createFrameMetricsHandler, isFrameMetricsEnabled } from './diagnostics/
 // Workflow 组件导出
 export { WorkflowStatusBar } from './components/workflow/index.js';
 export type { WorkflowStatusBarProps, WorkflowState, WorkflowPhase } from './components/workflow/index.js';
-export { DualTabSystem, TabHeader } from './components/workflow/index.js';
-export type { DualTabSystemProps, AgentRole, TabState } from './components/workflow/index.js';

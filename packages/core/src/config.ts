@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
 import { resolve, join } from "node:path"
-import { LastConfigSchema } from "./schemas/config.js"
+import { LastConfigSchema, RoleConfigSchema } from "./schemas/config.js"
 import { DEEPSEEK_BASE_URL, DEEPSEEK_MODEL } from "./types.js"
 import type { ModelTarget } from "./model-target.js"
 
@@ -135,6 +135,14 @@ function getModelEnvVar(provider: string): string {
 
 const LAST_CONFIG_FILE = ".deepreef/last-config.json"
 const MODEL_TARGETS_FILE = ".deepreef/model-targets.json"
+const ROLE_CONFIG_FILE = ".deepreef/role-config.json"
+
+/** per-role 模型配置（worker / supervisor 各自的 provider/model/baseUrl） */
+export interface RoleConfig {
+  provider: string
+  model: string
+  baseUrl: string
+}
 
 function loadModelTargets(): Record<string, Partial<ModelTarget>> | undefined {
   try {
@@ -166,6 +174,49 @@ function loadLastConfig(): { provider?: string; model?: string; baseUrl?: string
       return null
     }
     return (result as { value: { provider?: string; model?: string; baseUrl?: string } }).value
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 保存单个 role 的模型配置到 role-config.json（读-改-写，保留另一个 role）。
+ * apiKey 不持久化（仅 provider/model/baseUrl）。
+ */
+export function saveRoleConfig(role: "worker" | "supervisor", cfg: RoleConfig): void {
+  try {
+    const dir = join(process.cwd(), ".deepreef")
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    const filePath = join(dir, "role-config.json")
+    let existing: { worker?: RoleConfig; supervisor?: RoleConfig } = {}
+    try {
+      const raw = readFileSync(filePath, "utf8")
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === "object") existing = parsed
+    } catch {
+      // 文件不存在或损坏，从空开始
+    }
+    existing[role] = cfg
+    writeFileSync(filePath, JSON.stringify(existing, null, 2), "utf8")
+  } catch {
+    // 持久化失败不致命（与 saveLastConfig 行为一致）
+  }
+}
+
+/**
+ * 读取单个 role 的持久化模型配置。文件不存在或 role 缺失返回 null。
+ */
+export function loadRoleConfig(role: "worker" | "supervisor"): RoleConfig | null {
+  try {
+    const raw = readFileSync(resolve(process.cwd(), ROLE_CONFIG_FILE), "utf8")
+    const parsed = JSON.parse(raw)
+    const result = RoleConfigSchema["~standard"].validate(parsed)
+    if (result && typeof result === "object" && "then" in result) return null
+    if ("issues" in (result as { issues: unknown })) return null
+    const value = (result as { value: { worker?: RoleConfig; supervisor?: RoleConfig } }).value
+    const entry = value?.[role]
+    if (!entry || !entry.provider || !entry.model) return null
+    return { provider: entry.provider, model: entry.model, baseUrl: entry.baseUrl }
   } catch {
     return null
   }
