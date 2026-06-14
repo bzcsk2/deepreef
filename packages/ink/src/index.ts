@@ -132,6 +132,7 @@ export {
   HIDE_CURSOR,
   ENTER_ALT_SCREEN,
   ENABLE_MOUSE_TRACKING,
+  ENABLE_WHEEL_ONLY_TRACKING,
 } from './core/termio/dec.js'
 export { default as instances } from './core/instances.js'
 export {

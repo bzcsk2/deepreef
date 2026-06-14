@@ -14,7 +14,8 @@ export {
   useTranscriptEntryCount,
   useTranscriptReader,
 } from './store/index.js';
-export { isFullscreenEnvEnabled, isMouseTrackingEnabled, isFullscreenActive } from './fullscreen.js';
+export { isFullscreenEnvEnabled, isMouseTrackingEnabled, getMouseTrackingMode, isFullscreenActive } from './fullscreen.js';
+export type { MouseTrackingMode } from './fullscreen.js';
 export { createFrameMetricsHandler, isFrameMetricsEnabled } from './diagnostics/frame-metrics.js';
 
 // Workflow 组件导出

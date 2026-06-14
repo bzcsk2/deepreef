@@ -3,6 +3,7 @@ import instances from '../core/instances.js';
 import {
   DISABLE_MOUSE_TRACKING,
   ENABLE_MOUSE_TRACKING,
+  ENABLE_WHEEL_ONLY_TRACKING,
   ENTER_ALT_SCREEN,
   EXIT_ALT_SCREEN,
 } from '../core/termio/dec.js';
@@ -11,8 +12,14 @@ import Box from './Box.js';
 import { TerminalSizeContext } from './TerminalSizeContext.js';
 
 type Props = PropsWithChildren<{
-  /** Enable SGR mouse tracking (wheel + click/drag). Default true. */
-  mouseTracking?: boolean;
+  /**
+   * Mouse tracking mode. Default true (full: wheel + click + drag).
+   * - true / false: full SGR tracking (wheel + click/drag) or none.
+   * - 'wheel': wheel + basic click only, does NOT hijack the terminal's
+   *   native text-selection drag (omits DEC 1002/1003). Best default for
+   *   apps that only need scroll-wheel support.
+   */
+  mouseTracking?: boolean | 'wheel';
 }>;
 
 /**
@@ -38,6 +45,11 @@ type Props = PropsWithChildren<{
 export function AlternateScreen({ children, mouseTracking = true }: Props): React.ReactNode {
   const size = useContext(TerminalSizeContext);
   const writeRaw = useContext(TerminalWriteContext);
+  const trackingSeq = mouseTracking === 'wheel'
+    ? ENABLE_WHEEL_ONLY_TRACKING
+    : mouseTracking
+      ? ENABLE_MOUSE_TRACKING
+      : '';
 
   // useInsertionEffect (not useLayoutEffect): react-reconciler calls
   // resetAfterCommit between the mutation and layout commit phases, and
@@ -53,15 +65,20 @@ export function AlternateScreen({ children, mouseTracking = true }: Props): Reac
     const ink = instances.get(process.stdout);
     if (!writeRaw) return;
 
-    writeRaw(ENTER_ALT_SCREEN + '\x1b[2J\x1b[H' + (mouseTracking ? ENABLE_MOUSE_TRACKING : ''));
-    ink?.setAltScreenActive(true, mouseTracking);
+    writeRaw(ENTER_ALT_SCREEN + '\x1b[2J\x1b[H' + trackingSeq);
+    // Tell the Ink instance about alt-screen activation. For 'wheel' mode
+    // we pass false so ink.tsx's re-assert paths don't fire full tracking
+    // (we've already sent the wheel-only sequence ourselves); the trade-off
+    // is that a terminal reconnect (tmux detach/attach) won't re-enable
+    // wheel tracking automatically.
+    ink?.setAltScreenActive(true, mouseTracking === true);
 
     return () => {
       ink?.setAltScreenActive(false);
       ink?.clearTextSelection();
-      writeRaw((mouseTracking ? DISABLE_MOUSE_TRACKING : '') + EXIT_ALT_SCREEN);
+      writeRaw((trackingSeq ? DISABLE_MOUSE_TRACKING : '') + EXIT_ALT_SCREEN);
     };
-  }, [writeRaw, mouseTracking]);
+  }, [writeRaw, trackingSeq, mouseTracking]);
 
   return (
     <Box flexDirection="column" height={size?.rows ?? 24} width="100%" flexShrink={0}>

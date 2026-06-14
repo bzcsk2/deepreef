@@ -53,6 +53,13 @@ export const ENABLE_MOUSE_TRACKING =
   decset(DEC.MOUSE_BUTTON) +
   decset(DEC.MOUSE_ANY) +
   decset(DEC.MOUSE_SGR)
+// Wheel-only tracking: 1000 (button press/release + wheel) + 1006 (SGR
+// encoding), WITHOUT 1002 (drag) or 1003 (all-motion). Receives scroll
+// wheel events and basic clicks, but does NOT hijack the terminal's native
+// text-selection drag — the main pain point of full mouse tracking.
+export const ENABLE_WHEEL_ONLY_TRACKING =
+  decset(DEC.MOUSE_NORMAL) +
+  decset(DEC.MOUSE_SGR)
 export const DISABLE_MOUSE_TRACKING =
   decreset(DEC.MOUSE_SGR) +
   decreset(DEC.MOUSE_ANY) +
