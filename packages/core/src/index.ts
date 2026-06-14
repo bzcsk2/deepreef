@@ -302,6 +302,8 @@ export {
 export type { SessionCheckpointEnvelope } from "./checkpoint/checkpoint-envelope.js"
 export { buildSystemPrompt } from "./system-prompt.js"
 export { AGENTS, getAgent, agentConfigFor, AgentRegistry, defaultAgentRegistry } from "./agent.js"
+export { loadAgentProfiles, saveAgentProfiles, getAgentProfile, updateAgentProfile } from "./agent-profile/store.js"
+export type { AgentRoleProfile, AgentProfilesConfig, AgentRole } from "./agent-profile/types.js"
 export { getMainMode, MAIN_MODES } from "./main-mode.js"
 export type { MainMode, MainModeDefinition } from "./main-mode.js"
 export { QueryEngine } from "./query-engine.js"

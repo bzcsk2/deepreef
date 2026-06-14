@@ -4,7 +4,7 @@ import type { ScrollBoxHandle } from '@deepreef/ink';
 import { writeSync } from 'node:fs';
 import type { ReasonixEngine } from '@deepreef/core';
 import type { ChatMessage, DeepreefConfig } from '@deepreef/core';
-import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig } from '@deepreef/core';
+import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile } from '@deepreef/core';
 import { resolveHarnessStrictness, readProjectHarnessConfig, writeProjectHarnessConfig } from '@deepreef/core';
 import { createBridge, timelineFromMessages, type BridgeState } from './bridge.js';
 import type { DualAgentRuntime } from '@deepreef/core/dual-agent-runtime/dual-runtime.js';
@@ -268,6 +268,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const persistedAgent = persistedSettings.agent && (AGENTS[persistedSettings.agent] || defaultAgentRegistry.get(persistedSettings.agent))
     ? persistedSettings.agent
     : undefined;
+  // per-role agent 身份绑定：从 agents.json 读取，缺省回退到 role 同名（worker/supervisor）
+  const [agentProfiles, setAgentProfiles] = useState(() => loadAgentProfiles());
   const [thinkingMode, setThinkingMode] = useState(persistedThinkingMode ?? 'off');
 
   // TUI-FIX: 将 TUI 的 thinkingMode 传递给 Engine，控制 DeepSeek API thinking 参数
@@ -390,7 +392,11 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     || showHarnessMenu
     || showAutocomplete;
   useMessageScroll(scrollRef, !modalBlocksScroll);
-  const [activeAgent, setActiveAgent] = useState(persistedAgent ?? engine.getAgentName?.() ?? 'build'); // 当前 Agent 名称
+  // per-role agent 身份：worker / supervisor 各持一份绑定。activeAgent 由 activeRole 派生（见下）。
+  const [agentByRole, setAgentByRole] = useState<Record<'worker' | 'supervisor', string>>({
+    worker: agentProfiles.worker?.agent ?? 'worker',
+    supervisor: agentProfiles.supervisor?.agent ?? 'supervisor',
+  });
   const [activeSkills, setActiveSkills] = useState(persistedSettings.activeSkills ?? engine.getActiveSkills?.() ?? []); // 当前已启用的技能列表
   const [inputHistory, setInputHistory] = useState<string[]>([]);                // 输入历史记录（最多 MAX_INPUT_HISTORY 条）
   const [inputInjection, setInputInjection] = useState<{ id: number; text: string } | undefined>(undefined); // 外部注入到输入框的文本
@@ -408,6 +414,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   // 当前 role 的模型/提供商：从 roleConfig 按 activeRole 派生，Tab 切换时自动跟随
   const activeProvider = roleConfig[activeRole].provider;
   const activeModel = roleConfig[activeRole].model;
+  // 当前 role 绑定的 agent 身份名：Tab 切换时状态栏/菜单自动跟随
+  const activeAgent = agentByRole[activeRole];
 
   // DA-R6: Workflow 状态
   const [workflowState, setWorkflowState] = useState<WorkflowState>({
@@ -442,14 +450,22 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     }
   });
 
+  // 启动 seeding：为两个 role 的 engine 各自 switchAgent 到其绑定的 agent 身份。
+  // worker engine = engineRef.current（App props 传入的主 engine）；supervisor engine
+  // 通过 dualRuntime.getSupervisor().getEngine() 获取（dual 模式下存在）。
+  // persistedAgent（旧 ui-settings.json 的全局 agent）作为 worker 的兼容回退。
   useEffect(() => {
-    if (persistedAgent) {
-      engineRef.current.switchAgent(persistedAgent);
+    const workerAgent = agentProfiles.worker?.agent || persistedAgent || 'worker';
+    const supAgent = agentProfiles.supervisor?.agent || 'supervisor';
+    engineRef.current.switchAgent(workerAgent);
+    if (dualRuntime) {
+      dualRuntime.getSupervisor().getEngine().switchAgent(supAgent);
     }
     if (persistedSettings.activeSkills) {
       engineRef.current.setActiveSkills(persistedSettings.activeSkills);
     }
-  }, [persistedAgent, persistedSettings.activeSkills]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -687,14 +703,23 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     })();
   }, [activeAgent, activeRole, appendMessage, bridge, thinkingMode]);
 
-  /** Agent 切换回调：调用引擎切换 Agent 并更新显示名称 */
+  /** Agent 切换回调：针对当前 activeRole 绑定。对相应 engine 调 switchAgent，并持久化到 agents.json */
   const handleAgentChoose = useCallback((next: string) => {
-    const label = engineRef.current.switchAgent(next);
-    setActiveAgent(next);
-    saveTuiSettings({ agent: next });
+    // 目标 engine：supervisor role 且 dualRuntime 可用时取 supervisor engine，否则 worker engine
+    const targetEngine = (activeRole === 'supervisor' && dualRuntime)
+      ? dualRuntime.getSupervisor().getEngine()
+      : engineRef.current;
+    const label = targetEngine.switchAgent(next);
+    // 只更新当前 role 的绑定状态（另一 role 不受影响）
+    setAgentByRole(prev => ({ ...prev, [activeRole]: next }));
+    // 持久化 per-role agent 绑定到 agents.json
+    const updated = updateAgentProfile(agentProfiles, activeRole, { agent: next });
+    setAgentProfiles(updated);
+    saveAgentProfiles(updated);
     setShowAgentMenu(false);
-    appendMessage({ role: 'assistant' as const, content: t().switchedTo(label) });
-  }, [appendMessage]);
+    const roleLabel = activeRole === 'supervisor' ? ' [supervisor]' : ' [worker]';
+    appendMessage({ role: 'assistant' as const, content: `${t().switchedTo(label)}${roleLabel}` });
+  }, [appendMessage, activeRole, dualRuntime, agentProfiles]);
 
   /** 语言切换回调：设置界面语言 */
   const handleLangChoose = useCallback((next: string) => {
@@ -824,14 +849,14 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     }))
     if (agentItems.length === 0) {
       agentItems.push(
-        { value: "build", label: "Build Agent", description: "完整读写工具" },
-        { value: "plan", label: "Plan Agent", description: "只读分析" },
+        { value: "worker", label: "Worker", description: "执行型 agent，完整工具集" },
+        { value: "supervisor", label: "Supervisor", description: "监督型 agent，规划与审查" },
       )
     }
     return (
       <ChoiceMenu
-        title="Agent"
-        subtitle="选择切换目标"
+        title={`Agent [${activeRole}]`}
+        subtitle={`为 ${activeRole} 岗位选择 agent 身份`}
         items={agentItems}
         onChoose={handleAgentChoose}
         onCancel={() => setShowAgentMenu(false)}

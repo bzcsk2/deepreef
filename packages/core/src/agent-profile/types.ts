@@ -6,6 +6,8 @@ export type ThinkingMode = "off" | "open" | "high"
 
 export interface AgentRoleProfile {
   role: AgentRole
+  /** 绑定的 agent 身份名（对应 AgentRegistry 中的 name）。缺省时按 role 同名回退。 */
+  agent?: string
   modelTarget: string
   harness: HarnessStrictness
   thinking: ThinkingMode
@@ -31,6 +33,7 @@ export const DEFAULT_AGENT_PROFILES: AgentProfilesConfig = {
   version: 1,
   worker: {
     role: "worker",
+    agent: "worker",
     modelTarget: "zen/mimo-v2.5-free",
     harness: "normal",
     thinking: "high",
@@ -41,6 +44,7 @@ export const DEFAULT_AGENT_PROFILES: AgentProfilesConfig = {
   },
   supervisor: {
     role: "supervisor",
+    agent: "supervisor",
     modelTarget: "zen/mimo-v2.5-free",
     harness: "normal",
     thinking: "off",

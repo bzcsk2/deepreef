@@ -8,6 +8,7 @@ export const ThinkingModeSchema = z.enum(["off", "open", "high"])
 
 export const AgentRoleProfileSchema = z.strictObject({
   role: AgentRoleSchema,
+  agent: z.string().optional(),
   modelTarget: z.string().min(1),
   harness: HarnessStrictnessSchema,
   thinking: ThinkingModeSchema,
