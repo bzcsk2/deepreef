@@ -11,7 +11,20 @@ import React, { createContext, useContext, useSyncExternalStore } from 'react';
 import { OrchestrationStore, type OrchestrationState, type LoopPhase } from '../../store/orchestration-store.js';
 import type { WorkerSnapshot, SupervisorSnapshot } from '@deepreef/core';
 import type { WorkerDisplayData, WorkerStatus } from '../agents/AgentGroupDisplay.js';
-import type { SupervisorDisplayData, LoopPhase as SummaryLoopPhase } from './OrchestrationSummary.js';
+
+/**
+ * Supervisor 显示数据（原 OrchestrationSummary 定义，面板移除后迁移至此）。
+ */
+export interface SupervisorDisplayData {
+  id: string;
+  modelName: string;
+  status: 'reviewing' | 'idle' | 'cooldown' | 'unavailable';
+  reviewingWorkerId?: string;
+  lastAdvice?: string;
+}
+
+/** Loop 阶段（与 store 的 LoopPhase 对齐，保留以兼容历史 hook 签名） */
+export type SummaryLoopPhase = LoopPhase;
 
 const OrchestrationStoreContext = createContext<OrchestrationStore | null>(null);
 

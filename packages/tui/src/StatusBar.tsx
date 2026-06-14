@@ -18,6 +18,8 @@ interface StatusBarProps {
   reasoningActive?: boolean;
   tier?: string;
   cwd?: string;
+  /** 编排循环当前轮次（保留自原 OrchestrationSummary 面板） */
+  loopAttempt?: number;
 }
 
 function fmt(n: number): string {
@@ -32,7 +34,7 @@ function cacheRate(hit: number, miss: number): string {
   return `${Math.round((hit / total) * 100)}%`;
 }
 
-export function StatusBar({ model, provider, agent, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens, contextUsed, contextTotal, pendingInstructionCount, statusMessage, thinkingMode, reasoningActive, tier, cwd }: StatusBarProps) {
+export function StatusBar({ model, provider, agent, inputTokens, outputTokens, cacheHitTokens, cacheMissTokens, contextUsed, contextTotal, pendingInstructionCount, statusMessage, thinkingMode, reasoningActive, tier, cwd, loopAttempt }: StatusBarProps) {
   const rate = cacheRate(cacheHitTokens, cacheMissTokens);
   const agentShort = agent?.replace(/\s+(Agent|Mode)$/i, '') ?? agent;
   const cwdShort = cwd ? cwd.split('/').filter(Boolean).pop() ?? cwd : '';
@@ -61,6 +63,9 @@ export function StatusBar({ model, provider, agent, inputTokens, outputTokens, c
           <Text color={FG.meta}>{` \u00b7 ${provider}/${model}`}</Text>
           <Text color={TONE.accent}>{` \u00b7 [${thinkingLabel}]`}</Text>
           <Box flexGrow={1} />
+          {loopAttempt !== undefined && (
+            <Text bold color={TONE.brand}>{`Loop #${loopAttempt} `}</Text>
+          )}
           <Text color={FG.faint}>{`${fmt(inputTokens)}i `}</Text>
           <Text color={FG.faint}>{`${rate}c `}</Text>
           <Text color={FG.sub}>{`${fmt(outputTokens)}o `}</Text>

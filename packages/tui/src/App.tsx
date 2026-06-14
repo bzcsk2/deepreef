@@ -37,7 +37,6 @@ import {
   validateThinkingMode,
 } from './commands.js';
 // TUI-GM: Gemini CLI 风格组件
-import { OrchestrationSummary } from './components/orchestration/OrchestrationSummary.js';
 import { LoadingIndicator } from './components/shared/LoadingIndicator.js';
 import { AgentGroupDisplay } from './components/agents/AgentGroupDisplay.js';
 import { WorkerActivityPanel } from './components/workers/WorkerActivityPanel.js';
@@ -48,7 +47,7 @@ import type { AgentRole, WorkflowPhase, WorkflowState } from './components/workf
 // TUI-FIX-20: 编排状态存储
 import { OrchestrationStore } from './store/orchestration-store.js';
 // TUI-FIX-30: 编排状态 hooks
-import { OrchestrationStoreProvider, useOrchestrationWorkers, useOrchestrationSupervisors, useOrchestrationLoop } from './components/orchestration/OrchestrationContext.js';
+import { OrchestrationStoreProvider, useOrchestrationWorkers } from './components/orchestration/OrchestrationContext.js';
 // TUI-FIX-60: 主题管理器
 import { themeManager } from './theme/theme-manager.js';
 
@@ -225,25 +224,6 @@ interface AppProps {
  * @param engine - ReasonixEngine 实例，驱动 LLM 通信
  * @param config - DeepreefConfig 配置对象（provider / model / contextWindow 等）
  */
-/**
- * 内部组件：从 OrchestrationStore 读取实时数据并渲染 OrchestrationSummary。
- * 必须在 OrchestrationStoreProvider 内部使用。
- */
-function OrchestrationSummaryFromStore({ terminalWidth }: { terminalWidth: number }) {
-  const workers = useOrchestrationWorkers();
-  const supervisors = useOrchestrationSupervisors();
-  const loop = useOrchestrationLoop();
-  return (
-    <OrchestrationSummary
-      workers={workers}
-      supervisors={supervisors}
-      loopPhase={loop.phase}
-      loopAttempt={loop.attempt}
-      terminalWidth={terminalWidth}
-    />
-  );
-}
-
 /**
  * 内部组件：从 OrchestrationStore 读取 Worker 数据并渲染 AgentGroupDisplay。
  */
@@ -938,8 +918,6 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         isOpen={showSearch}
         onClose={() => setShowSearch(false)}
       />
-      {/* TUI-GM / TUI-FIX-30: 编排概览三栏（Workers / Supervisor / Loop），实时数据 */}
-      <OrchestrationSummaryFromStore terminalWidth={process.stdout.columns ?? 80} />
       {/* TUI-FIX-40: Agent 活动组（展开时显示详细进度） */}
       <AgentGroupDisplayFromStore terminalWidth={process.stdout.columns ?? 80} />
       {/* DA-R6: 双角色 Tab 系统 — 简化为输入目标选择器 */}

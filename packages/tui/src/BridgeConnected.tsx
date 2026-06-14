@@ -12,6 +12,7 @@ import {
   useStatusUsage,
 } from './store/BridgeRuntimeContext.js';
 import { isBridgeRuntimeSplitEnabled } from './store/feature.js';
+import { useOrchestrationLoop } from './components/orchestration/OrchestrationContext.js';
 
 interface BridgeStatusBarProps {
   model: string;
@@ -49,6 +50,9 @@ export function BridgeStatusBar({
   const status = useStatusUsage();
   const queue = usePromptQueue();
   const split = isBridgeRuntimeSplitEnabled();
+  // 编排 loop 轮次（保留自原 OrchestrationSummary 面板）。BridgeStatusBar 渲染在
+  // OrchestrationStoreProvider 内部，故可在此安全订阅。
+  const loop = useOrchestrationLoop();
 
   return (
     <StatusBar
@@ -66,6 +70,7 @@ export function BridgeStatusBar({
       thinkingMode={thinkingMode}
       reasoningActive={split ? status.reasoningActive : legacy?.reasoningActive}
       cwd={cwd}
+      loopAttempt={loop.attempt}
     />
   );
 }
