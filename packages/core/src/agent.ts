@@ -33,7 +33,7 @@ When operating under a Supervisor, execute the assigned tasks faithfully and rep
 defaultAgentRegistry.register({
   name: "supervisor",
   label: "Supervisor",
-  systemPrompt: "You are the Supervisor agent. Analyze goals, create plans, review evidence, and provide guidance. Do not call tools during workflow turns.",
+  systemPrompt: "You are the Supervisor agent. Analyze goals, create plans, review evidence, delegate execution, and provide guidance. Follow the active workflow mode rules.",
   // SFR-30: 工具过滤由 resolveEffectiveTools 根据 role/mode 统一计算
   // undefined 表示不在 agent 层额外限制，交由运行时场景策略决定
   toolNames: undefined,

@@ -54,6 +54,7 @@ function makeMockCoordinator() {
   ];
   const interruptedCalls: number[] = [];
   const startedGoals: string[] = [];
+  const resumedInstructions: string[] = [];
   let state: any = null;
 
   return {
@@ -67,9 +68,14 @@ function makeMockCoordinator() {
       }
     },
     interrupt: () => { interruptedCalls.push(Date.now()); },
+    resumeInterruptedWorkflow: (instruction: string) => {
+      resumedInstructions.push(instruction);
+      state = { currentPhase: 'supervisor_analyse', iteration: 2 };
+    },
     reset: () => { state = null; },
     getState: () => state,
     startedGoals,
+    resumedInstructions,
     interruptedCalls,
     events,
   };
@@ -126,6 +132,29 @@ describe('SFR-90: workflow e2e integration', () => {
 
     expect(coordinator.interruptedCalls.length).toBe(1);
     expect(engine.interrupted).toBe(true);
+  });
+
+  it('scenario 2b: resumeWorkflow continues the existing coordinator', async () => {
+    await bridge.runWorkflow('test goal');
+    await bridge.resumeWorkflow('continue from here');
+
+    expect(coordinator.startedGoals).toEqual(['test goal']);
+    expect(coordinator.resumedInstructions).toEqual(['continue from here']);
+  });
+
+  it('scenario 2c: blocked callback preserves the interrupt reason', async () => {
+    coordinator.events.splice(
+      0,
+      coordinator.events.length,
+      { type: 'blocked', workflowId: 'wf-1', reason: 'Interrupted by user', timestamp: Date.now() },
+    );
+    const finals: Array<{ status?: string; reason?: string }> = [];
+
+    await bridge.runWorkflow('test goal', (_phase, _iteration, finalStatus, reason) => {
+      if (finalStatus) finals.push({ status: finalStatus, reason });
+    });
+
+    expect(finals).toEqual([{ status: 'blocked', reason: 'Interrupted by user' }]);
   });
 
   it('scenario 3: routeWorkflowInput + bridge mode consistency', () => {

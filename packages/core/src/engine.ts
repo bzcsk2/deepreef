@@ -673,7 +673,18 @@ export class ReasonixEngine implements CoreEngine {
     const baseLayer = this.baseSystemPrompt || this.ctx.prefix.messages[0]?.content || ""
     const roleLayer = ac.systemPrompt || ""
     const activeSkillsPrompt = this.buildActiveSkillsPrompt()
-    const layers = [baseLayer, roleLayer, activeSkillsPrompt].filter(Boolean)
+    const modeLayer = role === "supervisor" && mode === "subagent"
+      ? `## Subagent Mode
+You are responsible for completing the user's task through delegated Workers.
+Proactively call AgentTool whenever the task requires codebase exploration, implementation, testing, or other engineering work.
+Do not wait for the user to explicitly ask you to delegate. Keep only planning, synthesis, review, and user communication for yourself.
+Give each Worker a complete, self-contained task with context, constraints, relevant files, and expected output.`
+      : role === "supervisor" && mode === "loop"
+        ? `## Loop Mode
+Analyze, plan, and review the Worker report supplied by the workflow coordinator.
+Do not call tools or modify files during this workflow turn.`
+        : ""
+    const layers = [baseLayer, roleLayer, modeLayer, activeSkillsPrompt].filter(Boolean)
     const systemPrompt = layers.join("\n\n")
     this.ctx.prefix.build(systemPrompt)
 

@@ -45,7 +45,7 @@ function makeEngine(opts?: { systemPrompt?: string }) {
 }
 
 const cwdMarker = "CURRENT_WORKING_DIRECTORY: /test/project"
-const supervisorFullPrompt = "You are the Supervisor agent. Analyze goals, create plans, review evidence, and provide guidance. Do not call tools during workflow turns."
+const supervisorFullPrompt = "You are the Supervisor agent. Analyze goals, create plans, review evidence, delegate execution, and provide guidance. Follow the active workflow mode rules."
 
 // 注册 Supervisor 应拥有的六个监督工具
 function registerSupervisionTools(engine: ReasonixEngine) {
@@ -125,6 +125,21 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
     expect(toolNames).toContain("AskUserQuestion")
     expect(toolNames).toContain("todowrite")
     expect(toolNames).toHaveLength(6)
+
+    const systemMessage = capturedMessages?.messages?.find((m: any) => m.role === "system")
+    expect(systemMessage.content).toContain("Proactively call AgentTool")
+    expect(systemMessage.content).toContain("Do not wait for the user to explicitly ask you to delegate")
+  })
+
+  it("Supervisor loop 模式应禁止工具调用而不污染 subagent 模式", async () => {
+    const engine = makeEngine({ systemPrompt: cwdMarker })
+    registerSupervisionTools(engine)
+
+    for await (const _event of engine.submit("review report", undefined, "supervisor", "loop")) { /* consume */ }
+
+    const systemMessage = capturedMessages?.messages?.find((m: any) => m.role === "system")
+    expect(systemMessage.content).toContain("Do not call tools or modify files during this workflow turn")
+    expect(systemMessage.content).not.toContain("Proactively call AgentTool")
   })
 
   // ─── 测试 2: 系统提示被覆盖，cwd 丢失 ───

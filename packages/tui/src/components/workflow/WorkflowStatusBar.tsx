@@ -13,10 +13,10 @@ import type { WorkflowLifecycle } from '../../workflow-mode-router.js';
 /** Workflow 阶段类型 */
 export type WorkflowPhase =
   | 'idle'
-  | 's_analyse'
-  | 'w_do'
-  | 'w_report'
-  | 's_check'
+  | 'supervisor_analyse'
+  | 'worker_do'
+  | 'worker_report'
+  | 'supervisor_check'
   | 'continue'
   | 'revise'
   | 'approve'

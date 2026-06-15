@@ -18,7 +18,7 @@ import { DeepiMessages } from './DeepiMessages.js';
 import type { DeepiPromptInputHandle } from './DeepiPromptInput.js';
 import { routeWorkflowInput, type WorkflowLifecycle } from './workflow-mode-router.js';
 import { FullscreenLayout } from './FullscreenLayout.js';
-import { useMessageScroll } from './useMessageScroll.js';
+import { restoreMessageScrollAfterOverlay, useMessageScroll } from './useMessageScroll.js';
 import { WelcomeScreen } from './WelcomeScreen.js';
 import { isFullscreenEnvEnabled, getMouseTrackingMode } from './fullscreen.js';
 import { ModelPicker } from './ModelPicker.js';
@@ -437,6 +437,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   // SFR-70: 跟踪并发 Workflow，防止重复启动
   const workflowRunningRef = useRef(false);
   const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
+  const restoreScrollAfterWorkflowMenuRef = useRef(false);
+
+  useEffect(() => {
+    if (showWorkflowMenu || !restoreScrollAfterWorkflowMenuRef.current) return;
+    restoreScrollAfterWorkflowMenuRef.current = false;
+    restoreMessageScrollAfterOverlay(scrollRef);
+  }, [showWorkflowMenu]);
 
   // DA-R6: 检查是否有覆盖层阻止 Tab 切换
   const isOverlayActive = showAutocomplete
@@ -708,7 +715,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           return;
         }
         workflowRunningRef.current = true;
-        setWorkflowLifecycle({ status: 'running', workflowId: 'wf-' + Date.now() });
+        const workflowId = 'wf-' + Date.now();
+        setWorkflowLifecycle({ status: 'running', workflowId });
         setWorkflowState({
           phase: 'supervisor_analyse',
           iteration: 1,
@@ -718,9 +726,9 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           workerStatus: 'idle',
         });
         scrollRef.current?.scrollToBottom();
-        bridge.runWorkflow(goal, (phase: string, iteration: number, finalStatus?: string) => {
+        bridge.runWorkflow(goal, (phase: string, iteration: number, finalStatus?: string, reason?: string) => {
           if (finalStatus) {
-            setWorkflowLifecycle({ status: finalStatus as WorkflowLifecycle['status'], workflowId: 'wf-' + Date.now() });
+            setWorkflowLifecycle({ status: finalStatus as WorkflowLifecycle['status'], workflowId, reason } as WorkflowLifecycle);
             return;
           }
           const phaseMap: Record<string, { supervisor: WorkflowState['supervisorStatus']; worker: WorkflowState['workerStatus'] }> = {
@@ -742,6 +750,43 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           }));
         }).catch((err: unknown) => {
           setWorkflowLifecycle({ status: 'failed', workflowId: 'wf-' + Date.now(), reason: (err as Error).message });
+        }).finally(() => {
+          workflowRunningRef.current = false;
+        });
+        return;
+      }
+      case 'resume_workflow': {
+        if (workflowRunningRef.current) {
+          return;
+        }
+        const workflowId = lifecycle.status === 'blocked' ? lifecycle.workflowId : 'wf-' + Date.now();
+        workflowRunningRef.current = true;
+        setWorkflowLifecycle({ status: 'running', workflowId });
+        scrollRef.current?.scrollToBottom();
+        bridge.resumeWorkflow(route.instruction, (phase: string, iteration: number, finalStatus?: string, reason?: string) => {
+          if (finalStatus) {
+            setWorkflowLifecycle({ status: finalStatus as WorkflowLifecycle['status'], workflowId, reason } as WorkflowLifecycle);
+            return;
+          }
+          const phaseMap: Record<string, { supervisor: WorkflowState['supervisorStatus']; worker: WorkflowState['workerStatus'] }> = {
+            supervisor_analyse: { supervisor: 'analyse', worker: 'idle' },
+            supervisor_check: { supervisor: 'analyse', worker: 'idle' },
+            supervisor_intervene: { supervisor: 'analyse', worker: 'do' },
+            worker_do: { supervisor: 'analyse', worker: 'do' },
+            worker_report: { supervisor: 'waiting', worker: 'report' },
+            waiting_user: { supervisor: 'waiting', worker: 'idle' },
+            blocked: { supervisor: 'blocked', worker: 'blocked' },
+          };
+          const mapped = phaseMap[phase] ?? { supervisor: 'idle' as const, worker: 'idle' as const };
+          setWorkflowState(prev => ({
+            ...prev,
+            phase: phase as WorkflowPhase,
+            iteration,
+            supervisorStatus: mapped.supervisor,
+            workerStatus: mapped.worker,
+          }));
+        }).catch((err: unknown) => {
+          setWorkflowLifecycle({ status: 'failed', workflowId, reason: (err as Error).message });
         }).finally(() => {
           workflowRunningRef.current = false;
         });
@@ -999,6 +1044,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         ]}
         onChoose={(value) => {
           const mode = value as WorkflowMode;
+          restoreScrollAfterWorkflowMenuRef.current = true;
           // SFR-70: 从 loop 切出时中断并清理 Coordinator
           if (workflowMode === 'loop' && mode !== 'loop') {
             workflowCoordinator?.interrupt();
@@ -1026,7 +1072,10 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             });
           }
         }}
-        onCancel={() => setShowWorkflowMenu(false)}
+        onCancel={() => {
+          restoreScrollAfterWorkflowMenuRef.current = true;
+          setShowWorkflowMenu(false);
+        }}
       />
     );
   }

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test"
 import type { ScrollBoxHandle } from "@deepreef/ink"
 import { isMouseTrackingEnabled } from "../src/fullscreen.js"
-import { applyMessageScrollKey } from "../src/useMessageScroll.js"
+import { applyMessageScrollKey, restoreMessageScrollAfterOverlay } from "../src/useMessageScroll.js"
 
 function makeScroll(overrides: Partial<ScrollBoxHandle> = {}) {
   const calls: Array<[string, number?]> = []
@@ -57,5 +57,15 @@ describe("message scrolling", () => {
     const { scroll, calls } = makeScroll()
     expect(applyMessageScrollKey(scroll, { upArrow: true })).toBe(false)
     expect(calls).toEqual([])
+  })
+
+  it("restores the newest message after an overlay unmounts the ScrollBox", async () => {
+    const { scroll, calls } = makeScroll()
+    const ref = { current: scroll }
+
+    restoreMessageScrollAfterOverlay(ref)
+    expect(calls).toEqual([])
+    await Promise.resolve()
+    expect(calls).toEqual([["scrollToBottom"]])
   })
 })

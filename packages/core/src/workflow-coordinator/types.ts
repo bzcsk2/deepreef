@@ -43,6 +43,10 @@ export interface WorkflowLoopState {
   goal: string
   supervisorPlan?: string
   workerReport?: string
+  /** 上一轮 Supervisor 检查反馈，供下一轮分析和 Worker 执行使用 */
+  supervisorFeedback?: string
+  /** 用户在中断后提供的恢复指令，仅供下一次 Supervisor 分析使用 */
+  resumeInstruction?: string
   lastDecision?: WorkflowDecision
   blockedReason?: string
   waitingUserRequestId?: string

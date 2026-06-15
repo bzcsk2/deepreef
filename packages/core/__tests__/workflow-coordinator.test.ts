@@ -3,6 +3,137 @@ import { WorkflowCoordinator } from "../src/workflow-coordinator/coordinator.js"
 import type { WorkflowSupervisorAdvice } from "../src/workflow-coordinator/types.js"
 
 describe("WorkflowCoordinator", () => {
+  it("resumes a user-interrupted workflow with the user's instruction", async () => {
+    const supervisorInputs: string[] = []
+    let supervisorMessage = ""
+    let supervisorCalls = 0
+    let coordinator: WorkflowCoordinator
+    const runtime = {
+      getSupervisor: () => ({
+        submit: async function* (input: string) {
+          supervisorInputs.push(input)
+          supervisorCalls++
+          supervisorMessage = supervisorCalls === 1 ? "Initial plan" : supervisorCalls === 2 ? "Resumed plan" : "approve"
+          yield { role: "assistant_final", content: supervisorMessage }
+          if (supervisorCalls === 1) coordinator.interrupt()
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: supervisorMessage }] }),
+      }),
+      getWorker: () => ({
+        submit: async function* () {
+          yield { role: "assistant_final", content: "done" }
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+      }),
+    }
+
+    coordinator = new WorkflowCoordinator({ runtime: runtime as any })
+    coordinator.startWorkflow({ goal: "fix interrupt recovery" })
+    for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+    expect(coordinator.getState()?.currentPhase).toBe("blocked")
+    expect(coordinator.getState()?.blockedReason).toBe("Interrupted by user")
+
+    coordinator.resumeInterruptedWorkflow("continue from the latest state")
+    for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+    expect(supervisorInputs[1]).toContain("User instruction after interrupt:\ncontinue from the latest state")
+    expect(supervisorInputs[1]).toContain("Previous Plan:\nInitial plan")
+    expect(coordinator.getState()?.iteration).toBe(1)
+    expect(coordinator.getState()?.currentPhase).toBe("completed")
+  })
+
+  it("does not resume a workflow blocked for a non-interrupt reason", () => {
+    const coordinator = new WorkflowCoordinator()
+    coordinator.startWorkflow({ goal: "test" })
+    coordinator.transition("blocked", "Max rounds reached")
+
+    expect(() => coordinator.resumeInterruptedWorkflow("continue")).toThrow(
+      "Only a workflow interrupted by the user can be resumed",
+    )
+  })
+
+  it("carries Supervisor review into a real second workflow iteration", async () => {
+    const supervisorInputs: string[] = []
+    const workerInputs: string[] = []
+    let supervisorCalls = 0
+    let workerCalls = 0
+    let supervisorMessage = ""
+    let workerMessage = ""
+
+    const runtime = {
+      getSupervisor: () => ({
+        submit: async function* (input: string) {
+          supervisorInputs.push(input)
+          supervisorCalls++
+          supervisorMessage = supervisorCalls === 1
+            ? "Plan iteration one"
+            : supervisorCalls === 2
+              ? "continue: inspect the remaining rendering path"
+              : supervisorCalls === 3
+                ? "Plan iteration two using the previous report"
+                : "approve"
+          yield { role: "assistant_final", content: supervisorMessage }
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: supervisorMessage }] }),
+      }),
+      getWorker: () => ({
+        submit: async function* (input: string) {
+          workerInputs.push(input)
+          workerCalls++
+          workerMessage = workerCalls % 2 === 0
+            ? `Report ${workerCalls / 2}`
+            : `Work ${Math.ceil(workerCalls / 2)}`
+          yield { role: "assistant_final", content: workerMessage }
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: workerMessage }] }),
+      }),
+    }
+
+    const coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { maxRounds: 3 } })
+    coordinator.startWorkflow({ goal: "fix rendering" })
+    for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+    expect(coordinator.getState()?.currentPhase).toBe("completed")
+    expect(coordinator.getState()?.iteration).toBe(2)
+    expect(supervisorInputs[2]).toContain("iteration 2")
+    expect(supervisorInputs[2]).toContain("Previous Worker Report:\nReport 1")
+    expect(supervisorInputs[2]).toContain("Your Previous Review:\ncontinue: inspect the remaining rendering path")
+    expect(workerInputs[2]).toContain("Plan iteration two using the previous report")
+    expect(workerInputs[2]).toContain("Supervisor feedback from the previous iteration")
+  })
+
+  it("blocks at max rounds without emitting a phantom next iteration", async () => {
+    let supervisorMessage = ""
+    let workerMessage = ""
+    let supervisorCalls = 0
+    const runtime = {
+      getSupervisor: () => ({
+        submit: async function* () {
+          supervisorCalls++
+          supervisorMessage = supervisorCalls === 1 ? "Plan one" : "continue"
+          yield { role: "assistant_final", content: supervisorMessage }
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: supervisorMessage }] }),
+      }),
+      getWorker: () => ({
+        submit: async function* () {
+          workerMessage = "done"
+          yield { role: "assistant_final", content: workerMessage }
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: workerMessage }] }),
+      }),
+    }
+    const coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { maxRounds: 1 } })
+    coordinator.startWorkflow({ goal: "test" })
+    const events: any[] = []
+    for await (const event of coordinator.runWorkflow()) events.push(event)
+
+    expect(coordinator.getState()?.iteration).toBe(1)
+    expect(coordinator.getState()?.blockedReason).toBe("Max rounds reached")
+    expect(events.some(event => event.type === "iteration_change" && event.iteration === 2)).toBe(false)
+  })
+
   it("yields phase events before role output so consumers can label each role", async () => {
     const roleEvent = { role: "assistant_final", content: "plan" } as const
     const runtime = {

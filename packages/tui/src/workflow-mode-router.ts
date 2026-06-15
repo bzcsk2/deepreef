@@ -23,6 +23,7 @@ export type WorkflowRouteAction =
   | { type: 'direct'; role: AgentRole; mode: 'alone' }
   | { type: 'supervisor_task'; mode: 'subagent' }
   | { type: 'start_workflow'; goal: string }
+  | { type: 'resume_workflow'; instruction: string }
   | { type: 'workflow_instruction'; content: string }
   | { type: 'reject'; reason: string }
 
@@ -70,6 +71,9 @@ export function routeWorkflowInput(opts: RouteWorkflowInputOpts): WorkflowRouteA
         case 'waiting_user':
           return { type: 'workflow_instruction', content: input }
         case 'blocked':
+          if (lifecycle.reason === 'Interrupted by user') {
+            return { type: 'resume_workflow', instruction: input }
+          }
           return { type: 'reject', reason: 'Workflow is blocked. Reset or switch mode to continue.' }
       }
     }

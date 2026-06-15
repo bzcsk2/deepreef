@@ -236,6 +236,9 @@ export class WorkflowCoordinator {
       return false
     }
 
+    if (this.state.currentPhase === "supervisor_analyse") {
+      return this.state.iteration <= this.state.maxRounds
+    }
     return this.state.iteration < this.state.maxRounds
   }
 
@@ -257,8 +260,13 @@ export class WorkflowCoordinator {
 
     this.abortController = new AbortController()
 
-    // Start: idle → supervisor_analyse
-    this.transition("supervisor_analyse")
+    // A fresh workflow starts from idle. A resumed workflow has already been
+    // moved from blocked to supervisor_analyse by resumeInterruptedWorkflow().
+    if (this.state.currentPhase === "idle") {
+      this.transition("supervisor_analyse")
+    } else if (this.state.currentPhase !== "supervisor_analyse") {
+      throw new Error(`Cannot run workflow from phase ${this.state.currentPhase}`)
+    }
     yield* this.drainEvents()
 
     while (this.canContinue()) {
@@ -266,7 +274,7 @@ export class WorkflowCoordinator {
         break
       }
 
-      const phase = this.state!.currentPhase
+      const phase: WorkflowPhase = this.getCurrentPhase()
 
       if (phase === "supervisor_analyse") {
         yield* this.runSupervisorAnalyse()
@@ -298,7 +306,13 @@ export class WorkflowCoordinator {
   }
 
   private async *runSupervisorAnalyse(): AsyncGenerator<WorkflowEvent> {
-    const supervisorInput = `Analyse the following goal and create a plan:\n\nGoal: ${this.state!.goal}\n\nProvide a structured plan with steps, constraints, and risks.`
+    const previousRound = this.state!.supervisorPlan || this.state!.workerReport || this.state!.supervisorFeedback
+      ? `\n\nPrevious Plan:\n${this.state!.supervisorPlan ?? ""}\n\nPrevious Worker Report:\n${this.state!.workerReport ?? ""}\n\nYour Previous Review:\n${this.state!.supervisorFeedback ?? ""}`
+      : ""
+    const resumeInstruction = this.state!.resumeInstruction
+      ? `\n\nUser instruction after interrupt:\n${this.state!.resumeInstruction}`
+      : ""
+    const supervisorInput = `Analyse the following goal and create a plan for iteration ${this.state!.iteration}:\n\nGoal: ${this.state!.goal}${previousRound}${resumeInstruction}\n\nProvide an updated structured plan with concrete next steps, constraints, and risks. Incorporate the previous Worker report, review, and user instruction when present.`
 
     let errorMessage = ""
     // SFR-10: 使用 "loop" mode
@@ -314,12 +328,13 @@ export class WorkflowCoordinator {
       return
     }
     this.setSupervisorPlan(plan)
+    this.state!.resumeInstruction = undefined
 
     this.transition("worker_do")
   }
 
   private async *runWorkerDo(): AsyncGenerator<WorkflowEvent> {
-    const workerInput = `Execute the following plan:\n\n${this.state!.supervisorPlan ?? ""}\n\nGoal: ${this.state!.goal}`
+    const workerInput = `Execute the following plan for iteration ${this.state!.iteration}:\n\n${this.state!.supervisorPlan ?? ""}\n\nGoal: ${this.state!.goal}${this.state!.supervisorFeedback ? `\n\nSupervisor feedback from the previous iteration:\n${this.state!.supervisorFeedback}` : ""}`
 
     let hasError = false
     let errorCount = 0
@@ -371,6 +386,9 @@ export class WorkflowCoordinator {
     const response = supervisorState.messages.findLast(m => m.role === "assistant")?.content ?? ""
 
     const decision = this.parseDecision(response)
+    this.state!.lastDecision = decision
+    this.state!.supervisorFeedback = response
+    this.state!.updatedAt = Date.now()
 
     if (decision === "approve") {
       this.transition("completed")
@@ -379,8 +397,10 @@ export class WorkflowCoordinator {
       yield* this.handleAskUser(question)
     } else if (decision === "blocked") {
       this.transition("blocked", response)
+    } else if (this.state!.iteration >= this.state!.maxRounds) {
+      this.transition("blocked", "Max rounds reached")
     } else {
-      this.transition("worker_do")
+      this.transition("supervisor_analyse")
     }
   }
 
@@ -526,6 +546,27 @@ Return your guidance as structured advice.`
 
   interrupt(): void {
     this.abortController?.abort()
+  }
+
+  resumeInterruptedWorkflow(instruction: string): WorkflowLoopState {
+    if (!this.state) {
+      throw new Error("No workflow in progress")
+    }
+    if (this.state.currentPhase !== "blocked" || this.state.blockedReason !== "Interrupted by user") {
+      throw new Error("Only a workflow interrupted by the user can be resumed")
+    }
+
+    this.pendingEvents = []
+    this.state.resumeInstruction = instruction
+    this.state.blockedReason = undefined
+    // The interrupted iteration never completed, so retry it instead of
+    // consuming another round from the workflow budget.
+    this.state.iteration = Math.max(0, this.state.iteration - 1)
+    const result = this.transition("supervisor_analyse")
+    if (!result.success) {
+      throw new Error(result.error)
+    }
+    return this.getState()!
   }
 
   private isValidTransition(from: WorkflowPhase, to: WorkflowPhase): boolean {

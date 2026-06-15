@@ -80,7 +80,12 @@ describe('routeWorkflowInput', () => {
       expect(r).toEqual({ type: 'workflow_instruction', content: 'do something' });
     });
 
-    it('rejects text when lifecycle is blocked', () => {
+    it('routes text as resume_workflow when the user interrupted it', () => {
+      const r = routeWorkflowInput(loopOpts({ status: 'blocked', workflowId: 'wf-1', reason: 'Interrupted by user' }));
+      expect(r).toEqual({ type: 'resume_workflow', instruction: 'do something' });
+    });
+
+    it('rejects text when lifecycle is blocked for another reason', () => {
       const r = routeWorkflowInput(loopOpts({ status: 'blocked', workflowId: 'wf-1' }));
       expect(r.type).toBe('reject');
     });

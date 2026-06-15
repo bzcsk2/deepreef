@@ -84,3 +84,10 @@ export function useMessageScroll(
     }
   }, { isActive });
 }
+
+/** Restore bottom-follow after an overlay temporarily unmounts the message ScrollBox. */
+export function restoreMessageScrollAfterOverlay(
+  scrollRef: React.RefObject<ScrollBoxHandle | null>,
+): void {
+  queueMicrotask(() => scrollRef.current?.scrollToBottom());
+}
