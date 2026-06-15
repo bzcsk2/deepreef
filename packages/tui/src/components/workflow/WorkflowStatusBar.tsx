@@ -13,10 +13,10 @@ import type { WorkflowLifecycle } from '../../workflow-mode-router.js';
 /** Workflow 阶段类型 */
 export type WorkflowPhase =
   | 'idle'
-  | 'supervisor_analyse'
-  | 'worker_do'
-  | 'worker_report'
-  | 'supervisor_check'
+  | 's_analyse'
+  | 'w_do'
+  | 'w_report'
+  | 's_check'
   | 'continue'
   | 'revise'
   | 'approve'
@@ -105,13 +105,11 @@ export function WorkflowStatusBar({
 
   return (
     <Box width="100%" flexDirection="row" paddingX={1}>
-      <Text color={FG.faint}>{' | '}</Text>
       <Text bold color={modeDisplay.color as any}>{modeDisplay.label}</Text>
+      <Text color={FG.faint}>{'  '}</Text>
 
-      {/* SFR-80: loop 模式显示 lifecycle + phase */}
       {workflowMode === 'loop' && (
         <>
-          <Text color={FG.faint}>{' | '}</Text>
           <Text color={(LIFECYCLE_DISPLAY[lifecycle.status] ?? LIFECYCLE_DISPLAY.idle).color as any}>
             {(LIFECYCLE_DISPLAY[lifecycle.status] ?? LIFECYCLE_DISPLAY.idle).label}
           </Text>
@@ -127,41 +125,35 @@ export function WorkflowStatusBar({
           {lifecycle.status === 'blocked' && (
             <Text color={TONE.error}>{` blocked`}</Text>
           )}
+          <Text color={FG.faint}>{'  '}</Text>
         </>
       )}
 
-      <Text color={FG.faint}>{' | '}</Text>
-
       <Box flexDirection="row" alignItems="center">
-        <Text color={FG.faint}>S</Text>
-        <Box backgroundColor={activeRole === 'supervisor' ? TONE.brand : undefined} paddingX={1}>
-          <Text
-            bold={activeRole === 'supervisor'}
-            color={activeRole === 'supervisor' ? '#000' : supervisorDisplay.color as any}
-          >
-            {supervisorDisplay.label}
+        <Box
+          backgroundColor={activeRole === 'supervisor' ? (TONE.brand as any) : undefined}
+        >
+          <Text bold color={activeRole === 'supervisor' ? '#000' : FG.sub}>
+            Supervisor
           </Text>
         </Box>
+        <Text color={FG.sub}>{'/' + supervisorDisplay.label}</Text>
       </Box>
 
-      <Text color={FG.faint}>{' | '}</Text>
+      <Text color={FG.faint}>{'  '}</Text>
 
       <Box flexDirection="row" alignItems="center">
-        <Text color={FG.faint}>W</Text>
-        <Box backgroundColor={activeRole === 'worker' ? TONE.ok : undefined} paddingX={1}>
-          <Text
-            bold={activeRole === 'worker'}
-            color={activeRole === 'worker' ? '#000' : workerDisplay.color as any}
-          >
-            {workerDisplay.label}
+        <Box backgroundColor={activeRole === 'worker' ? (TONE.ok as any) : undefined}>
+          <Text bold color={activeRole === 'worker' ? '#000' : FG.sub}>
+            Worker
           </Text>
         </Box>
+        <Text color={FG.sub}>{'/' + workerDisplay.label}</Text>
       </Box>
 
       {/* SFR-80: loop 模式显示 goal */}
       {workflowMode === 'loop' && (
         <>
-          <Text color={FG.faint}>{' | '}</Text>
           <Box flexGrow={1}>
             <Text color={FG.sub}>
               {goal ? truncateText(goal, Math.max(10, width - 50)) : lifecycle.status === 'awaiting_goal' ? 'awaiting goal' : ''}

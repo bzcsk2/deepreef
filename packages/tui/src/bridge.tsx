@@ -779,8 +779,6 @@ export function createBridge(
             } else if (event.content === 'tools_completed') {
               finalizeRound();
               startRound();
-            } else if (event.content && event.content !== 'interrupted') {
-              commitBridge(prev => ({ warnings: [...prev.warnings, event.content!] }));
             }
             break;
 
@@ -1141,9 +1139,6 @@ export function createBridge(
               break;
             }
             case 'status':
-              if (loopEvent.content && loopEvent.content !== 'interrupted' && loopEvent.content !== 'tools_completed') {
-                commitBridge(prev => ({ warnings: [...prev.warnings, loopEvent.content!] }));
-              }
               break;
             case 'done':
               break;
