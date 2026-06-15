@@ -4485,3 +4485,43 @@ DA-R 系列任务（DA-R0 到 DA-R7）已完成双角色运行时的修复、集
 | tui | `src/index.ts` | 清理 DualTabSystem 重导出 |
 
 > 注：`WorkflowStatusBar.tsx` 与 `CommandRegistry.ts` 为用户手动改动，未包含在本系列提交中。
+
+---
+
+## SFR Supervisor 能力退化修复（SFR-00 至 SFR-90 全部完成）
+
+修复了 Supervisor 工具被全部过滤、角色提示词覆盖基础系统提示、三模式未真实分流等问题。
+
+**涉及文件：**
+
+| 文件 | 类型 | 变更说明 |
+|---|---|---|
+| `packages/core/src/engine.ts` | 修改 | `submit()` 传递 `role`/`mode`；`baseSystemPrompt` 持久化；分层组合系统提示 |
+| `packages/core/src/agent.ts` | 修改 | Supervisor `toolNames` 从 `[]` 改为 `undefined` |
+| `packages/core/src/dual-agent-runtime/runtime.ts` | 修改 | `submit()` 传递 `mode: "loop"` |
+| `packages/core/src/dual-agent-runtime/dual-runtime.ts` | 修改 | `sendDirect()` 传递 `mode` |
+| `packages/core/src/dual-agent-runtime/types.ts` | 修改 | 添加 `maxWorkflowRounds` |
+| `packages/core/src/resolve-effective-tools.ts` | **新增** | 纯函数工具解析 |
+| `packages/core/src/workflow-coordinator/coordinator.ts` | 修改 | 中断后区分 "Interrupted by user" / "Max rounds reached" |
+| `packages/core/src/workflow-coordinator/types.ts` | 修改 | `WorkflowEvent.type` 添加 `role_output` |
+| `packages/cli/src/tui.ts` | 修改 | 加载 `agentProfiles`；`setThinkingMode()`；启动诊断 |
+| `packages/tui/src/App.tsx` | 修改 | 三模式路由；`workflowRunningRef`；`.catch().finally()`；菜单中断提示 |
+| `packages/tui/src/bridge.tsx` | 修改 | `cancel()` 中断 Coordinator；`runWorkflow()` 处理两种事件类型 + try/catch/finally |
+| `packages/tui/src/workflow-mode-router.ts` | **新增** | 纯函数路由 |
+| `packages/tui/src/components/workflow/WorkflowStatusBar.tsx` | 修改 | 按 mode+lifecycle 显示真实状态；alone/subagent 无伪造 phase/goal |
+| `packages/core/__tests__/supervisor-request-contract.test.ts` | **新增** | 11 条请求契约测试 |
+| `packages/tui/__tests__/workflow-mode-router.test.ts` | **新增** | 16 条纯函数路由测试 |
+
+**验证命令：**
+
+```bash
+bun run typecheck                                    # 通过
+bun test packages/core/__tests__/supervisor-request-contract.test.ts  # 11 pass
+bun test packages/core/__tests__/dual-agent-runtime.test.ts          # 11 pass
+bun test packages/core/__tests__/workflow-coordinator.test.ts        # 27 pass
+bun test packages/tui/__tests__/workflow-mode-router.test.ts         # 16 pass
+```
+
+**保留限制：**
+- 6 个 core 测试预置失败（agent "plan"/"build" 已从 registry 移除但测试未更新）— 与本任务无关
+- 远程 Supervisor smoke 测试默认跳过，需要 `DEEPREEF_SUPERVISOR_SMOKE=1`

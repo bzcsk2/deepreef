@@ -14,6 +14,8 @@ import { runLoop } from "./loop.js"
 import type { LoopOptions } from "./loop.js"
 import { PermissionEngine, HookManager } from "@deepreef/security"
 import { getAgent, agentConfigFor, getMainMode } from "./agent.js"
+import type { WorkflowMode } from "./dual-agent-runtime/types.js"
+import { resolveEffectiveTools } from "./resolve-effective-tools.js"
 import { SubagentRegistry, checkSubagentPermission } from "./subagent/index.js"
 import type { SubagentRunOptions, SubagentRunResult, SubagentDefinition } from "./subagent/index.js"
 import type { ThinkingMode } from "./provider-thinking.js"
@@ -104,6 +106,9 @@ export class ReasonixEngine implements CoreEngine {
   hookManager: HookManager
   /** 当前活跃 agent 名称 */
   private currentAgent: string
+
+  /** SFR-20: 原始基础系统提示（含 cwd、平台等运行环境），与角色提示分层组合 */
+  private baseSystemPrompt: string = ""
 
   /** prefix.build 缓存：避免每次 submit 重复重建（P3-4-2） */
   private prefixCacheKey = ""
@@ -353,8 +358,9 @@ export class ReasonixEngine implements CoreEngine {
     }
   }
 
-  /** 设置系统级 system prompt */
+  /** 设置系统级 system prompt（基础运行环境提示，与角色提示分层组合） */
   setSystemPrompt(prompt: string): void {
+    this.baseSystemPrompt = prompt
     this.ctx.prefix.build(prompt)
   }
 
@@ -609,7 +615,7 @@ export class ReasonixEngine implements CoreEngine {
     }
   }
 
-  async *submit(userInput: string, agentConfig?: AgentConfig, role?: "worker" | "supervisor"): AsyncGenerator<LoopEvent> {
+  async *submit(userInput: string, agentConfig?: AgentConfig, role?: "worker" | "supervisor", mode?: WorkflowMode): AsyncGenerator<LoopEvent> {
     const diagnosticsEnabled = this.logger.isEnabled("error")
     const submitStartedAt = diagnosticsEnabled ? Date.now() : 0
     const submitId = diagnosticsEnabled ? randomUUID() : undefined
@@ -626,9 +632,13 @@ export class ReasonixEngine implements CoreEngine {
     // 合并 agent 配置：优先使用传入的 agentConfig，否则用 role 或 currentAgent 的默认配置
     const agentName = role ?? this.currentAgent
     const ac = agentConfig ?? agentConfigFor(agentName)
-    const baseSystemPrompt = ac.systemPrompt ?? this.ctx.prefix.messages[0]?.content ?? ""
+
+    // SFR-20: 分层组合系统提示，不再用 ?? 互斥覆盖
+    const baseLayer = this.baseSystemPrompt || this.ctx.prefix.messages[0]?.content || ""
+    const roleLayer = ac.systemPrompt || ""
     const activeSkillsPrompt = this.buildActiveSkillsPrompt()
-    const systemPrompt = [baseSystemPrompt, activeSkillsPrompt].filter(Boolean).join("\n\n")
+    const layers = [baseLayer, roleLayer, activeSkillsPrompt].filter(Boolean)
+    const systemPrompt = layers.join("\n\n")
     this.ctx.prefix.build(systemPrompt)
 
     this.ctx.startTurn()
@@ -698,7 +708,7 @@ export class ReasonixEngine implements CoreEngine {
       }
     }
     this.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })
-    if (diagnosticsEnabled) submitLogger.info("submit.start", { agent: this.currentAgent, inputLength: userInput.length })
+    if (diagnosticsEnabled) submitLogger.info("submit.start", { agent: this.currentAgent, role: role ?? "unspecified", mode: mode ?? "unspecified", inputLength: userInput.length })
 
     // TUI-FIX-10: emit loop_transition at submit start
     yield {
@@ -710,16 +720,24 @@ export class ReasonixEngine implements CoreEngine {
     }
 
     try {
-      const toolSpecs: ToolSpec[] = []
-      for (const tool of this.tools.values()) {
-        if (ac.toolNames && !ac.toolNames.includes(tool.name)) continue
-        toolSpecs.push({
-          type: "function",
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters,
-          },
+      // SFR-30: 使用 resolveEffectiveTools 统一计算有效工具列表
+      const effectiveRole: "worker" | "supervisor" = role ?? (agentName === "supervisor" ? "supervisor" : "worker")
+      const effectiveMode: WorkflowMode = mode ?? "alone"
+      const { tools: toolSpecs, filteredCount, filteredReason } = resolveEffectiveTools({
+        registeredTools: this.tools,
+        role: effectiveRole,
+        mode: effectiveMode,
+        agentToolNames: ac.toolNames,
+      })
+      if (filteredCount > 0 && this.logger.isEnabled("warn")) {
+        this.logger.warn("tools.filtered", {
+          role: effectiveRole,
+          mode: effectiveMode,
+          toolNames: ac.toolNames,
+          registeredCount: this.tools.size,
+          effectiveCount: toolSpecs.length,
+          filteredCount,
+          reason: filteredReason ?? "unknown",
         })
       }
 

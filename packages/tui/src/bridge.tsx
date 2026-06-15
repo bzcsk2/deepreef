@@ -1,4 +1,4 @@
-import type { ChatMessage, ReasonixEngine, QuestionRequest, PermissionRequest, PermissionReply } from '@deepreef/core';
+import type { ChatMessage, ReasonixEngine, QuestionRequest, PermissionRequest, PermissionReply, LoopEvent } from '@deepreef/core';
 import type { AgentRole } from '@deepreef/core/agent-profile/types.js';
 import type { DualAgentRuntime } from '@deepreef/core/dual-agent-runtime/dual-runtime.js';
 import type { WorkflowCoordinator } from '@deepreef/core/workflow-coordinator/coordinator.js';
@@ -895,6 +895,8 @@ export function createBridge(
       dualRuntime.interruptRole('worker');
       dualRuntime.interruptRole('supervisor');
     }
+    // SFR-70: 中断正在运行的 Workflow
+    workflowCoordinator?.interrupt();
     engine.interrupt();
   };
 
@@ -914,36 +916,141 @@ export function createBridge(
   };
 
   /** WF-FIX-20: Run a workflow goal through the WorkflowCoordinator */
-  const runWorkflow = async (goal: string, onPhaseChange?: (phase: string, iteration: number) => void) => {
+  const runWorkflow = async (goal: string, onPhaseChange?: (phase: string, iteration: number, finalStatus?: string) => void) => {
     if (!workflowCoordinator) {
-      // Fallback: submit as supervisor message
       await submit(goal, false, 'supervisor');
       return;
     }
 
+    // SFR-70: 标记 loading 使 Ctrl+C 能取消 Workflow
+    setTUIState('loading');
+
+    if (workflowCoordinator.getState()) {
+      workflowCoordinator.reset();
+    }
+
     workflowCoordinator.startWorkflow({ goal });
     let activeRole: AgentRole = 'supervisor';
+    let wfRoundId = '';
+    let wfRoundTs = 0;
+    let toolItemIds = new Map<string, string>();
 
-    for await (const event of workflowCoordinator.runWorkflow()) {
-      const wfEvent = event as WorkflowEvent;
+    try {
+      for await (const rawEvent of workflowCoordinator.runWorkflow()) {
+        const hasType = (rawEvent as any).type !== undefined;
+        const hasRole = (rawEvent as any).role !== undefined;
 
-      // Track role changes from phase_change events
-      if (wfEvent.type === 'phase_change' && wfEvent.phase && wfEvent.iteration != null) {
-        activeRole = wfEvent.phase === 'worker_do' || wfEvent.phase === 'worker_report' ? 'worker' : 'supervisor';
-        onPhaseChange?.(wfEvent.phase, wfEvent.iteration);
-        // WF-FIX-70: Sync coordinator phase to OrchestrationStore (production main path)
-        if (orchestrationStore) {
-          orchestrationStore.apply({
-            kind: 'loop_transition',
-            transition: {
-              from: (orchestrationStore.getSnapshot().loop.phase as any) ?? 'observe',
-              to: wfEvent.phase as any,
-              attempt: wfEvent.iteration,
-              timestamp: Date.now(),
-            },
-          });
+        if (hasType) {
+          const wfEvent = rawEvent as unknown as WorkflowEvent;
+
+          if (wfEvent.type === 'phase_change' && wfEvent.phase && wfEvent.iteration != null) {
+            activeRole = wfEvent.phase === 'worker_do' || wfEvent.phase === 'worker_report' ? 'worker' : 'supervisor';
+            onPhaseChange?.(wfEvent.phase, wfEvent.iteration);
+            if (orchestrationStore) {
+              orchestrationStore.apply({
+                kind: 'loop_transition',
+                transition: {
+                  from: (orchestrationStore.getSnapshot().loop.phase as any) ?? 'observe',
+                  to: wfEvent.phase as any,
+                  attempt: wfEvent.iteration,
+                  timestamp: Date.now(),
+                },
+              });
+            }
+            wfRoundId = `wf-round-${crypto.randomUUID()}`;
+            wfRoundTs = Date.now();
+          }
+          if (wfEvent.type === 'completed') {
+            onPhaseChange?.('completed', 0, 'completed');
+          } else if (wfEvent.type === 'failed') {
+            onPhaseChange?.('failed', 0, 'failed');
+          } else if (wfEvent.type === 'blocked') {
+            onPhaseChange?.('blocked', 0, 'blocked');
+          }
+        } else if (hasRole) {
+          const loopEvent = rawEvent as unknown as LoopEvent;
+          switch (loopEvent.role) {
+            case 'assistant_delta': {
+              if (!wfRoundId || !transcriptStore) break;
+              transcriptStore.ensureTextPart(wfRoundId + '-text', 'assistant_text', wfRoundId, wfRoundTs, activeRole);
+              transcriptStore.appendPartDelta(wfRoundId + '-text', loopEvent.content ?? '');
+              publishTimeline();
+              break;
+            }
+            case 'assistant_final': {
+              if (!wfRoundId || !transcriptStore) break;
+              transcriptStore.ensureTextPart(wfRoundId + '-text', 'assistant_text', wfRoundId, wfRoundTs, activeRole);
+              transcriptStore.setTextPart(wfRoundId + '-text', loopEvent.content ?? '', false);
+              publishTimeline();
+              break;
+            }
+            case 'reasoning_delta': {
+              if (!wfRoundId || !transcriptStore) break;
+              transcriptStore.ensureTextPart(wfRoundId + '-reasoning', 'reasoning', wfRoundId, wfRoundTs, activeRole);
+              transcriptStore.appendPartDelta(wfRoundId + '-reasoning', loopEvent.content ?? '');
+              publishTimeline();
+              break;
+            }
+            case 'tool_start': {
+              if (!transcriptStore) break;
+              const key = loopEvent.toolName ?? 'wf-tool';
+              const itemId = `wf-${key}-${crypto.randomUUID()}`;
+              toolItemIds.set(key, itemId);
+              transcriptStore.upsertTool(itemId, wfRoundId, {
+                key,
+                name: key,
+                status: 'running',
+                args: {},
+                output: '',
+                startedAt: Date.now(),
+              }, undefined, activeRole);
+              publishTimeline();
+              break;
+            }
+            case 'tool': {
+              if (!transcriptStore) break;
+              const key = loopEvent.toolName ?? 'wf-tool';
+              const itemId = toolItemIds.get(key) ?? `wf-${key}-${crypto.randomUUID()}`;
+              transcriptStore.upsertTool(itemId, wfRoundId, {
+                key,
+                name: key,
+                status: 'done',
+                args: {},
+                output: loopEvent.content ?? '',
+                startedAt: Date.now(),
+              }, undefined, activeRole);
+              publishTimeline();
+              break;
+            }
+            case 'error': {
+              commitBridge(prev => ({
+                ...prev,
+                warnings: [...prev.warnings, loopEvent.content ?? 'Unknown error'],
+              }));
+              break;
+            }
+            case 'warning': {
+              commitBridge(prev => ({
+                ...prev,
+                warnings: [...prev.warnings, loopEvent.content ?? 'Warning'],
+              }));
+              break;
+            }
+            case 'status':
+            case 'usage':
+            case 'done':
+              break;
+          }
         }
       }
+    } catch (err) {
+      commitBridge(prev => ({
+        ...prev,
+        warnings: [...prev.warnings, `Workflow error: ${(err as Error).message ?? String(err)}`],
+      }));
+    } finally {
+      // SFR-70: 确保 always 恢复 idle，即使中断或异常
+      setTUIState('idle');
     }
   };
 

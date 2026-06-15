@@ -1,9 +1,9 @@
 import type { AgentRole } from "../agent-profile/types.js"
 import type { ChatMessage } from "../types.js"
-import type { LoopEvent, ChatClient, SessionStats, AgentTool } from "../interface.js"
+import type { LoopEvent, ChatClient, AgentTool } from "../interface.js"
 import { ReasonixEngine } from "../engine.js"
 import type { DeepreefConfig } from "../config.js"
-import type { AgentRuntimeState, AgentRuntimeStatus } from "./types.js"
+import type { AgentRuntimeState, AgentRuntimeStatus, WorkflowMode, SubmitContext } from "./types.js"
 
 export interface AgentRuntimeOptions {
   role: AgentRole
@@ -96,7 +96,7 @@ export class AgentRuntime {
     }
   }
 
-  async *submit(input: string): AsyncGenerator<LoopEvent> {
+  async *submit(input: string, mode?: WorkflowMode): AsyncGenerator<LoopEvent> {
     if (this.status === "running") {
       throw new Error(`Agent ${this.role} is already running`)
     }
@@ -106,7 +106,9 @@ export class AgentRuntime {
     this.currentTask = input
 
     try {
-      for await (const event of this.engine.submit(input)) {
+      // SFR-10: 显式传递 role 和 mode，不依赖 engine.currentAgent
+      const ctx: SubmitContext = { role: this.role, mode: mode ?? "alone" }
+      for await (const event of this.engine.submit(input, undefined, ctx.role, ctx.mode)) {
         yield event
       }
       this.status = "completed"

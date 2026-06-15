@@ -12,6 +12,7 @@ import type {
 import { DEFAULT_WORKFLOW_CONFIG } from "./types.js"
 import type { DualAgentRuntime } from "../dual-agent-runtime/dual-runtime.js"
 import type { QuestionService } from "../question/service.js"
+import type { LoopEvent } from "../interface.js"
 
 export interface StartWorkflowOptions {
   goal: string
@@ -281,16 +282,21 @@ export class WorkflowCoordinator {
       }
     }
 
-    // If we exited the loop without finishing, check if we hit max rounds
+    // If we exited the loop without finishing, distinguish interrupt from max rounds
     if (this.state && !this.isFinished()) {
-      this.transition("blocked", "Max rounds reached")
+      if (this.abortController?.signal.aborted) {
+        this.transition("blocked", "Interrupted by user")
+      } else {
+        this.transition("blocked", "Max rounds reached")
+      }
     }
   }
 
   private async *runSupervisorAnalyse(): AsyncGenerator<WorkflowEvent> {
     const supervisorInput = `Analyse the following goal and create a plan:\n\nGoal: ${this.state!.goal}\n\nProvide a structured plan with steps, constraints, and risks.`
 
-    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput)) {
+    // SFR-10: 使用 "loop" mode
+    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop")) {
       yield event as any
     }
 
@@ -307,7 +313,8 @@ export class WorkflowCoordinator {
     let hasError = false
     let errorCount = 0
 
-    for await (const event of this.runtime!.getWorker().submit(workerInput)) {
+    // SFR-10: 使用 "loop" mode
+    for await (const event of this.runtime!.getWorker().submit(workerInput, "loop")) {
       yield event as any
       if (event.role === "error") {
         hasError = true
@@ -329,7 +336,8 @@ export class WorkflowCoordinator {
   private async *runWorkerReport(): AsyncGenerator<WorkflowEvent> {
     const workerInput = "Generate a summary report of what was accomplished."
 
-    for await (const event of this.runtime!.getWorker().submit(workerInput)) {
+    // SFR-10: 使用 "loop" mode
+    for await (const event of this.runtime!.getWorker().submit(workerInput, "loop")) {
       yield event as any
     }
 
@@ -343,7 +351,8 @@ export class WorkflowCoordinator {
   private async *runSupervisorCheck(): AsyncGenerator<WorkflowEvent> {
     const supervisorInput = `Review the following worker report and decide next action:\n\nPlan: ${this.state!.supervisorPlan ?? ""}\n\nReport: ${this.state!.workerReport ?? ""}\n\nDecide: continue, revise, approve, ask_user, or blocked`
 
-    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput)) {
+    // SFR-10: 使用 "loop" mode
+    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop")) {
       yield event as any
     }
 
@@ -392,7 +401,8 @@ ${contextSummary}
 Provide brief guidance. Do NOT decide to approve or complete the workflow.
 Return your guidance as structured advice.`
 
-    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput)) {
+    // SFR-10: 使用 "loop" mode
+    for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop")) {
       yield event as any
     }
 

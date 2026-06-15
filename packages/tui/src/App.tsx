@@ -16,6 +16,7 @@ import { WelcomeWhenEmpty } from './WelcomeWhenEmpty.js';
 import { BridgeDeepiPromptInput, BridgeScrollAlerts, BridgeStatusBar } from './BridgeConnected.js';
 import { DeepiMessages } from './DeepiMessages.js';
 import type { DeepiPromptInputHandle } from './DeepiPromptInput.js';
+import { routeWorkflowInput, type WorkflowLifecycle } from './workflow-mode-router.js';
 import { FullscreenLayout } from './FullscreenLayout.js';
 import { useMessageScroll } from './useMessageScroll.js';
 import { WelcomeScreen } from './WelcomeScreen.js';
@@ -429,8 +430,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   // 工作流模式：alone（单 agent）/ subagent（supervisor 自主调度）/ loop（固定双角色编排）
   // 从 ui-settings.json 恢复上次选择，缺省 alone。
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>(persistedSettings.workflowMode ?? 'alone');
-  // loop 模式下，用户选了 loop 后下一条非斜杠消息作为 goal 启动编排
-  const [pendingWorkflowGoal, setPendingWorkflowGoal] = useState(false);
+  // SFR-50: 统一 lifecycle 状态取代 pendingWorkflowGoal 布尔值
+  const [workflowLifecycle, setWorkflowLifecycle] = useState<WorkflowLifecycle>({ status: 'idle' });
+  const workflowLifecycleRef = useRef(workflowLifecycle);
+  workflowLifecycleRef.current = workflowLifecycle;
+  // SFR-70: 跟踪并发 Workflow，防止重复启动
+  const workflowRunningRef = useRef(false);
   const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
 
   // DA-R6: 检查是否有覆盖层阻止 Tab 切换
@@ -655,67 +660,113 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       }
       return;
     }
-    // loop 模式 goal 收集：用户选了 loop 后，下一条非斜杠消息作为 goal 启动编排
-    if (pendingWorkflowGoal) {
-      setPendingWorkflowGoal(false);
-      const goal = submitted;
-      setWorkflowState({
-        phase: 'supervisor_analyse',
-        iteration: 1,
-        maxRounds: 9,
-        goal,
-        supervisorStatus: 'analyse',
-        workerStatus: 'idle',
-      });
-      appendMessage({
-        role: 'assistant' as const,
-        content: `Starting workflow for: ${goal}\nSupervisor analysing...`,
-      });
-      scrollRef.current?.scrollToBottom();
-      bridge.runWorkflow(goal, (phase, iteration) => {
-        const phaseMap: Record<string, { supervisor: WorkflowState['supervisorStatus']; worker: WorkflowState['workerStatus'] }> = {
-          supervisor_analyse: { supervisor: 'analyse', worker: 'idle' },
-          supervisor_check: { supervisor: 'analyse', worker: 'idle' },
-          supervisor_intervene: { supervisor: 'analyse', worker: 'do' },
-          worker_do: { supervisor: 'analyse', worker: 'do' },
-          worker_report: { supervisor: 'waiting', worker: 'report' },
-          waiting_user: { supervisor: 'waiting', worker: 'idle' },
-          blocked: { supervisor: 'blocked', worker: 'blocked' },
-        };
-        const mapped = phaseMap[phase] ?? { supervisor: 'idle' as const, worker: 'idle' as const };
-        setWorkflowState(prev => ({
-          ...prev,
-          phase: phase as WorkflowPhase,
-          iteration,
-          supervisorStatus: mapped.supervisor,
-          workerStatus: mapped.worker,
-        }));
-      });
-      return;
-    }
-    const taggedSkillNames = extractSkillTags(submitted);
-    if (taggedSkillNames.length === 0) {
-      scrollRef.current?.scrollToBottom();
-      bridge.submit(submitted, false, activeRole);
-      return;
-    }
 
-    void (async () => {
-      const previousSkills = engineRef.current.getActiveSkills();
-      const taggedSkills = await loadTaggedSkills(taggedSkillNames);
-      const merged = [
-        ...previousSkills.filter(skill => !taggedSkills.some(tagged => tagged.name === skill.name)),
-        ...taggedSkills,
-      ];
-      engineRef.current.setActiveSkills(merged);
-      scrollRef.current?.scrollToBottom();
-      try {
-        await bridge.submit(submitted, false, activeRole);
-      } finally {
-        engineRef.current.setActiveSkills(previousSkills);
+    // SFR-50: 使用统一模式路由器
+    const inputKind = command ? 'command' : 'text';
+    const lifecycle = workflowLifecycleRef.current;
+    const route = routeWorkflowInput({ mode: workflowMode, lifecycle, activeRole, input: submitted, inputKind });
+
+    switch (route.type) {
+      case 'direct': {
+        const taggedSkillNames = extractSkillTags(submitted);
+        if (taggedSkillNames.length === 0) {
+          scrollRef.current?.scrollToBottom();
+          bridge.submit(submitted, false, route.role);
+          return;
+        }
+        void (async () => {
+          const previousSkills = engineRef.current.getActiveSkills();
+          const taggedSkills = await loadTaggedSkills(taggedSkillNames);
+          const merged = [
+            ...previousSkills.filter(skill => !taggedSkills.some(tagged => tagged.name === skill.name)),
+            ...taggedSkills,
+          ];
+          engineRef.current.setActiveSkills(merged);
+          scrollRef.current?.scrollToBottom();
+          try {
+            await bridge.submit(submitted, false, route.role);
+          } finally {
+            engineRef.current.setActiveSkills(previousSkills);
+          }
+        })();
+        return;
       }
-    })();
-  }, [activeAgent, activeRole, appendMessage, bridge, thinkingMode]);
+      case 'supervisor_task': {
+        // subagent 模式：固定发给 Supervisor
+        scrollRef.current?.scrollToBottom();
+        bridge.submit(submitted, false, 'supervisor');
+        return;
+      }
+      case 'start_workflow': {
+        const goal = route.goal;
+        // SFR-70: 防止在 Workflow 运行时重复启动
+        if (workflowRunningRef.current) {
+          appendMessage({
+            role: 'assistant' as const,
+            content: `A workflow is already running. Cancel or wait before starting a new goal.`,
+          });
+          return;
+        }
+        workflowRunningRef.current = true;
+        setWorkflowLifecycle({ status: 'running', workflowId: 'wf-' + Date.now() });
+        setWorkflowState({
+          phase: 'supervisor_analyse',
+          iteration: 1,
+          maxRounds: 9,
+          goal,
+          supervisorStatus: 'analyse',
+          workerStatus: 'idle',
+        });
+        appendMessage({
+          role: 'assistant' as const,
+          content: `Starting workflow for: ${goal}\nSupervisor analysing...`,
+        });
+        scrollRef.current?.scrollToBottom();
+        bridge.runWorkflow(goal, (phase: string, iteration: number, finalStatus?: string) => {
+          if (finalStatus) {
+            setWorkflowLifecycle({ status: finalStatus as WorkflowLifecycle['status'], workflowId: 'wf-' + Date.now() });
+            return;
+          }
+          const phaseMap: Record<string, { supervisor: WorkflowState['supervisorStatus']; worker: WorkflowState['workerStatus'] }> = {
+            supervisor_analyse: { supervisor: 'analyse', worker: 'idle' },
+            supervisor_check: { supervisor: 'analyse', worker: 'idle' },
+            supervisor_intervene: { supervisor: 'analyse', worker: 'do' },
+            worker_do: { supervisor: 'analyse', worker: 'do' },
+            worker_report: { supervisor: 'waiting', worker: 'report' },
+            waiting_user: { supervisor: 'waiting', worker: 'idle' },
+            blocked: { supervisor: 'blocked', worker: 'blocked' },
+          };
+          const mapped = phaseMap[phase] ?? { supervisor: 'idle' as const, worker: 'idle' as const };
+          setWorkflowState(prev => ({
+            ...prev,
+            phase: phase as WorkflowPhase,
+            iteration,
+            supervisorStatus: mapped.supervisor,
+            workerStatus: mapped.worker,
+          }));
+        }).catch((err: unknown) => {
+          setWorkflowLifecycle({ status: 'failed', workflowId: 'wf-' + Date.now(), reason: (err as Error).message });
+        }).finally(() => {
+          workflowRunningRef.current = false;
+        });
+        return;
+      }
+      case 'workflow_instruction': {
+        appendMessage({
+          role: 'assistant' as const,
+          content: `[Workflow running] Instruction noted: ${route.content}`,
+        });
+        return;
+      }
+      case 'reject': {
+        appendMessage({
+          role: 'assistant' as const,
+          content: route.reason,
+        });
+        return;
+      }
+    }
+  }, [activeAgent, activeRole, appendMessage, bridge, thinkingMode, workflowMode]);
 
   /** Agent 切换回调：针对当前 activeRole 绑定。对相应 engine 调 switchAgent，并持久化到 agents.json */
   const handleAgentChoose = useCallback((next: string) => {
@@ -946,24 +997,32 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         title="Workflow mode"
         subtitle={`Current: ${workflowMode}`}
         items={[
-          { value: "alone", label: "alone", description: "只用当前 agent，普通对话模式" },
-          { value: "subagent", label: "subagent", description: "supervisor 自主调度，按需派 worker 子 agent 执行" },
-          { value: "loop", label: "loop", description: "固定双角色编排：supervisor 分析→worker 执行→汇报→检查" },
+          { value: "alone", label: "alone", description: `只用当前 agent，普通对话模式${workflowLifecycle.status === 'running' ? '（将中断运行中的 Workflow）' : ''}` },
+          { value: "subagent", label: "subagent", description: `supervisor 自主调度，按需派 worker 子 agent 执行${workflowLifecycle.status === 'running' ? '（将中断运行中的 Workflow）' : ''}` },
+          { value: "loop", label: "loop", description: `固定双角色编排：supervisor 分析→worker 执行→汇报→检查${workflowLifecycle.status === 'running' ? '（将中断运行中的 Workflow）' : ''}` },
         ]}
         onChoose={(value) => {
           const mode = value as WorkflowMode;
+          // SFR-70: 从 loop 切出时中断并清理 Coordinator
+          if (workflowMode === 'loop' && mode !== 'loop') {
+            workflowCoordinator?.interrupt();
+            workflowCoordinator?.reset();
+            dualRuntime?.reset();
+          }
           setWorkflowMode(mode);
           saveTuiSettings({ workflowMode: mode });
           setShowWorkflowMenu(false);
           if (mode === 'loop') {
-            // loop 模式需要 goal：标记下一条非斜杠消息作为 goal
-            setPendingWorkflowGoal(true);
+            // SFR-50: 使用统一 lifecycle 状态
+            setWorkflowLifecycle({ status: 'awaiting_goal' });
+            setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }));
             appendMessage({
               role: 'assistant' as const,
               content: `Workflow mode: loop\n请输入本次工作流的目标（goal），回车启动编排。`,
             });
           } else {
-            // 切回 alone/subagent 时重置 workflow 状态
+            // SFR-70: 切回 alone/subagent 时清理旧 workflow
+            setWorkflowLifecycle({ status: 'idle' });
             setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }));
             appendMessage({
               role: 'assistant' as const,
@@ -1079,12 +1138,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const bottomContent = (
     <Box flexDirection="column" width="100%">
       {/* DA-R6: Workflow 状态栏 - 固定在输入框正上方 */}
-      <WorkflowStatusBar
-        workflow={workflowState}
-        activeRole={activeRole}
-        workflowMode={workflowMode}
-        width={process.stdout.columns ?? 80}
-      />
+    <WorkflowStatusBar
+      workflow={workflowState}
+      lifecycle={workflowLifecycle}
+      activeRole={activeRole}
+      workflowMode={workflowMode}
+      width={process.stdout.columns ?? 80}
+    />
       {showAutocomplete && (
         <CommandAutocomplete
           query={inputText}

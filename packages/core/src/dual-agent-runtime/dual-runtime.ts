@@ -121,7 +121,7 @@ export class DualAgentRuntime {
   }
 
   async *sendDirect(options: SendToOptions): AsyncGenerator<LoopEvent> {
-    const { role, input } = options
+    const { role, input, mode } = options
     this.activeRole = role
 
     const runtime = role === "worker" ? this.worker : this.supervisor
@@ -129,10 +129,11 @@ export class DualAgentRuntime {
     yield {
       role: "status",
       content: `Sending to ${role}`,
-      metadata: { role, input },
+      metadata: { role, input, mode: mode ?? "alone" },
     }
 
-    for await (const event of runtime.submit(input)) {
+    // SFR-10: 传递 mode 给 AgentRuntime
+    for await (const event of runtime.submit(input, mode)) {
       yield event
     }
 

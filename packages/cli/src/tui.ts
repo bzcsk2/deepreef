@@ -1,7 +1,7 @@
 import { stdin as input, stdout as output, stderr as errorOutput } from "node:process"
 import { readFileSync, writeSync } from "node:fs"
 import { resolve } from "node:path"
-import { loadConfig, loadRoleConfig, getModelContextWindow, ReasonixEngine, SessionLoader, defaultAgentRegistry } from "@deepreef/core"
+import { loadConfig, loadRoleConfig, getModelContextWindow, ReasonixEngine, SessionLoader, defaultAgentRegistry, loadAgentProfiles, getAgentProfile } from "@deepreef/core"
 import { buildSystemPrompt } from "@deepreef/core"
 import { DualAgentRuntime } from "@deepreef/core/dual-agent-runtime/dual-runtime.js"
 import { WorkflowCoordinator } from "@deepreef/core/workflow-coordinator/coordinator.js"
@@ -222,6 +222,11 @@ async function main(): Promise<void> {
     const workerRoleCfg = loadRoleConfig("worker")
     const supervisorRoleCfg = loadRoleConfig("supervisor")
 
+    // SFR-40: 加载 Agent Profile（agents.json），用于 thinking/温度等角色级配置
+    const agentProfiles = loadAgentProfiles()
+    const workerProfile = getAgentProfile(agentProfiles, "worker")
+    const supervisorProfile = getAgentProfile(agentProfiles, "supervisor")
+
     // 若 worker 持久化了不同的 provider/model/baseUrl，热更新 worker 引擎使其生效
     if (workerRoleCfg && (workerRoleCfg.model !== config.model || workerRoleCfg.provider !== (config.provider ?? "zen"))) {
       engine.updateConfig({
@@ -231,6 +236,9 @@ async function main(): Promise<void> {
         contextWindow: getModelContextWindow(workerRoleCfg.provider, workerRoleCfg.model),
       })
     }
+
+    // SFR-40: 应用 Worker Profile 的 thinking 模式
+    engine.setThinkingMode(workerProfile.thinking)
 
     // supervisor 引擎：用 supervisor role config（若有）覆盖，否则与全局 config 一致
     const supervisorConfig: typeof config = supervisorRoleCfg
@@ -244,13 +252,13 @@ async function main(): Promise<void> {
       : config
     const supervisorEngine = new ReasonixEngine(supervisorConfig, clearReadTracker)
     supervisorEngine.setSystemPrompt(baseSystemPrompt)
+    // SFR-40: 应用 Supervisor Profile 的 thinking 模式（与 Worker 独立）
+    supervisorEngine.setThinkingMode(supervisorProfile.thinking)
 
     // 给 supervisor 注册"监督规划"角色所需工具：派活（AgentTool）、求助（AskUser）、
     // 读取证据（read_file/grep/list_dir）、任务清单（todowrite）。不注册写文件/exec
     // 类工具 —— 执行应通过 AgentTool 派发给独立 worker 子 engine，避免 supervisor
-    // 自己动手偏离规划职责。这样 supervisor 在普通对话中可自主调度：分析→派活→
-    // 收结果→继续/修正/AskUser。/run 固定 Workflow 不受影响（它经
-    // WorkflowCoordinator 直接调 dual-runtime 两个 AgentRuntime，不走工具系统）。
+    // 自己动手偏离规划职责。
     supervisorEngine.registerTool(createAgentToolTool())
     supervisorEngine.registerTool(createAskUserQuestionTool())
     supervisorEngine.registerTool(createReadFileTool())
@@ -272,28 +280,33 @@ async function main(): Promise<void> {
         maxWorkflowRounds: 9,
         workerModelTarget: workerEffectiveModel,
         supervisorModelTarget: supervisorConfig.model,
-        workerThinking: 'off' as const,
-        supervisorThinking: 'off' as const,
+        // SFR-40: 使用 Profile 中的 thinking 值而非硬编码 'off'
+        workerThinking: workerProfile.thinking,
+        supervisorThinking: supervisorProfile.thinking,
       },
       workerConfig: {
         apiKey: config.apiKey,
         baseUrl: workerEffectiveBaseUrl,
         model: workerEffectiveModel,
         maxTokens: config.maxTokens,
-        temperature: config.temperature,
+        temperature: workerProfile.temperature ?? config.temperature,
         provider: workerEffectiveProvider,
       },
       supervisorConfig: {
         apiKey: config.apiKey,
         baseUrl: supervisorConfig.baseUrl,
         model: supervisorConfig.model,
-        maxTokens: config.maxTokens,
-        temperature: config.temperature,
+        maxTokens: supervisorConfig.maxTokens ?? config.maxTokens,
+        temperature: supervisorProfile.temperature ?? config.temperature,
         provider: supervisorConfig.provider,
       },
       workerEngine: engine,
       supervisorEngine: supervisorEngine,
     })
+
+    // SFR-40: 启动时输出角色配置诊断
+    process.stderr.write(`[deepreef] Worker:  model=${workerEffectiveModel}  thinking=${workerProfile.thinking}\n`)
+    process.stderr.write(`[deepreef] Supervisor:  model=${supervisorConfig.model}  thinking=${supervisorProfile.thinking}  tools=6\n`)
 
     // WF-FIX-40: QuestionService with timeout wrapper to prevent indefinite blocking
     const questionService = new QuestionService()
@@ -305,9 +318,15 @@ async function main(): Promise<void> {
       return Promise.race([originalAsk(input), timeout])
     }
 
+    // SFR-60: Coordinator 阶段事件写入标准输出和进程诊断日志
     const workflowCoordinator = new WorkflowCoordinator({
       runtime: dualRuntime,
       questionService,
+      onEvent: (event) => {
+        if (event.type === 'phase_change' || event.type === 'blocked' || event.type === 'completed' || event.type === 'failed') {
+          process.stderr.write(`[workflow] ${event.type} phase=${event.phase ?? ''} iteration=${event.iteration ?? 0}\n`)
+        }
+      },
     })
 
     await runTUIMode(

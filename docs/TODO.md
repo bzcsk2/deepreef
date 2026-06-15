@@ -8,6 +8,7 @@
 - 当前架构方案见 [Deepreef项目设计文档.md](Deepreef项目设计文档.md)。
 - 开发审核意见与领取限制见 [ADVICE.md](ADVICE.md)。
 - 历史融合方案讨论见 [Deepreef后续开发计划.md](Deepreef后续开发计划.md)。
+- Supervisor 工具、提示词与角色路由退化修复（SFR-00 至 SFR-90 全部完成）见 [Supervisor能力退化修复方案.md](Supervisor能力退化修复方案.md)。
 
 ---
 

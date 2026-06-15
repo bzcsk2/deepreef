@@ -1,3 +1,4 @@
+import type { LoopEvent } from "../interface.js"
 import type { AgentRole } from "../agent-profile/types.js"
 
 export type WorkflowPhase =
@@ -165,7 +166,7 @@ export interface StartWorkflowOptions {
 }
 
 export interface WorkflowEvent {
-  type: "phase_change" | "iteration_change" | "blocked" | "completed" | "failed" | "ask_user" | "supervisor_intervene"
+  type: "phase_change" | "iteration_change" | "blocked" | "completed" | "failed" | "ask_user" | "supervisor_intervene" | "role_output"
   workflowId: string
   phase?: WorkflowPhase
   iteration?: number
@@ -175,6 +176,10 @@ export interface WorkflowEvent {
   /** 中途干预时的 advice 摘要 */
   adviceSummary?: string
   timestamp: number
+  /** SFR-60: role_output 事件携带原始 AgentRuntime 事件 */
+  roleEvent?: LoopEvent
+  agentRole?: AgentRole
+  workflowMode?: string
 }
 
 export const SUPERVISOR_WORKFLOW_PROMPT = `You are the Supervisor in a managed workflow.

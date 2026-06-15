@@ -2,6 +2,14 @@ import type { AgentRole } from "../agent-profile/types.js"
 import type { ChatMessage } from "../types.js"
 import type { LoopEvent } from "../interface.js"
 
+/* SFR-10: 提交场景上下文 */
+export type WorkflowMode = "alone" | "subagent" | "loop"
+
+export interface SubmitContext {
+  role: AgentRole
+  mode: WorkflowMode
+}
+
 export type AgentRuntimeStatus =
   | "idle"
   | "running"
@@ -40,6 +48,7 @@ export interface DualAgentRuntimeConfig {
 export interface SendToOptions {
   role: AgentRole
   input: string
+  mode?: WorkflowMode
   workflowId?: string
 }
 
