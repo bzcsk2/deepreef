@@ -154,7 +154,9 @@ export function createBridge(
   respondQuestion: (requestId: string, answers: string[][]) => void;
   rejectQuestion: (requestId: string) => void;
   /** Run a workflow goal through the WorkflowCoordinator */
-  runWorkflow: (goal: string, onPhaseChange?: (phase: string, iteration: number) => void) => Promise<void>;
+  runWorkflow: (goal: string, onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void) => Promise<void>;
+  /** Resume a workflow that was blocked by a user interrupt */
+  resumeWorkflow: (instruction: string, onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void) => Promise<void>;
   /** Store 路径下用 timeline 全量同步 transcript（session 恢复等） */
   replaceTranscript: (items: TimelineItem[]) => void;
   /** 追加一条消息到 transcript（系统提示 / 模型切换等） */
@@ -934,9 +936,13 @@ export function createBridge(
   };
 
   /** WF-FIX-20: Run a workflow goal through the WorkflowCoordinator */
-  const runWorkflow = async (goal: string, onPhaseChange?: (phase: string, iteration: number, finalStatus?: string) => void) => {
+  const driveWorkflow = async (
+    goal: string | null,
+    onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void,
+    resumeInstruction?: string,
+  ) => {
     if (!workflowCoordinator) {
-      await submit(goal, false, 'supervisor');
+      await submit(resumeInstruction ?? goal ?? '', false, 'supervisor');
       return;
     }
 
@@ -949,11 +955,14 @@ export function createBridge(
       permissionPrompt: null,
     }));
 
-    if (workflowCoordinator.getState()) {
-      workflowCoordinator.reset();
+    if (resumeInstruction !== undefined) {
+      workflowCoordinator.resumeInterruptedWorkflow(resumeInstruction);
+    } else {
+      if (workflowCoordinator.getState()) {
+        workflowCoordinator.reset();
+      }
+      workflowCoordinator.startWorkflow({ goal: goal! });
     }
-
-    workflowCoordinator.startWorkflow({ goal });
     let activeRole: AgentRole = 'supervisor';
     let wfRoundId = '';
     let wfRoundTs = 0;
@@ -1035,9 +1044,9 @@ export function createBridge(
           if (wfEvent.type === 'completed') {
             onPhaseChange?.('completed', 0, 'completed');
           } else if (wfEvent.type === 'failed') {
-            onPhaseChange?.('failed', 0, 'failed');
+            onPhaseChange?.('failed', 0, 'failed', wfEvent.reason);
           } else if (wfEvent.type === 'blocked') {
-            onPhaseChange?.('blocked', 0, 'blocked');
+            onPhaseChange?.('blocked', 0, 'blocked', wfEvent.reason);
           }
         } else if (hasRole) {
           const loopEvent = rawEvent as unknown as LoopEvent;
@@ -1124,11 +1133,7 @@ export function createBridge(
             }
             case 'error': {
               const message = loopEvent.content ?? 'Unknown error';
-              commitBridge(prev => ({
-                ...prev,
-                error: message,
-                warnings: [...prev.warnings, message],
-              }));
+              console.warn(`[tool:error] ${message}`);
               break;
             }
             case 'warning': {
@@ -1206,6 +1211,16 @@ export function createBridge(
     }
   };
 
+  const runWorkflow = (
+    goal: string,
+    onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void,
+  ) => driveWorkflow(goal, onPhaseChange);
+
+  const resumeWorkflow = (
+    instruction: string,
+    onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void,
+  ) => driveWorkflow(null, onPhaseChange, instruction);
+
   return {
     submit,
     cancel,
@@ -1213,6 +1228,7 @@ export function createBridge(
     respondQuestion,
     rejectQuestion,
     runWorkflow,
+    resumeWorkflow,
     replaceTranscript,
     appendTimelineMessage,
     getTranscriptReader: () => transcriptReader,
