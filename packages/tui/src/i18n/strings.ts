@@ -42,11 +42,20 @@ export interface Strings {
   msgs: (n: number) => string;
   // Model picker
   modelSettings: string;
-  selectProvider: string;
   current: string;
   enterApiKey: (name: string) => string;
   escToGoBack: string;
-  selectModel: (name: string) => string;
+  pressEToEdit: string;
+  pressDToDelete: string;
+  keySourceEnv: string;
+  keySourceFile: string;
+  keySourceDefault: string;
+  configured: string;
+  yourApiKey: string;
+  confirmDelete: string;
+  pressYToConfirm: string;
+  updateKey: string;
+  apiKeyMasked: (suffix: string) => string;
   // Slash commands
   cmdExit: string;
   cmdHelp: string;

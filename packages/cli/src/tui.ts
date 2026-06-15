@@ -1,7 +1,7 @@
 import { stdin as input, stdout as output, stderr as errorOutput } from "node:process"
 import { readFileSync, writeSync } from "node:fs"
 import { resolve } from "node:path"
-import { loadConfig, loadRoleConfig, getModelContextWindow, ReasonixEngine, SessionLoader, defaultAgentRegistry, loadAgentProfiles, getAgentProfile } from "@deepreef/core"
+import { loadConfig, loadRoleConfig, getModelContextWindow, ReasonixEngine, SessionLoader, defaultAgentRegistry, loadAgentProfiles, getAgentProfile, resolveApiKey } from "@deepreef/core"
 import { buildSystemPrompt } from "@deepreef/core"
 import { DualAgentRuntime } from "@deepreef/core/dual-agent-runtime/dual-runtime.js"
 import { WorkflowCoordinator } from "@deepreef/core/workflow-coordinator/coordinator.js"
@@ -270,6 +270,10 @@ async function main(): Promise<void> {
     const workerEffectiveProvider = workerRoleCfg?.provider ?? config.provider
     const workerEffectiveBaseUrl = workerRoleCfg?.baseUrl ?? config.baseUrl
 
+    // Stage B: 各自 provider 的 API Key 分别解析
+    const { value: workerApiKey } = resolveApiKey(workerEffectiveProvider ?? "zen")
+    const { value: supervisorApiKey } = resolveApiKey(supervisorConfig.provider ?? "zen")
+
     const dualRuntime = new DualAgentRuntime({
       workerClient: engine as unknown as import("@deepreef/core").ChatClient,
       supervisorClient: supervisorEngine as unknown as import("@deepreef/core").ChatClient,
@@ -284,7 +288,7 @@ async function main(): Promise<void> {
         supervisorThinking: supervisorProfile.thinking,
       },
       workerConfig: {
-        apiKey: config.apiKey,
+        apiKey: workerApiKey,
         baseUrl: workerEffectiveBaseUrl,
         model: workerEffectiveModel,
         maxTokens: config.maxTokens,
@@ -292,7 +296,7 @@ async function main(): Promise<void> {
         provider: workerEffectiveProvider,
       },
       supervisorConfig: {
-        apiKey: config.apiKey,
+        apiKey: supervisorApiKey,
         baseUrl: supervisorConfig.baseUrl,
         model: supervisorConfig.model,
         maxTokens: supervisorConfig.maxTokens ?? config.maxTokens,

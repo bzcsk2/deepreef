@@ -81,7 +81,7 @@ export { ContextManager } from "./context/manager.js"
 export { ImmutablePrefix } from "./context/immutable.js"
 export { AppendOnlyLog } from "./context/append-log.js"
 export { VolatileScratch } from "./context/scratch.js"
-export { loadConfig, PROVIDERS, getApiKeyEnvVar, getModelContextWindow, saveLastConfig, saveRoleConfig, loadRoleConfig } from "./config.js"
+export { loadConfig, PROVIDERS, FREE_MODEL_TARGETS, getApiKeyEnvVar, getModelContextWindow, saveLastConfig, saveRoleConfig, loadRoleConfig, resolveApiKey, listConfiguredApiKeys, saveProjectApiKey, deleteProjectApiKey, isValidProviderId } from "./config.js"
 export {
   resolveModelTarget,
   targetFromConfig,
@@ -308,7 +308,7 @@ export { getMainMode, MAIN_MODES } from "./main-mode.js"
 export type { MainMode, MainModeDefinition } from "./main-mode.js"
 export { QueryEngine } from "./query-engine.js"
 export type { AgentDefinition } from "./agent.js"
-export type { DeepreefConfig, ProviderInfo, ProviderModel, RoleConfig } from "./config.js"
+export type { DeepreefConfig, ProviderInfo, ProviderModel, RoleConfig, ApiKeySource } from "./config.js"
 export type { ChatMessage, ToolCall, ToolSpec, Usage, Role } from "./types.js"
 export type { CoreEngine, AgentConfig, AgentTool, LoopEvent, AgentState, SessionStats, ToolContext, ToolResult, LoopEventRole, ToolTier, ToolConcurrency, ToolProgressUpdate, ChatClient } from "./interface.js"
 // TUI-OT-60: 多 Agent 编排事件类型（供 TUI 消费）

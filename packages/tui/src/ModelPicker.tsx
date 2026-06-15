@@ -1,287 +1,350 @@
-/**
- * ModelPicker — 模型选择弹窗
- *
- * 功能：引导用户分三步选择 AI 模型：选择提供商 → 输入 API Key（如需）→ 选择模型。
- * 通过 step 状态控制当前展示步骤，支持键盘上下键导航、回车确认、Esc 返回/取消。
- *
- * @param currentProvider - 当前已选的提供商 ID
- * @param currentModel - 当前已选的模型名称
- * @param onSelect - 确认选择后的回调，传入 { provider, model, apiKey, baseUrl }
- * @param onCancel - 用户按 Esc 取消时的回调
- */
-import { useState, useCallback } from 'react';
-import { Box, Text, useInput } from '@deepreef/ink';
-import { PROVIDERS, getApiKeyEnvVar } from '@deepreef/core';
-import { tryReadClipboard } from './clipboard.js';
-import { t } from './i18n/index.js';
+import { useState, useCallback, useMemo } from "react"
+import { Box, Text, useInput } from "@deepreef/ink"
+import { PROVIDERS, resolveApiKey, saveProjectApiKey, deleteProjectApiKey, listConfiguredApiKeys } from "@deepreef/core"
+import type { ApiKeySource } from "@deepreef/core"
+import { buildMenuRows, getPrevSelectableIndex, getNextSelectableIndex, clampWindow, resolveLocalBaseUrl } from "./model-menu.js"
+import type { ModelMenuRow, ModelSelection } from "./model-menu.js"
+import { tryReadClipboard } from "./clipboard.js"
+import { t } from "./i18n/index.js"
 
 interface ModelPickerProps {
-  currentProvider: string;
-  currentModel: string;
-  onSelect: (config: { provider: string; model: string; apiKey: string; baseUrl: string }) => void;
-  onCancel: () => void;
+  currentProvider: string
+  currentModel: string
+  onSelect: (config: { provider: string; model: string; apiKey: string; baseUrl: string }) => void
+  onCancel: () => void
 }
 
-/** 当前所处的选择步骤：'provider' 选择提供商，'key' 输入 API Key，'model' 选择具体模型，'custom' 自定义 URL/模型 */
-type Step = 'provider' | 'key' | 'model' | 'custom';
+type Step = "main" | "key" | "custom" | "delete-confirm"
 
-/** 提供商列表的显示顺序，数组索引同时也决定了键盘上下键的选中顺序 */
-const PROVIDER_ORDER = ['zen', 'deepseek', 'mimo', 'kilo', 'openai-compatible', 'nvidia'];
-
-/** Default baseURL for openai-compatible provider */
-const DEFAULT_LOCAL_URL = 'http://localhost:8000/v1';
+const WINDOW_SIZE = 20
 
 export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel }: ModelPickerProps) {
-  /** 当前步骤：提供商选择 → 输入 Key → 选择模型 */
-  const [step, setStep] = useState<Step>('provider');
-  /** 当前选中的列表项索引，用于上下键导航 */
-  const [selIdx, setSelIdx] = useState(Math.max(0, PROVIDER_ORDER.indexOf(currentProvider)));
-  /** 用户选中的提供商 ID */
-  const [selProvider, setSelProvider] = useState(currentProvider);
-  /** 用户选中的模型名称 */
-  const [selModel, setSelModel] = useState(currentModel);
-  /** 用户输入的 API Key */
-  const [apiKey, setApiKey] = useState('');
-  /** 输入缓存区，用于收集键盘字符输入（也支持终端的 bracketed paste 多字符粘贴） */
-  const [inputBuf, setInputBuf] = useState('');
-  /** openai-compatible: 当前编辑的字段索引 (0=URL, 1=模型名) */
-  const [editField, setEditField] = useState(0);
-  /** openai-compatible: 自定义 baseURL */
-  const [customUrl, setCustomUrl] = useState(DEFAULT_LOCAL_URL);
-  /** openai-compatible: 自定义模型名 */
-  const [customModel, setCustomModel] = useState('');
+  const [step, setStep] = useState<Step>("main")
+  const [selIdx, setSelIdx] = useState(0)
+  const [inputBuf, setInputBuf] = useState("")
+  const [editField, setEditField] = useState(0)
+  const [customUrl, setCustomUrl] = useState(resolveLocalBaseUrl())
+  const [customModel, setCustomModel] = useState("")
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set())
+  const [configuredKeys, setConfiguredKeys] = useState<Record<string, ApiKeySource>>(() => listConfiguredApiKeys())
+  const [pendingProvider, setPendingProvider] = useState("")
+  const [keyUpdateMode, setKeyUpdateMode] = useState(false)
 
-  /**
-   * confirmSelection — 确认并提交选择结果
-   * @param modelOverride - 可选，用于覆盖当前选中的模型（直接回车选择时传入）
-   *
-   * model 优先级：显式传入的 modelOverride > 已缓存的 selModel > 提供商默认模型
-   * apiKey 优先级：用户输入的 apiKey > 环境变量中的 Key > 提供商预设的 defaultKey
-   */
-  const confirmSelection = useCallback((modelOverride?: string) => {
-    const cfg = PROVIDERS[selProvider];
-    if (!cfg) return;
-    // openai-compatible: use custom URL and model name from user input
-    if (selProvider === 'openai-compatible') {
-      onSelect({
-        provider: selProvider,
-        model: customModel || 'gpt-3.5-turbo',
-        apiKey: '',
-        baseUrl: customUrl || DEFAULT_LOCAL_URL,
-      });
-      return;
-    }
-    const envKey = process.env[getApiKeyEnvVar(selProvider)] ?? '';
+  const rows = useMemo(() =>
+    buildMenuRows(configuredKeys, expandedProviders, currentProvider, currentModel),
+    [configuredKeys, expandedProviders, currentProvider, currentModel],
+  )
+
+  const refreshKeys = useCallback(() => {
+    setConfiguredKeys(listConfiguredApiKeys())
+  }, [])
+
+  const confirmSelection = useCallback((target: ModelSelection) => {
+    const { value: apiKey } = resolveApiKey(target.provider)
     onSelect({
-      provider: selProvider,
-      model: modelOverride ?? (selModel || cfg.model),
-      apiKey: apiKey || envKey || (cfg.defaultKey ?? ''),
-      baseUrl: cfg.baseUrl,
-    });
-  }, [selProvider, selModel, customModel, customUrl, apiKey, onSelect]);
+      provider: target.provider,
+      model: target.model,
+      apiKey,
+      baseUrl: target.baseUrl,
+    })
+  }, [onSelect])
 
-  /**
-   * goBack — 返回上一步
-   * - 如果在第一步（provider），则取消整个弹窗
-   * - 如果在 key 输入步骤，清空输入缓存后退回提供商选择
-   * - 如果在 model 选择步骤：若当前提供商必须输入 Key 且尚未提供，则退回 key 步骤；否则直接退回提供商选择
-   */
   const goBack = useCallback(() => {
-    if (step === 'provider') {
-      onCancel();
-    } else if (step === 'key') {
-      setInputBuf('');
-      setStep('provider');
-    } else if (step === 'custom') {
-      setInputBuf('');
-      setEditField(0);
-      setStep('provider');
-    } else {
-      const p = PROVIDERS[selProvider];
-      // 若提供商需要 Key、无默认 Key 且环境变量中也没有，且不是 keyless provider，则退回 key 步骤
-      if (p && !p.keyless && p.requiresKey && !p.defaultKey && !process.env[getApiKeyEnvVar(selProvider)]) {
-        setSelIdx(0);
-        setStep('key');
-      } else {
-        setSelIdx(Math.max(0, PROVIDER_ORDER.indexOf(selProvider)));
-        setStep('provider');
-      }
+    if (step === "main") {
+      onCancel()
+    } else if (step === "key") {
+      setInputBuf("")
+      setKeyUpdateMode(false)
+      setPendingProvider("")
+      setStep("main")
+    } else if (step === "custom") {
+      setInputBuf("")
+      setEditField(0)
+      setStep("main")
+    } else if (step === "delete-confirm") {
+      setPendingProvider("")
+      setStep("main")
     }
-  }, [step, selProvider, onCancel]);
+  }, [step, onCancel])
 
   useInput((_input, key) => {
-    if (key.escape || (key.ctrl && _input === 'c')) {
-      if (step === 'provider') {
-        onCancel();
-      } else {
-        goBack();
-      }
-      return;
-    }
+    const escOrCtrlC = key.escape || (key.ctrl && _input === "c")
 
-    if (step === 'provider') {
+    if (step === "main") {
+      if (escOrCtrlC) {
+        onCancel()
+        return
+      }
+
       if (key.upArrow) {
-        setSelIdx(prev => Math.max(0, prev - 1));
-        return;
+        setSelIdx(prev => getPrevSelectableIndex(rows, prev))
+        return
       }
       if (key.downArrow) {
-        setSelIdx(prev => Math.min(PROVIDER_ORDER.length - 1, prev + 1));
-        return;
+        setSelIdx(prev => getNextSelectableIndex(rows, prev))
+        return
       }
+
+      // e: update key for configured provider
+      if (_input === "e" || _input === "E") {
+        const row = rows[selIdx]
+        if (row?.kind === "provider" && row.configured) {
+          setPendingProvider(row.provider)
+          setInputBuf("")
+          setKeyUpdateMode(true)
+          setStep("key")
+        }
+        return
+      }
+
+      // d: delete key for configured provider
+      if (_input === "d" || _input === "D") {
+        const row = rows[selIdx]
+        if (row?.kind === "provider" && row.configured && row.keySource === "project-file") {
+          setPendingProvider(row.provider)
+          setStep("delete-confirm")
+        }
+        return
+      }
+
       if (key.return) {
-        const p = PROVIDER_ORDER[selIdx];
-        setSelProvider(p);
-        setSelModel(PROVIDERS[p].models[0]?.model ?? '');
-        setInputBuf('');
-        if (p === 'openai-compatible') {
-          // openai-compatible: go directly to custom config step
-          setEditField(0);
-          setInputBuf(customUrl || DEFAULT_LOCAL_URL);
-          setStep('custom');
-          return;
+        const row = rows[selIdx]
+        if (!row) return
+
+        if (row.kind === "provider") {
+          if (!row.configured) {
+            setPendingProvider(row.provider)
+            setInputBuf("")
+            setKeyUpdateMode(false)
+            setStep("key")
+          } else {
+            if (expandedProviders.has(row.provider)) {
+              const next = new Set(expandedProviders)
+              next.delete(row.provider)
+              setExpandedProviders(next)
+            } else {
+              setExpandedProviders(prev => new Set(prev).add(row.provider))
+            }
+          }
+          return
         }
-        const cfg = PROVIDERS[p];
-        // Keyless providers skip API key entry; requiresKey providers without default/env key show key input
-        if (cfg.keyless || !cfg.requiresKey || cfg.defaultKey || process.env[getApiKeyEnvVar(p)]) {
-          setStep('model');
-        } else {
-          setStep('key');
+
+        if (row.kind === "model") {
+          confirmSelection(row.target)
+          return
         }
-        return;
+
+        if (row.kind === "custom") {
+          setInputBuf(customUrl)
+          setEditField(0)
+          setStep("custom")
+          return
+        }
       }
-      return;
+      return
     }
 
-    if (step === 'key') {
+    if (step === "key") {
+      if (escOrCtrlC) {
+        goBack()
+        return
+      }
       if (key.return && inputBuf.length > 0) {
-        setApiKey(inputBuf);
-        setInputBuf('');
-        setSelIdx(0);
-        setStep('model');
-        return;
+        saveProjectApiKey(pendingProvider, inputBuf)
+        setInputBuf("")
+        setExpandedProviders(prev => new Set(prev).add(pendingProvider))
+        refreshKeys()
+        setPendingProvider("")
+        setKeyUpdateMode(false)
+        setStep("main")
+        return
       }
       if (key.backspace || key.delete) {
-        setInputBuf(prev => prev.slice(0, -1));
-        return;
+        setInputBuf(prev => prev.slice(0, -1))
+        return
       }
-      if (key.ctrl && (_input === 'v' || _input === 'V')) {
+      if (key.ctrl && (_input === "v" || _input === "V")) {
         void tryReadClipboard().then(clip => {
-          if (clip) setInputBuf(prev => prev + clip);
-        });
-        return;
+          if (clip) setInputBuf(prev => prev + clip)
+        })
+        return
       }
       if (_input) {
-        // bracketed paste 或普通单字符输入均直接追加
-        setInputBuf(prev => prev + _input);
+        setInputBuf(prev => prev + _input)
       }
-      return;
+      return
     }
 
-    if (step === 'custom') {
+    if (step === "custom") {
+      if (escOrCtrlC) {
+        goBack()
+        return
+      }
       if (key.return && inputBuf.length > 0) {
         if (editField === 0) {
-          // Save URL, move to model name input
-          setCustomUrl(inputBuf);
-          setEditField(1);
-          setInputBuf(customModel);
-          return;
+          setCustomUrl(inputBuf)
+          setEditField(1)
+          setInputBuf(customModel)
+          return
         } else {
-          // Save model and confirm
-          setCustomModel(inputBuf);
-          setEditField(0);
-          confirmSelection();
-          return;
+          setCustomModel(inputBuf)
+          setEditField(0)
+          onSelect({
+            provider: "openai-compatible",
+            model: inputBuf,
+            apiKey: "",
+            baseUrl: customUrl,
+          })
+          return
         }
       }
       if (key.backspace || key.delete) {
-        setInputBuf(prev => prev.slice(0, -1));
-        return;
+        setInputBuf(prev => prev.slice(0, -1))
+        return
       }
-      if (key.ctrl && (_input === 'v' || _input === 'V')) {
+      if (key.ctrl && (_input === "v" || _input === "V")) {
         void tryReadClipboard().then(clip => {
-          if (clip) setInputBuf(prev => prev + clip);
-        });
-        return;
+          if (clip) setInputBuf(prev => prev + clip)
+        })
+        return
       }
       if (_input) {
-        setInputBuf(prev => prev + _input);
+        setInputBuf(prev => prev + _input)
       }
-      return;
+      return
     }
 
-    if (step === 'model') {
-      const models = PROVIDERS[selProvider]?.models ?? [];
-      if (key.upArrow) {
-        setSelIdx(prev => Math.max(0, prev - 1));
-        return;
+    if (step === "delete-confirm") {
+      if (escOrCtrlC) {
+        setPendingProvider("")
+        setStep("main")
+        return
       }
-      if (key.downArrow) {
-        setSelIdx(prev => Math.min(models.length - 1, prev + 1));
-        return;
+      if (_input === "y" || _input === "Y") {
+        deleteProjectApiKey(pendingProvider)
+        setExpandedProviders(prev => {
+          const next = new Set(prev)
+          next.delete(pendingProvider)
+          return next
+        })
+        refreshKeys()
+        setPendingProvider("")
+        setStep("main")
+        return
       }
-      if (key.return) {
-        const m = models[selIdx];
-        if (m) {
-          setSelModel(m.model);
-          confirmSelection(m.model);
-        }
-        return;
-      }
-      return;
+      return
     }
-  });
+  })
 
-  const providerName = PROVIDERS[selProvider]?.label ?? selProvider;
-  const models = PROVIDERS[selProvider]?.models ?? [];
+  const scrollStart = useMemo(
+    () => clampWindow(selIdx, rows.length, WINDOW_SIZE),
+    [selIdx, rows.length],
+  )
+  const visibleRows = useMemo(
+    () => rows.slice(scrollStart, scrollStart + WINDOW_SIZE),
+    [rows, scrollStart],
+  )
+
+  const renderRow = (row: ModelMenuRow, globalIdx: number) => {
+    if (row.kind === "header") {
+      return (
+        <Box key={row.id}>
+          <Text bold underline>{row.label}</Text>
+        </Box>
+      )
+    }
+
+    const isSelected = globalIdx === selIdx
+    const selChar = isSelected ? "❯ " : "  "
+
+    if (row.kind === "provider") {
+      let tag = ""
+      if (row.configured) {
+        const keyTag = row.keySource === "env" ? t().keySourceEnv
+          : row.keySource === "project-file" ? t().keySourceFile
+          : row.keySource === "default" ? t().keySourceDefault
+          : ""
+        tag = `${t().configured}${keyTag}`
+      } else {
+        tag = t().yourApiKey
+      }
+      return (
+        <Box key={row.id}>
+          <Text>{selChar}</Text>
+          <Text bold={isSelected}>{row.label}</Text>
+          <Text dimColor>  {tag}</Text>
+          {isSelected && row.configured && (
+            <Text dimColor>{t().pressEToEdit}{t().pressDToDelete}</Text>
+          )}
+        </Box>
+      )
+    }
+
+    const isCurrent = row.kind === "model" && row.target.provider === currentProvider && row.target.model === currentModel
+
+    if (row.kind === "custom") {
+      return (
+        <Box key={row.id}>
+          <Text>{selChar}</Text>
+          <Text bold={isSelected}>{row.label}</Text>
+        </Box>
+      )
+    }
+
+    if (row.kind === "model") {
+      return (
+        <Box key={row.id} paddingLeft={2}>
+          <Text>{selChar}</Text>
+          <Text bold={isSelected}>{row.label}</Text>
+          {isCurrent && <Text dimColor>{t().current}</Text>}
+        </Box>
+      )
+    }
+
+    return null
+  }
+
+  const maskKey = (raw: string): string => {
+    if (raw.length <= 8) return "****"
+    const suffix = raw.slice(-4)
+    return t().apiKeyMasked(suffix)
+  }
 
   return (
-    // 主容器：纵向排列，圆角边框，padding 1，宽度 100%
     <Box flexDirection="column" paddingX={1} paddingY={1} borderStyle="round" width="100%">
       <Box marginBottom={1}>
         <Text bold>{t().modelSettings}</Text>
       </Box>
 
-      {step === 'provider' && (
+      {step === "main" && (
         <Box flexDirection="column">
-          {/* dimColor 表示辅助性提示文字，降低视觉权重 */}
-          <Text dimColor>{t().selectProvider}</Text>
-          {PROVIDER_ORDER.map((p, i) => {
-            const info = PROVIDERS[p];
-            if (!info) return null;
-            return (
-              <Box key={p}>
-                {/* ❯ 表示当前选中项；未选中时保留两个空格占位保持对齐 */}
-                <Text>{i === selIdx ? '❯ ' : '  '}</Text>
-                {/* bold 加粗当前选中项的标签，提供视觉焦点 */}
-                <Text bold={i === selIdx}>{info.label}</Text>
-                {p === currentProvider && <Text dimColor>{t().current}</Text>}
-              </Box>
-            );
-          })}
-        </Box>
-      )}
-
-      {step === 'key' && (
-        <Box flexDirection="column">
-          <Text dimColor>{t().enterApiKey(providerName)}</Text>
-          {/* inputBuf 显示当前输入内容，▊ 为光标指示符；无输入时不显示光标 */}
-          <Text>  {inputBuf}{inputBuf.length > 0 ? '▊' : ''}</Text>
+          {visibleRows.map((row, i) => renderRow(row, scrollStart + i))}
           <Text dimColor>{t().escToGoBack}</Text>
         </Box>
       )}
 
-      {step === 'custom' && (
+      {step === "key" && (
+        <Box flexDirection="column">
+          <Text dimColor>
+            {keyUpdateMode ? t().updateKey : t().enterApiKey(PROVIDERS[pendingProvider]?.label ?? pendingProvider)}
+          </Text>
+          <Text>  {maskKey(inputBuf)}{inputBuf.length > 0 ? "▊" : ""}</Text>
+          <Text dimColor>{t().escToGoBack}</Text>
+        </Box>
+      )}
+
+      {step === "custom" && (
         <Box flexDirection="column">
           <Text dimColor>Configure OpenAI Compatible Provider:</Text>
           <Box marginTop={1}>
             <Text bold={editField === 0}>❯ </Text>
             <Text dimColor>Base URL: </Text>
-            <Text>{editField === 0 ? `${inputBuf}${inputBuf.length > 0 ? '▊' : ''}` : customUrl}</Text>
+            <Text>{editField === 0 ? `${inputBuf}${inputBuf.length > 0 ? "▊" : ""}` : customUrl}</Text>
           </Box>
           <Box>
             <Text bold={editField === 1}>❯ </Text>
             <Text dimColor>Model:    </Text>
-            <Text>{editField === 1 ? `${inputBuf}${inputBuf.length > 0 ? '▊' : ''}` : customModel || '(type model name)'}</Text>
+            <Text>{editField === 1 ? `${inputBuf}${inputBuf.length > 0 ? "▊" : ""}` : customModel || "(type model name)"}</Text>
           </Box>
           <Box marginTop={1}>
             <Text dimColor>{t().escToGoBack}</Text>
@@ -289,21 +352,12 @@ export function ModelPicker({ currentProvider, currentModel, onSelect, onCancel 
         </Box>
       )}
 
-      {step === 'model' && (
+      {step === "delete-confirm" && (
         <Box flexDirection="column">
-          {/* dimColor 降低提示文字亮度，不干扰列表内容 */}
-          <Text dimColor>{t().selectModel(providerName)}</Text>
-          {models.map((m, i) => (
-            <Box key={m.model}>
-              <Text>{i === selIdx ? '❯ ' : '  '}</Text>
-              {/* bold 高亮当前选中的模型名称 */}
-              <Text bold={i === selIdx}>{m.label}</Text>
-              {m.model === currentModel && <Text dimColor>{t().current}</Text>}
-            </Box>
-          ))}
-          <Text dimColor>{t().escToGoBack}</Text>
+          <Text dimColor>{t().confirmDelete}</Text>
+          <Text>{t().pressYToConfirm}</Text>
         </Box>
       )}
     </Box>
-  );
+  )
 }

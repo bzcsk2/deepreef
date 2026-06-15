@@ -1,8 +1,10 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
-import { resolve, join } from "node:path"
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, renameSync, mkdtempSync } from "node:fs"
+import { resolve, join, dirname } from "node:path"
 import { LastConfigSchema, RoleConfigSchema } from "./schemas/config.js"
 import { DEEPSEEK_BASE_URL, DEEPSEEK_MODEL } from "./types.js"
 import type { ModelTarget } from "./model-target.js"
+
+export type ApiKeySource = 'env' | 'project-file' | 'default' | 'none'
 
 export interface DeepreefConfig {
   apiKey: string
@@ -37,6 +39,25 @@ export interface ProviderInfo {
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000
 export const MILLION_TOKEN_CONTEXT_WINDOW = 1_000_000
+
+/** Free model display → real provider/model mapping */
+export const FREE_MODEL_TARGETS: { label: string; provider: string; model: string }[] = [
+  { label: 'deepseek-v4-flash-free', provider: 'zen', model: 'deepseek-v4-flash-free' },
+  { label: 'mimo-v2.5-free', provider: 'zen', model: 'mimo-v2.5-free' },
+  { label: 'step-3.7-flash-free', provider: 'kilo', model: 'step-3.7-flash-free' },
+  { label: 'nemotron-3-super-120b-a12b-free', provider: 'kilo', model: 'nvidia/nemotron-3-super-120b-a12b:free' },
+  { label: 'laguna-xs.2-free', provider: 'kilo', model: 'poolside/laguna-xs.2:free' },
+]
+
+const PROVIDER_ID_REGEX = /^[a-z][a-z0-9-]+$/
+
+export function isValidProviderId(id: string): boolean {
+  return PROVIDER_ID_REGEX.test(id)
+}
+
+function safeProviderId(id: string): boolean {
+  return isValidProviderId(id) && id.length <= 32
+}
 
 export const PROVIDERS: Record<string, ProviderInfo> = {
   zen: {
@@ -82,6 +103,7 @@ export const PROVIDERS: Record<string, ProviderInfo> = {
     models: [
       { label: "Nemotron-3 Super 120B", model: "nvidia/nemotron-3-super-120b-a12b:free", contextWindow: 128_000 },
       { label: "Laguna XS 2", model: "poolside/laguna-xs.2:free", contextWindow: 128_000 },
+      { label: "step-3.7-flash-free", model: "step-3.7-flash-free", contextWindow: MILLION_TOKEN_CONTEXT_WINDOW },
     ],
   },
 
@@ -107,6 +129,66 @@ export const PROVIDERS: Record<string, ProviderInfo> = {
       { label: "Llama 3.1 Nemotron 70B", model: "nvidia/llama-3.1-nemotron-70b-instruct", contextWindow: 128_000 },
       { label: "Llama 3.3 Nemotron Super 49B", model: "nvidia/llama-3.3-nemotron-super-49b-v1", contextWindow: 128_000 },
       { label: "Llama 3.1 Nemotron Ultra 253B", model: "nvidia/llama-3.1-nemotron-ultra-253b-v1", contextWindow: 128_000 },
+    ],
+  },
+  qwen: {
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model: "qwen-plus",
+    requiresKey: true,
+    label: "Qwen",
+    contextWindow: 128_000,
+    models: [
+      { label: "Qwen-Plus", model: "qwen-plus", contextWindow: 128_000 },
+      { label: "Qwen-Max", model: "qwen-max", contextWindow: 128_000 },
+      { label: "Qwen-Turbo", model: "qwen-turbo", contextWindow: 1_000_000 },
+      { label: "Qwen3-235B-A22B", model: "qwen3-235b-a22b", contextWindow: 128_000 },
+      { label: "Qwen3-30B-A3B", model: "qwen3-30b-a3b", contextWindow: 128_000 },
+    ],
+  },
+  kimi: {
+    baseUrl: "https://api.moonshot.cn/v1",
+    model: "kimi-k2",
+    requiresKey: true,
+    label: "Kimi",
+    contextWindow: 128_000,
+    models: [
+      { label: "Kimi K2", model: "kimi-k2", contextWindow: 128_000 },
+      { label: "Kimi K2 Turbo", model: "kimi-k2-turbo", contextWindow: 128_000 },
+    ],
+  },
+  zai: {
+    baseUrl: "https://api.stepfun.com/v1",
+    model: "step-3.7-flash",
+    requiresKey: true,
+    label: "ZAI",
+    contextWindow: 128_000,
+    models: [
+      { label: "Step-3.7-Flash", model: "step-3.7-flash", contextWindow: 128_000 },
+      { label: "Step-3.7-Turbo", model: "step-3.7-turbo", contextWindow: 128_000 },
+    ],
+  },
+  stepfun: {
+    baseUrl: "https://api.stepfun.com/v1",
+    model: "step-3.7-flash",
+    requiresKey: true,
+    label: "Stepfun",
+    contextWindow: 128_000,
+    models: [
+      { label: "Step-3.7-Flash", model: "step-3.7-flash", contextWindow: 128_000 },
+      { label: "Step-3.7-Turbo", model: "step-3.7-turbo", contextWindow: 128_000 },
+    ],
+  },
+  openai: {
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o",
+    requiresKey: true,
+    label: "OpenAI",
+    contextWindow: 128_000,
+    models: [
+      { label: "GPT-4o", model: "gpt-4o", contextWindow: 128_000 },
+      { label: "GPT-4o-mini", model: "gpt-4o-mini", contextWindow: 128_000 },
+      { label: "o3", model: "o3", contextWindow: 200_000 },
+      { label: "o4-mini", model: "o4-mini", contextWindow: 200_000 },
     ],
   },
 }
@@ -222,33 +304,151 @@ export function loadRoleConfig(role: "worker" | "supervisor"): RoleConfig | null
   }
 }
 
-function loadApiKeyFromProjectFile(provider?: string): string | undefined {
+const PROJECT_API_KEY_FILE = "api-key"
+
+function parseProjectApiKeyFile(): Record<string, string> {
+  const result: Record<string, string> = {}
   try {
-    const p = resolve(process.cwd(), "api-key")
+    const p = resolve(process.cwd(), PROJECT_API_KEY_FILE)
     const raw = readFileSync(p, "utf-8")
+    if (!raw) return result
 
-    // Try provider-specific env var (e.g. DEEPSEEK_API_KEY, ZEN_API_KEY, MIMO_API_KEY)
-    const providers = provider ? [provider.toUpperCase().replace(/-/g, "_")] : ["DEEPSEEK", "ZEN", "MIMO", "KILO", "NVIDIA"]
-    for (const pv of providers) {
-      const envName = `${pv}_API_KEY`
+    // Match all PROVIDER_API_KEY="value" lines
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith("#")) continue
       const match =
-        raw.match(new RegExp(`^\\s*export\\s+${envName}\\s*=\\s*"([^"]+)"\\s*$`, "m")) ??
-        raw.match(new RegExp(`^\\s*export\\s+${envName}\\s*=\\s*'([^']+)'\\s*$`, "m")) ??
-        raw.match(new RegExp(`^\\s*${envName}\\s*=\\s*"([^"]+)"\\s*$`, "m")) ??
-        raw.match(new RegExp(`^\\s*${envName}\\s*=\\s*'([^']+)'\\s*$`, "m"))
-      const key = match?.[1]?.trim()
-      if (key) return key
+        trimmed.match(/^(?:export\s+)?([A-Z][A-Z0-9_]*)_API_KEY\s*=\s*"([^"]+)"\s*$/) ??
+        trimmed.match(/^(?:export\s+)?([A-Z][A-Z0-9_]*)_API_KEY\s*=\s*'([^']+)'\s*$/)
+      if (match) {
+        const providerKey = match[1].toLowerCase().replace(/_/g, "-")
+        result[providerKey] = match[2]
+      }
     }
+    return result
+  } catch {
+    return result
+  }
+}
 
-    const bareKey = raw.trim()
-    if (bareKey.startsWith("sk-") || bareKey.startsWith("ak-")) {
-      return bareKey
-    }
+function apiKeyFromFile(provider: string): string | undefined {
+  const all = parseProjectApiKeyFile()
+  return all[provider]
+}
 
+function bareKeyFromFile(): string | undefined {
+  try {
+    const p = resolve(process.cwd(), PROJECT_API_KEY_FILE)
+    const raw = readFileSync(p, "utf-8").trim()
+    if (raw.startsWith("sk-") || raw.startsWith("ak-")) return raw
     return undefined
   } catch {
     return undefined
   }
+}
+
+export function resolveApiKey(provider: string): { value: string; source: ApiKeySource } {
+  if (!safeProviderId(provider)) return { value: "", source: "none" }
+
+  const info = PROVIDERS[provider]
+  const envName = getApiKeyEnvVar(provider)
+  const envVal = process.env[envName]
+
+  // keyless providers always return empty
+  if (info?.keyless) return { value: "", source: "none" }
+
+  // 1. env var
+  if (envVal) return { value: envVal, source: "env" }
+
+  // 2. project file
+  const fileVal = apiKeyFromFile(provider)
+  if (fileVal) return { value: fileVal, source: "project-file" }
+
+  // 3. bare key fallback (old format, only for the first matching provider)
+  const bareVal = bareKeyFromFile()
+  if (bareVal) return { value: bareVal, source: "project-file" }
+
+  // 4. default
+  if (info?.defaultKey) return { value: info.defaultKey, source: "default" }
+
+  return { value: "", source: "none" }
+}
+
+export function listConfiguredApiKeys(): Record<string, ApiKeySource> {
+  const result: Record<string, ApiKeySource> = {}
+  const fileKeys = parseProjectApiKeyFile()
+
+  for (const id of Object.keys(PROVIDERS)) {
+    const info = PROVIDERS[id]
+    if (info?.keyless) continue
+    const envName = getApiKeyEnvVar(id)
+    if (process.env[envName]) {
+      result[id] = "env"
+    } else if (fileKeys[id]) {
+      result[id] = "project-file"
+    } else if (info?.defaultKey) {
+      result[id] = "default"
+    }
+  }
+
+  // Check bare key in project file
+  const bareVal = bareKeyFromFile()
+  if (bareVal && Object.keys(result).length === 0) {
+    // bare key only counts if no provider-specific keys found
+  }
+
+  return result
+}
+
+export function saveProjectApiKey(provider: string, value: string): void {
+  if (!safeProviderId(provider)) throw new Error(`Invalid provider ID: ${provider}`)
+  if (!value) throw new Error("API key must not be empty")
+
+  const filePath = resolve(process.cwd(), PROJECT_API_KEY_FILE)
+  const existing = parseProjectApiKeyFile()
+  existing[provider] = value
+
+  // Build new content preserving existing keys
+  const lines: string[] = []
+  for (const [pv, key] of Object.entries(existing)) {
+    const envName = `${pv.toUpperCase().replace(/-/g, "_")}_API_KEY`
+    lines.push(`${envName}="${key}"`)
+  }
+  const content = lines.join("\n") + "\n"
+
+  // Atomic write: temp file + rename
+  const tmpDir = dirname(filePath)
+  const tmpFile = join(tmpDir, `.api-key.tmp.${process.pid}`)
+  writeFileSync(tmpFile, content, "utf-8")
+  try { chmodSync(tmpFile, 0o600) } catch {}
+  renameSync(tmpFile, filePath)
+}
+
+export function deleteProjectApiKey(provider: string): void {
+  if (!safeProviderId(provider)) return
+
+  const filePath = resolve(process.cwd(), PROJECT_API_KEY_FILE)
+  const existing = parseProjectApiKeyFile()
+  delete existing[provider]
+
+  if (Object.keys(existing).length === 0) {
+    // If no keys left, remove the file entirely
+    try { writeFileSync(filePath, "", "utf-8") } catch {}
+    return
+  }
+
+  const lines: string[] = []
+  for (const [pv, key] of Object.entries(existing)) {
+    const envName = `${pv.toUpperCase().replace(/-/g, "_")}_API_KEY`
+    lines.push(`${envName}="${key}"`)
+  }
+  const content = lines.join("\n") + "\n"
+
+  const tmpDir = dirname(filePath)
+  const tmpFile = join(tmpDir, `.api-key.tmp.${process.pid}`)
+  writeFileSync(tmpFile, content, "utf-8")
+  try { chmodSync(tmpFile, 0o600) } catch {}
+  renameSync(tmpFile, filePath)
 }
 
 export function loadConfig(): DeepreefConfig {
@@ -272,17 +472,7 @@ export function loadConfig(): DeepreefConfig {
     : normalizeModelForProvider(providerCfg, rawModel)
   const contextWindow = getModelContextWindow(provider, model)
 
-  // Keyless providers (Kilo/LLM7/Free Auto/OpenAI Compatible) always use empty API key
-  let apiKey = ""
-  if (providerCfg?.keyless) {
-    apiKey = ""
-  } else {
-    const apiKeyEnvVar = getApiKeyEnvVar(provider)
-    apiKey = process.env[apiKeyEnvVar] ?? providerCfg?.defaultKey ?? ""
-    if (!apiKey) {
-      apiKey = loadApiKeyFromProjectFile(provider) ?? ""
-    }
-  }
+  const { value: apiKey } = resolveApiKey(provider)
 
   return {
     apiKey,

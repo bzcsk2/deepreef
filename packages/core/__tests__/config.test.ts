@@ -222,9 +222,10 @@ describe("saveLastConfig / loadConfig 持久化", () => {
       expect(kilo.baseUrl).toBe("https://api.kilo.ai/api/gateway/v1")
       expect(kilo.requiresKey).toBe(false)
       expect(kilo.keyless).toBe(true)
-      expect(kilo.models).toHaveLength(2)
+      expect(kilo.models).toHaveLength(3)
       expect(kilo.models[0]!.model).toBe("nvidia/nemotron-3-super-120b-a12b:free")
       expect(kilo.models[1]!.model).toBe("poolside/laguna-xs.2:free")
+      expect(kilo.models[2]!.model).toBe("step-3.7-flash-free")
     })
   })
 
