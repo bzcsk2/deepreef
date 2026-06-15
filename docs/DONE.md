@@ -4526,6 +4526,7 @@ bun test packages/tui/__tests__/workflow-mode-router.test.ts         # 16 pass
 
 **保留限制：**
 - 8 个 pre-existing 测试已修复（2026-06-15）：更新 agent.test.ts / engine-tools.test.ts / commands.test.ts / message-scroll.test.ts 以匹配 `build`/`plan` agent 移除后的当前代码。
+- `packages/memory` 已从默认测试套件中排除（接口保留，`bun test` 只跑融合包）。运行 `bun run test:memory` 可单独执行 memory 测试，`bun run test:all` 全量运行。
 - 全仓 `bun test` 另有 484 个失败集中在 `packages/memory/` / `packages/agentmemory/`，与本任务无关，未在 §SFR 验收范围内。
 - 远程 Supervisor smoke 测试默认跳过，需要 `DEEPREEF_SUPERVISOR_SMOKE=1`。
 

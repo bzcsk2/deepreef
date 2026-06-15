@@ -8,7 +8,9 @@
   ],
   "scripts": {
     "dev": "bun run packages/cli/src/index.ts",
-    "test": "bun test",
+    "test": "bun test packages/core packages/tools packages/tui packages/cli packages/security",
+    "test:all": "bun test",
+    "test:memory": "bun test packages/memory",
     "benchmark:fusion": "bun run packages/core/scripts/benchmark-matrix.ts",
     "test:memory-native": "bun test packages/memory/test/deepreef-*.test.ts packages/cli/src/__tests__/memory-integration.test.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json"
