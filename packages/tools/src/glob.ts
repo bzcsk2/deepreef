@@ -2,6 +2,7 @@ import { isAbsolute, relative, resolve } from "node:path"
 import { realpathSync } from "node:fs"
 import type { AgentTool } from "@deepreef/core"
 import { safeStringify } from "./safe-stringify.js"
+import fg from "fast-glob"
 
 const MAX_RESULTS = 100
 const DEFAULT_PATH = process.cwd()
@@ -40,19 +41,18 @@ export function createGlobTool(): AgentTool {
 
       const t0 = Date.now()
       try {
-        const { Glob } = await import("bun")
-        const glob = new Glob(pattern)
-        const results: string[] = []
-        for await (const entry of glob.scan({ cwd: searchPath, absolute: false })) {
-          results.push(entry)
-          if (results.length >= MAX_RESULTS) break
-        }
+        const results = await fg(pattern, {
+          cwd: searchPath,
+          absolute: false,
+          dot: true,
+          suppressErrors: true,
+        })
         const elapsed = Date.now() - t0
         return {
           content: safeStringify({
-            numFiles: results.length,
-            filenames: results,
-            truncated: results.length >= MAX_RESULTS,
+            numFiles: Math.min(results.length, MAX_RESULTS),
+            filenames: results.slice(0, MAX_RESULTS),
+            truncated: results.length > MAX_RESULTS,
             durationMs: elapsed,
           }),
           isError: false,

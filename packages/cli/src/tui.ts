@@ -21,8 +21,8 @@ function printHelp(): void {
   output.write(`deepreef
 
 Usage:
-  bun run packages/cli/src/index.ts
-  echo "你好" | bun run packages/cli/src/index.ts
+  deepreef
+  echo "你好" | deepreef
 
 Commands:
   /exit, /bye    exit the interactive session

@@ -1,13 +1,28 @@
 {
-  "name": "deepreef",
+  "name": "@deepreef/cli",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "bin": {
+    "deepreef": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "dev": "bun run packages/cli/src/index.ts",
+    "build": "bun build ./packages/cli/src/index.ts --outdir ./dist --target node --format esm --external @anthropic-ai/sdk --external @anthropic-ai/claude-agent-sdk",
+    "prepublishOnly": "bun run build",
     "test": "bun test packages/core packages/tools packages/tui packages/cli packages/security",
     "test:all": "bun test",
     "test:memory": "bun test packages/memory",
@@ -37,6 +52,7 @@
     "cli-boxes": "^4.0.1",
     "code-excerpt": "^4.0.0",
     "emoji-regex": "^10.6.0",
+    "fast-glob": "^3.3.3",
     "figlet": "^1.11.0",
     "figures": "^6.1.0",
     "get-east-asian-width": "^1.6.0",

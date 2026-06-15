@@ -45,7 +45,10 @@ interface WelcomeScreenProps {
  * 每行使用不同的渐变色，从蓝色过渡到紫色。
  */
 // 静态缓存：figlet 渲染结果在模块加载时计算一次，避免每次 WelcomeScreen 渲染时同步阻塞
-const DEEPREEF_ASCII = figlet.textSync('deepreef', { font: 'ANSI Regular' }).trim().split('\n');
+let DEEPREEF_ASCII: string[] = []
+try {
+  DEEPREEF_ASCII = figlet.textSync('deepreef', { font: 'ANSI Regular' }).trim().split('\n')
+} catch {} // font file may not be available in bundled build
 const DEEPREEF_COLORS: any[] = ['#4FA3F7', '#5C94F9', '#6985FA', '#7676FC', '#866FFB', '#9868F9', '#B064F6', '#C15FF3', '#CA5FF2'];
 
 function Title(): React.ReactElement {
