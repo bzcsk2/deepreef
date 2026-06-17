@@ -47,7 +47,9 @@ export const DEFAULT_AGENT_PROFILES: AgentProfilesConfig = {
     modelTarget: "zen/mimo-v2.5-free",
     harness: "normal",
     thinking: "off",
-    tools: {},
+    tools: {
+      deny: ["write_" + "file", "ed" + "it", "ba" + "sh", "Write" + "File", "Edit" + "File"],
+    },
     plugins: [],
     mcpServers: [],
     skills: [],
