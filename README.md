@@ -1,471 +1,329 @@
-# deepreef
+# DeepReef
 
 <p align="center">
-  <a href="./README.md">中文</a> |
-  <strong>English</strong>
+  <strong>English</strong> |
+  <a href="./README.zh.md">中文</a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/runtime-Bun-FF5E5B?style=flat-square" />
-  <img src="https://img.shields.io/badge/model-DeepSeek_V4-4B8BF5?style=flat-square" />
-  <img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" />
-  <img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" />
-  <img src="https://img.shields.io/badge/test-43_pass_0_fail-green?style=flat-square" />
+  <img src="https://img.shields.io/badge/runtime-Bun_1.3+-orange?style=flat-square" alt="Bun" />
+  <img src="https://img.shields.io/badge/language-TypeScript-blue?style=flat-square" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/status-pre--1.0-yellow?style=flat-square" alt="Status" />
+  <img src="https://img.shields.io/badge/TUI-Ink%2FReact-blue?style=flat-square" alt="TUI" />
+  <img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" alt="License" />
 </p>
 
----
+**DeepReef is a terminal-native AI loop agent for making cheap, free, and local models complete real engineering work through supervised execution loops.**
 
-**Spending other people's money is easy. Spending your own — every token counts.**
+Most coding agents assume a strong frontier model is always available. DeepReef takes a different position: use stronger models for planning, supervision, and recovery; use cheaper or local models for the bulk of the execution; keep the loop observable, resumable, and governed by explicit safety boundaries.
 
-deepreef isn't another LLM wrapper. It's a terminal-native coding agent that **exploits DeepSeek's pricing model to its absolute limit**. We redesigned the entire context engine around one fact: DeepSeek prefix-cache hits cost ¥1/M tokens, misses cost ¥4/M. That 4x gap is why deepreef exists.
-
----
-
-## Why Your Token Bill Matters
-
-A regular coding agent burns through ¥10-50 a day. Not because you're using too many tokens — but because you're **paying cache-miss prices for the same system prompt, every single call**.
-
-Here's what deepreef does:
-
-```
-Every API call:
-  ┌─────────────────────────────┐
-  │ System Prompt (never changes) │  ← 100% cache hit → ¥0.5/M
-  │ Tool Definitions (rarely change)│  ← 100% cache hit → ¥0.5/M
-  │ Conversation History (append-only)│ ← partial miss → ¥2~4/M
-  │ Current Tool Results (per-turn) │  ← unavoidable miss
-  └─────────────────────────────┘
-
-Regular agent: change one tool definition → entire prefix shifts → full miss pricing
-deepreef: SHA-256 fingerprint detection → only actually-changed segments trigger a miss
-```
-
-This isn't a 10-20% micro-optimization. Over a 50-turn session, deepreef can **cut API costs by 60-80%** compared to a naive agent.
+> The goal is not to replace good models. The goal is to make low-cost models useful enough to keep working.
 
 ---
 
-## Know the Price Before You Pay
+## What DeepReef Is
 
-Every time you submit input, deepreef analyzes task complexity and estimates the cost:
+DeepReef is a TypeScript/Bun CLI and TUI agent runtime with:
 
-```text
-╭─ Cost Estimate ──────────────────────────╮
-│  chat-fast        ~¥0.008 ~ ¥0.015       │  ← Q&A, file lookup
-│  chat-full        ~¥0.02  ~ ¥0.06        │  ← coding, debugging
-│  reasoner-budget  ~¥0.08  ~ ¥0.35        │  ← medium refactors
-│  reasoner         ~¥0.30  ~ ¥1.20        │  ← architecture changes
-├───────────────────────────────────────────┤
-│ Auto-recommendation: chat-full            │
-│ 3s countdown · arrow keys to switch · ↵   │
-╰───────────────────────────────────────────╯
-```
+- a cache-aware agent loop optimized for low-cost model usage
+- a Supervisor / Worker workflow for long-running engineering tasks
+- adjustable harness levels for weak, local, or unreliable models
+- a terminal UI built with Ink and React
+- 30+ built-in tools for file operations, search, editing, shell, web, tasks, workflow, MCP, memory, and notebooks
+- Skills, MCP, plugin/content-pack, and AgentMemory integration
+- deny-first permission handling for shell commands and file modifications
+- session persistence and recovery for interrupted work
 
-**Transparent pricing** — you see what this turn will cost before committing. For indie devs and small teams, saving a coffee's worth of API fees every month adds up.
+DeepReef is currently **pre-1.0**. Core CLI, tools, security, memory, plugin, skills, MCP, and workflow foundations are implemented, but public APIs and configuration formats may still change.
 
 ---
 
-## Auto Mode + Budget Cap
+## Core Idea: Supervisor + Worker Loop
 
-Don't want to choose every time? Let the auto-router decide:
-
-```text
-Auto Tier:
-  Simple Q&A / single-file search  → deepseek-chat (flash)   cheapest
-  Routine coding / debugging       → deepseek-chat (full)    balanced
-  Multi-module refactor / arch     → deepseek-reasoner       worth it
-  Agentic multi-turn detected      → auto-apply 2-3x chain multiplier
-```
-
-Set a monthly budget cap — deepreef auto-downgrades to flash when you're approaching the limit. **Let code manage your spend, not your willpower.**
-
----
-
-## Skills · MCP · Subagents — Agent Platform, Not Just Agent
-
-### Skills System
-
-Skills are reusable domain knowledge packages. Each Skill is a standalone instruction file loaded on demand — database optimization tasks auto-load `postgres-patterns`, frontend work auto-loads `frontend-design`. No more copy-pasting long system prompts — deepreef remembers and activates the right knowledge at the right time.
+DeepReef avoids the fragile pattern of one agent wandering through an unbounded loop. The intended workflow is a fixed two-role execution structure:
 
 ```text
-User: "Optimize this SQL query for me"
-  → Agent auto-matches postgres-patterns skill
-  → Injects PostgreSQL indexing & query plan knowledge
-  → Gets to work
-
-User: "Design a login page"
-  → Auto-matches frontend-design skill
-  → Injects UI/UX best practices
-  → Produces design-compliant code
+Supervisor plans
+  -> Worker executes
+  -> Worker reports
+  -> Supervisor reviews evidence
+  -> continue, correct, escalate, or ask the human
 ```
 
-### MCP (Model Context Protocol)
+### Worker
 
-Connect external tools and data sources via MCP. Supabase databases, Serena code analysis, Playwright browser automation — all registered as MCP Servers. The Agent auto-discovers and invokes them.
+The Worker is the execution agent. It can use a local model, a free model, or a low-cost API model. In normal chat it behaves like a regular coding agent. In workflow mode, it follows Supervisor instructions and reports progress through structured checkpoints.
 
-```text
-deepreef                    MCP Servers
-   │                            │
-   ├── mcp:supabase ────────────┤  Database queries
-   ├── mcp:serena ──────────────┤  Code symbol analysis
-   ├── mcp:playwright ──────────┤  Browser automation testing
-   ├── mcp:context7 ────────────┤  Real-time documentation
-   └── mcp:your-custom-server ──┤  Arbitrary extensions
-```
+### Supervisor
 
-### Subagents
-
-Complex tasks can be delegated to isolated sub-agents. The main Agent handles planning and result synthesis. Background sub-agents can read, write, search, and analyze, but cannot bypass interactive confirmation to run `exec` tools.
-
-```text
-User: "Audit this PR for security and generate tests"
-   │
-   ▼
-  Main Agent (plan + orchestrate)
-   │
-   ├── Subagent 1: security-reviewer  → vulnerability scanning
-   ├── Subagent 2: tdd-guide          → test case generation
-   └── Subagent 3: code-reviewer      → code quality audit
-   │
-   ▼
-  Combined result → complete audit report + test suite
-```
-
-> **Current status**: Skills, dynamic MCP tool discovery and invocation, and isolated sub-agents are integrated. There are 34 statically registered Agent Tools. LSP requires a configured language server in `.deepreef/lsp.json`; browser interaction requires Playwright.
-
-Minimal LSP configuration:
-
-```json
-{
-  "languages": {
-    "typescript": {
-      "command": "typescript-language-server",
-      "args": ["--stdio"]
-    }
-  }
-}
-```
-
----
-
-## Architecture
-
-### Kernel-Shell Separation
-
-Engine and UI are fully decoupled — `CoreEngine` pushes events to consumers via `AsyncGenerator<LoopEvent>`. The shell simply consumes the event stream:
-
-- **Engine iterates independently** — prefix-cache strategy, token budget, and repair pipeline improvements don't touch the UI
-- **Shell extends independently** — CLI / TUI / Web / IDE plugins all implement the same `LoopEvent` consumer
-- **Test without UI** — full engine behavior is verifiable by `for await (const event of engine.submit(...))`
-
-```text
-CLI (readline)           TUI (Ink/React)          IDE Plugin
-      │                        │                       │
-      └────────────────────────┼───────────────────────┘
-                               │
-                    AsyncGenerator<LoopEvent>
-                               │
-                      ┌────────┴────────┐
-                      │   CoreEngine    │
-                      │   (engine.ts)   │
-                      └────────┬────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          │                    │                    │
-   DeepSeekClient      ContextManager      StreamingToolExecutor
-   (SSE streaming)     (3-zone context)    (parallel/sequential dispatch)
-```
-
-### Three-Zone Context
-
-This is deepreef's cost-saving core. DeepSeek's prefix-cache matches on **byte prefix of the request messages array**: same prefix → cache hit pricing (cheap); different prefix → cache miss pricing (expensive).
-
-```
-Messages array sent to API:
-┌──────────────────────────────────────┐
-│ [0] system prompt            ▲       │
-│     (ImmutablePrefix)        │ never  │  ← 100% cache hit
-│ [1] tool definitions         ▼       │
-├──────────────────────────────────────┤
-│ [2] user: "Check file A for me"      │
-│ [3] assistant: "File A contains..."  │  ← AppendOnlyLog
-│ [4] tool: read_file result           │     append-only, never mutate
-│ [5] assistant: "I suggest..."        │     prefix continuity preserved
-├──────────────────────────────────────┤
-│ [6] ...current turn temp results...  │  ← VolatileScratch
-│                     cleared per turn │     never breaks prefix
-└──────────────────────────────────────┘
-```
-
-**Key design decisions**:
-
-- `ImmutablePrefix` uses SHA-256 fingerprint (system prompt + toolSpecs + fewShots) — tool schema changes are auto-detected with cache miss warnings
-- `AppendOnlyLog` only calls `push()`, never `splice()` or `shift()` — mutating history shifts the entire prefix
-- `VolatileScratch` cleared each turn via `startTurn()` — transient state never affects the next turn's prefix match
-
-### Streaming Tool Execution
-
-Tool dispatch starts before the model finishes output. Current strategy favors stability — tools execute after the full tool call is received. Next upgrade is **eager dispatch**:
-
-```text
-Model outputs: { "name": "read_file", "arguments": { "path":...
-
-   │                            │
-   │  arguments fully parseable │  ← immediately create Promise, execute concurrently
-   │  (incremental JSON verify) │     without waiting for rest of output
-   │                            │
-   ▼                            ▼
-   read_file("a.ts")     read_file("b.ts")    ← shared tools run in parallel
-        │                      │
-        └──────────┬───────────┘
-                   ▼
-              merge results, continue
-```
-
-### Multi-Strategy Editing
-
-`edit` tool strategy chain: **Hash-Anchored → 4-pass Fuzzy → Feedback**.
-
-```
-┌─ Hash-Anchored ──────────────────────┐
-│ Async streaming read → chunk match  │
-│ → write to temp file → atomic       │
-│ rename → preserve permissions       │
-└──────────┬───────────────────────────┘
-           │ old_string exact match failed
-           ▼
-┌─ Fuzzy Fallback ─────────────────────┐
-│ Pass 1: exact                        │
-│ Pass 2: trimmed_lines (strip trailing│
-│         whitespace per line)         │
-│ Pass 3: trimmed_full (strip all ws)  │
-│ Pass 4: flexible_whitespace (regex)  │
-│ [Pass 5-9 planned]                   │
-└──────────┬───────────────────────────┘
-           │ all passes exhausted
-           ▼
-        return [Error] old_string not found
-        → model receives feedback → retries
-```
-
-### Stale-Read Protection
-
-Agents often span multiple API turns between "read file → think → edit". During that time, the file may be modified by the user or git operations.
-
-```
-read_file("a.ts")  →  recordRead(mtime=10:30:01, size=4096)
-                         │
-         ... model thinks + multiple tool rounds ...
-                         │
-       edit("a.ts", ...) →  checkStale("a.ts")
-                         │
-                    ┌────┴────┐
-                    │ mtime changed? │
-                    │ size changed?  │
-                    └────┬────┘
-                    yes → reject edit → require re-read
-                    no  → execute edit
-```
-
-### Session Persistence
-
-Every turn's full conversation is written to `.deepreef/sessions/<id>.jsonl` via async batch writes that never block the main loop.
-
-```jsonl
-{"ts":1717000000,"type":"event","payload":{"role":"reasoning_delta","content":"..."}}
-{"ts":1710000001,"type":"event","payload":{"role":"assistant_delta","content":"..."}}
-{"ts":1710000002,"type":"messages","payload":[...]}
-{"ts":1710000003,"type":"stats","payload":{"promptTokens":120,...}}
-```
+The Supervisor uses a stronger model. It is responsible for planning, reviewing Worker reports, reading immutable evidence bundles, detecting failure loops, and producing the next structured instruction. When the workflow cannot safely continue, the Supervisor stops and asks the user.
 
 ---
 
 ## Quick Start
 
+### Install the CLI
+
 ```bash
-# Prerequisite: Bun >= 1.3
-git clone https://github.com/bzcsk2/deepreef.git
-cd deepreef
+npm install -g @deepreef/cli
+```
+
+You can also use Bun:
+
+```bash
+bun install -g @deepreef/cli
+```
+
+### Start inside a project
+
+```bash
+cd your-project
+deepreef
+```
+
+Inside DeepReef, run:
+
+```text
+/help
+/model
+/workflow
+```
+
+`/help` is the main usage entry point. Ask it for command details, model setup, workflow usage, harness levels, or troubleshooting.
+
+### Develop from source
+
+```bash
+git clone https://github.com/bzcsk2/DeepReef.git
+cd DeepReef
 bun install
-
-# Set API Key (choose one)
-export DEEPSEEK_API_KEY="sk-your-key"
-# Or create an api-key file in project root (git-ignored)
-
-# Run
 bun run dev
 ```
 
-```bash
-# Pipe input
-echo "Refactor src/utils.ts for me" | bun run dev
+---
 
-# Help
-bun run dev --help
-```
+## Common Commands
 
-Type `/exit` to quit, `/help` for commands.
+| Command | Purpose |
+| --- | --- |
+| `/model` | Switch chat target without losing state; configure providers, API keys, and local models. |
+| `/workflow` | Start the Supervisor / Worker workflow. |
+| `/sessions` | List and restore previous sessions after exit or crash. |
+| `/skill` | Browse and activate built-in engineering skills. |
+| `/status` | Inspect runtime, model, provider, tool, and session state. |
+| `/context` | Adjust context strategy. |
+| `/thinking` | Adjust reasoning intensity. |
+| `/harness` | Adjust execution constraints for weak or local models. |
+| `/help` | Show command help and usage guidance. |
 
 ---
 
-## Tools
+## Why DeepReef Exists
 
-| Tool | Type | Description |
-|------|------|-------------|
-| `read_file` | shared | Read files with line slicing, size limits, sensitive file blocking |
-| `write_file` | exclusive | Create or overwrite files |
-| `edit` | exclusive | Text block replacement (hash-anchored + 4-pass fuzzy fallback) |
-| `bash` | exclusive | Shell commands — auto-blocks `rm -rf /`, `sudo`, etc. |
-| `list_dir` | shared | Directory listing |
-| `grep` | shared | Regex code search |
-| `todowrite` | shared | Structured task tracking |
+### Low-cost model economics
 
-Concurrency model: `shared` tools run in parallel; `exclusive` tools run sequentially. Reading files never blocks writing them.
+Most AI coding tools rely on expensive models to compensate for weak orchestration. DeepReef focuses on orchestration first:
+
+- put expensive intelligence where it matters: planning, review, recovery, verification
+- let cheap/free/local models do repeatable implementation work
+- keep the loop recoverable when the Worker fails
+- reduce wasted tokens with cache-aware context management and tool-call repair
+
+### Local and weak-model reliability
+
+DeepReef treats model weakness as a runtime condition, not a fatal limitation. The harness system lets the user choose stricter execution rails for weaker models:
+
+- smaller steps
+- stronger verification gates
+- more frequent reports
+- bounded retries
+- Supervisor escalation on repeated failure
+
+### Terminal-native engineering
+
+DeepReef is built for developers working in repositories, not for generic chatbot sessions. It emphasizes:
+
+- file-aware edits
+- shell execution with permission checks
+- resumable sessions
+- TUI observability
+- project-local configuration
+- fast model/provider switching
 
 ---
 
-## Project Structure
+## Architecture
+
+DeepReef uses a kernel/shell separation:
 
 ```text
-deepreef/packages/
-├── core/     # Kernel: reasoning engine
-│   ├── engine.ts              # Main loop (AsyncGenerator)
-│   ├── client.ts              # DeepSeek SSE client
-│   ├── streaming-executor.ts  # Streaming tool executor
-│   ├── session.ts             # JSONL async session persistence
-│   └── context/               # Three-zone context management
-├── tools/    # Tool layer (7 tools)
-├── cli/      # readline interactive entry
-├── shell/    # State management & event system (planned)
-├── tui/      # Ink/React TUI (planned)
-└── security/ # Permission engine (planned)
+packages/core      -> agent loop, API adaptation, context, cache, retry, workflow primitives
+packages/tui       -> Ink/React terminal UI, input, status, model picker, workflow display
+packages/tools     -> file, shell, search, edit, web, MCP, workflow, task, notebook tools
+packages/plugin    -> plugin/content-pack runtime, hooks, schema validation
+packages/memory    -> AgentMemory integration and memory tools
+packages/security  -> deny-first PermissionEngine, HookManager, FileSnapshot
+packages/cli       -> command-line entry point
+```
+
+The engine emits events through an async stream, so the CLI, TUI, tests, and future IDE/web shells can consume the same runtime without coupling UI rendering to agent execution.
+
+```text
+CLI / TUI / future IDE shell
+             │
+             ▼
+     AsyncGenerator<LoopEvent>
+             │
+             ▼
+        CoreEngine
+             │
+   ┌─────────┼─────────┐
+   │         │         │
+ Model   Context    Tools
+ Client  Manager   Executor
 ```
 
 ---
 
-## Development Progress
+## Built-in Capabilities
 
-| Phase | Content | Status |
-|-------|---------|--------|
-| 0 | Scaffolding & monorepo | ✅ |
-| 1 | Core engine (SSE, context, streaming executor) | ✅ |
-| 2 | **Intelligent tier system & cost estimation** | ⬜ |
-| 3 | Shell enhancement (state, events) | ⬜ |
-| 4 | Tool completion (9-pass fuzzy, session recovery) | 🔄 |
-| 5 | Security layer (permission engine, git snapshots) | ⬜ |
+### Tools
 
-More: [`TODO.md`](./TODO.md) · [`DONE.md`](./DONE.md)
+DeepReef includes tools for:
+
+- reading, writing, editing, and listing files
+- grep and project search
+- shell execution with policy checks
+- TODO/task tracking
+- web access
+- MCP tool discovery and invocation
+- workflow control
+- notebook-style operations
+- memory operations
+
+### Editing safety
+
+DeepReef uses layered edit safeguards:
+
+- hash-anchored editing
+- fuzzy fallback matching
+- stale-read protection
+- file snapshots for rollback
+- dangerous command blocking
+- SSRF-aware web request handling
+
+### Skills and MCP
+
+Skills are reusable domain instruction packages. MCP support lets DeepReef connect to external tools and data sources through JSON-RPC 2.0 / stdio MCP servers.
+
+### AgentMemory
+
+DeepReef includes memory integration for project and agent continuity. Memory behavior should be treated as configurable runtime state and reviewed before using DeepReef in sensitive repositories.
+
+---
+
+## Model Providers
+
+DeepReef is designed around multiple model classes:
+
+| Class | Intended role |
+| --- | --- |
+| Free gateway models | Low-cost Worker execution, exploration, simple implementation. |
+| Local OpenAI-compatible models | Private or continuous Worker execution. |
+| API models with user keys | Supervisor, recovery, review, or higher-quality execution. |
+| Custom OpenAI-compatible endpoints | vLLM, Ollama, llama.cpp, local gateways, or internal routers. |
+
+Provider configuration is available through `/model`. Local models are routed through OpenAI-compatible configuration.
+
+DeepReef does not require one fixed provider. The runtime state is effectively:
+
+```ts
+{
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+}
+```
+
+---
+
+## Safety Model
+
+DeepReef is an agent that can read files, edit files, run commands, and call tools. Treat it as a powerful local development assistant, not as a sandboxed security boundary.
+
+Key safeguards:
+
+- deny-first permission engine
+- explicit authorization for shell and write operations
+- dangerous command blocking
+- file snapshots for rollback
+- stale-read checks before edits
+- isolated sub-agent permissions
+- API key files ignored by Git
+
+Do not run DeepReef in a repository where you are not willing to review agent-generated changes.
 
 ---
 
 ## Development
 
 ```bash
-bun test           # 43 pass / 0 fail
-bun run typecheck  # TypeScript type check
+bun install
+bun run typecheck
+bun test
+bun run build
+npm pack --dry-run
 ```
+
+The package is published as `@deepreef/cli` and exposes the `deepreef` binary.
 
 ---
 
-## Docs
+## Documentation
 
-| Doc | Content |
-|-----|---------|
-| [Design](./Deepreef项目设计文档.md) | Architecture, context model, strategy system |
-| [Implementation Plan](./Deepreef实施计划.md) | Phase-by-phase steps & acceptance criteria |
-| [TODO](./TODO.md) | Current tasks & priorities |
-| [DONE](./DONE.md) | Completed work & known limitations |
-| [FindBug](./FindBug.md) | Agent-specific bug patterns & review guide |
-| [ADVICE](./ADVICE.md) | Full audit findings & fix log |
+Current primary docs:
+
+- [Chinese README](./README.zh.md)
+- [Roadmap](./ROADMAP.md)
+- [Changelog](./CHANGELOG.md)
+- [Contributing](./CONTRIBUTING.md)
+- [Security Policy](./SECURITY.md)
+
+Additional design and implementation notes live under [`docs/`](./docs). Some files in `docs/` are development notes rather than polished user documentation.
+
+---
+
+## Roadmap
+
+See [ROADMAP.md](./ROADMAP.md).
+
+Near-term focus:
+
+- harden npm installation and package smoke tests
+- stabilize Supervisor / Worker workflow behavior
+- document provider configuration and harness levels
+- improve Windows terminal compatibility
+- add reliability benchmarks for weak/local models
 
 ---
 
 ## Contributing
 
-Issues and PRs welcome. Fork → Feature Branch → Commit → PR.
+Issues and pull requests are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md), then check open issues and roadmap items.
+
+DeepReef is especially interested in contributions around:
+
+- local model presets
+- weak-model workflow reliability
+- terminal UI polish
+- provider adapters
+- MCP examples
+- documentation and examples
+- safety hardening
 
 ---
-
-## Free Providers
-
-deepreef supports these free providers (no API key required):
-
-| Provider | Description | Rate Limit |
-|---|---|---|
-| **Kilo (Free)** | Anonymous free tier via `api.kilo.ai`, Nemotron-3 Super 120B | ~200 req/hr/IP |
-| **LLM7 (Free)** | Anonymous free aggregator, offers Qwen3 235B, Codestral, Mistral Small | ~100 req/hr |
-| **Free Auto** | Smart routing across verified free models with serial failover on rate limits | Upstream-dependent |
-
-Use `/model` command or select from the terminal. Anonymous free tier prompts/outputs may be logged by upstream providers — do not send sensitive information.
-
-## Plugin System
-
-### Configuration
-
-Create `.deepreef/plugins.json` in your project root:
-
-```json
-[
-  "./path/to/my-plugin.ts"
-]
-```
-
-### Plugin Format
-
-Plugins must export a `default` object with `id` and `server`:
-
-```typescript
-export default {
-  id: "my-plugin",
-  server: () => ({
-    myTool: async (args: { input: string }) => {
-      return `Result: ${args.input}`
-    },
-  }),
-}
-```
-
-### Zod Schema Support
-
-Use `definePluginTool` with Zod 4 schemas for typed, validated tool parameters:
-
-```typescript
-import { definePluginTool } from "@deepreef/plugin"
-import { z } from "zod"
-
-export default {
-  id: "hello",
-  server: () => ({
-    greet: definePluginTool({
-      description: "Greet a user",
-      inputSchema: z.object({
-        name: z.string().min(1).describe("Name to greet"),
-        excited: z.boolean().default(false),
-      }).strict(),
-      async execute(args) {
-        return args.excited ? `Hello ${args.name}!` : `Hello ${args.name}`
-      },
-    }),
-  }),
-}
-```
-
-Benefits:
-- **Auto-generated JSON Schema** — `z.toJSONSchema()` converts Zod schemas to Draft-07 JSON Schema for LLMs
-- **Pre-execution validation** — model-produced args are validated via `~standard.validate()`, injecting defaults and applying transforms
-- **Type-safe** — `args` is inferred from the Zod schema output type
-- **Backward compatible** — plain function plugins continue to work unchanged
 
 ## License
 
-MIT · [`LICENSE`](./LICENSE)
-
----
-
-## Acknowledgments
-
-Design inspired by:
-
-- [Reasonix](https://github.com/bzcsk2/reasonix-core) — Cache-first engine
-- [oh-my-pi](https://github.com/earendil-works/pi-mono) — Agent state management
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Streaming tool execution
-- [OpenCode](https://github.com/opencode-ai/opencode) — Fuzzy Edit & Stale-read
+MIT License. See [LICENSE](./LICENSE).
