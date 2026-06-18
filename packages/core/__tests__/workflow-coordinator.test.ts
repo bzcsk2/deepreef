@@ -1052,4 +1052,34 @@ describe("WorkflowCoordinator", () => {
       expect(coordinator.getState()?.currentPhase).toBe("completed")
     })
   })
+
+  it("passes the correct workflowPhase to each submit call in the main loop path", async () => {
+    const phases: Array<string | undefined> = []
+    const runtime = {
+      getSupervisor: () => ({
+        submit: async function* (_input: string, _mode?: string, phase?: string) {
+          phases.push(phase)
+          yield { role: "assistant_final", content: "plan" }
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: "plan" }] }),
+      }),
+      getWorker: () => ({
+        submit: async function* (_input: string, _mode?: string, phase?: string) {
+          phases.push(phase)
+          yield { role: "assistant_final", content: "done" }
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+      }),
+    }
+
+    phases.length = 0
+    const coordinator = new WorkflowCoordinator({ runtime: runtime as any, config: { requireSupervisorPlan: false } })
+    coordinator.startWorkflow({ goal: "test" })
+    for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+    expect(phases).toContain("supervisor_analyse")
+    expect(phases).toContain("worker_do")
+    expect(phases).toContain("worker_report")
+    expect(phases).toContain("supervisor_check")
+  })
 })

@@ -1,6 +1,8 @@
 import type { ChatMessage, ToolSpec, Usage } from "./types.js"
 import type { DeepSeekStreamEvent, DeepSeekClientOptions } from "./client.js"
 import type { QuestionInfo, QuestionAnswer } from "./question/types.js"
+import type { WorkflowMode } from "./dual-agent-runtime/types.js"
+import type { WorkflowPhase } from "./workflow-coordinator/types.js"
 
 /* ── LoopEvent — core yields these, shell consumes them ── */
 
@@ -176,7 +178,7 @@ export type EnqueueInstructionResult =
   | { status: "full"; queueLength: number }
 
 export interface CoreEngine {
-  submit(userInput: string, agentConfig?: AgentConfig): AsyncGenerator<LoopEvent>
+  submit(userInput: string, agentConfig?: AgentConfig, role?: "worker" | "supervisor", mode?: WorkflowMode, workflowPhase?: WorkflowPhase): AsyncGenerator<LoopEvent>
   getState(isStreaming?: boolean, streamingMessage?: string, pendingToolCalls?: Array<{ name: string; args: string }>): AgentState
   interrupt(): void
   registerTool(tool: AgentTool): void

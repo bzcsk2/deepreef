@@ -59,6 +59,29 @@ export interface ContextPolicyStatus {
 }
 
 /**
+ * Resolve phase-specific maxTurns limit.
+ *
+ * - supervisor_analyse: capped at 2 — allows shallow get_goal/list_dir
+ *   orientation, then must produce a plan.
+ * - supervisor_intervene: capped at 1 — brief guidance only, no new
+ *   Supervisor self-loop.
+ * - supervisor_check: uncapped — may need multiple turns for evidence
+ *   inspection (read_file/grep).
+ */
+function resolvePhaseMaxTurns(
+  role: "worker" | "supervisor" | undefined,
+  mode: WorkflowMode | undefined,
+  workflowPhase: WorkflowPhase | undefined,
+  policyMaxTurns: number | undefined,
+): number | undefined {
+  if (role === "supervisor" && mode === "loop") {
+    if (workflowPhase === "supervisor_analyse") return 2
+    if (workflowPhase === "supervisor_intervene") return 1
+  }
+  return policyMaxTurns
+}
+
+/**
  * ReasonixEngine 是 Deepreef 的核心引擎，负责：
  * - 管理对话上下文（ContextManager）
  * - 与 DeepSeek API 进行流式通信
@@ -668,6 +691,7 @@ Your current job:
 - Do not perform Worker tasks.
 - Do not call read_file, grep, bash, edit, write, apply_patch, AgentTool, mailbox, or dispatch tools.
 - If tools are available, use at most get_goal and list_dir for shallow orientation.
+- Do not call tools repeatedly. If shallow orientation is insufficient, state assumptions in the plan and let the Worker inspect details.
 - After producing the plan, stop. The coordinator will pass your plan to the Worker.
 
 Return a structured plan with:
@@ -855,7 +879,7 @@ Do not change goal status.`
         this.logger.warn("tools.filtered", {
           role: effectiveRole,
           mode: effectiveMode,
-          toolNames: ac.toolNames,
+          workflowPhase,
           registeredCount: this.tools.size,
           effectiveCount: toolSpecs.length,
           filteredCount,
@@ -871,12 +895,7 @@ Do not change goal status.`
         this.prefixCacheKey = cacheKey
       }
 
-      const phaseMaxTurns =
-        role === "supervisor" && mode === "loop" && workflowPhase === "supervisor_analyse"
-          ? 2
-          : role === "supervisor" && mode === "loop" && workflowPhase === "supervisor_intervene"
-            ? 1
-            : this.effectivePolicy?.maxTurns
+      const phaseMaxTurns = resolvePhaseMaxTurns(role, mode, workflowPhase, this.effectivePolicy?.maxTurns)
 
       const loopOpts: LoopOptions = {
         ctx: this.ctx,
