@@ -15,6 +15,24 @@ export interface TranscriptSnapshot {
   readonly version: number;
 }
 
+export interface TranscriptStoreStats {
+  orderLength: number;
+  entriesSize: number;
+  liveTouchedSize: number;
+  entryRevisionSize: number;
+  version: number;
+}
+
+export interface TranscriptTrimOptions {
+  maxEntries: number;
+  preserveTailEntries: number;
+}
+
+const DEFAULT_TRIM_OPTIONS: TranscriptTrimOptions = {
+  maxEntries: 1200,
+  preserveTailEntries: 300,
+};
+
 /**
  * 规范化 transcript 存储：按 id 索引 + 有序 order，流式文本就地追加。
  */
@@ -25,12 +43,26 @@ export class TranscriptStore {
   private readonly entryRevision = new Map<string, number>();
   private version = 0;
   private readonly listeners = new Set<() => void>();
+  private readonly trimOptions: TranscriptTrimOptions = { ...DEFAULT_TRIM_OPTIONS };
 
   /**
    * @returns 当前版本号（每次变更 +1）
    */
   getVersion(): number {
     return this.version;
+  }
+
+  /**
+   * @returns 数据规模指标
+   */
+  getStats(): TranscriptStoreStats {
+    return {
+      orderLength: this.order.length,
+      entriesSize: this.entries.size,
+      liveTouchedSize: this.liveTouchedIds.size,
+      entryRevisionSize: this.entryRevision.size,
+      version: this.version,
+    };
   }
 
   /**
@@ -69,7 +101,7 @@ export class TranscriptStore {
       this.entries.set(item.id, cloneTimelineItem(item));
       this.entryRevision.set(item.id, 0);
     }
-    this.bump();
+    this.bumpAfterMutation();
   }
 
   /**
@@ -86,7 +118,7 @@ export class TranscriptStore {
         this.entryRevision.set(item.id, 0);
       }
     }
-    this.bump();
+    this.bumpAfterMutation();
   }
 
   /**
@@ -123,7 +155,7 @@ export class TranscriptStore {
     this.order.push(id);
     this.entries.set(id, entry);
     this.markLiveTouch(id);
-    this.bump();
+    this.bumpAfterMutation();
   }
 
   /**
@@ -149,7 +181,7 @@ export class TranscriptStore {
       if (role && !(existing as TimelineEntryWithRole).role) {
         (existing as TimelineEntryWithRole).role = role;
         this.markLiveTouch(id);
-        this.bump();
+        this.bumpAfterMutation();
       }
       return;
     }
@@ -185,7 +217,7 @@ export class TranscriptStore {
 
     this.entries.set(id, entry);
     this.markLiveTouch(id);
-    this.bump();
+    this.bumpAfterMutation();
   }
 
   /**
@@ -237,7 +269,7 @@ export class TranscriptStore {
     if (existing) {
       this.entries.set(item.id, { ...item, text: item.text });
       this.markLiveTouch(item.id);
-      this.bump();
+      this.bumpAfterMutation();
       return;
     }
 
@@ -258,7 +290,7 @@ export class TranscriptStore {
     }
     this.entries.set(item.id, cloneTimelineItem(item));
     this.markLiveTouch(item.id);
-    this.bump();
+    this.bumpAfterMutation();
   }
 
   /**
@@ -273,7 +305,7 @@ export class TranscriptStore {
       this.entries.set(item.id, cloneTimelineItem(item));
     }
     this.markLiveTouch(item.id);
-    this.bump();
+    this.bumpAfterMutation();
   }
 
   /**
@@ -292,14 +324,14 @@ export class TranscriptStore {
       // 补齐 role（hydration 合并进来的旧条目可能缺失）
       if (role && !existing.role) (existing as TimelineEntryWithRole).role = role;
       this.markLiveTouch(id);
-      this.bump();
+      this.bumpAfterMutation();
       return;
     }
 
     this.order.push(id);
     this.entries.set(id, { id, kind: 'tool', roundId, tool: { ...tool }, role });
     this.markLiveTouch(id);
-    this.bump();
+    this.bumpAfterMutation();
   }
 
   /**
@@ -310,10 +342,88 @@ export class TranscriptStore {
     if (!existing) {
       this.order.push(item.id);
       this.entries.set(item.id, cloneTimelineItem(item));
-      this.bump();
+      this.bumpAfterMutation();
       return;
     }
     this.entries.set(item.id, update ? update(existing) : cloneTimelineItem(item));
+    this.bumpAfterMutation();
+  }
+
+  private canTrimEntry(entry: TimelineItem): boolean {
+    switch (entry.kind) {
+      case 'assistant_text':
+      case 'reasoning':
+        return entry.isStreaming !== true;
+      case 'tool':
+        return entry.tool.status !== 'running';
+      case 'message':
+        return true;
+    }
+  }
+
+  private getTrimGroupId(id: string, entry: TimelineItem | undefined): string {
+    if (!entry) return `missing:${id}`;
+    if ('roundId' in entry) return `round:${entry.roundId}`;
+    return `entry:${id}`;
+  }
+
+  private canTrimGroup(ids: string[]): boolean {
+    for (const id of ids) {
+      const entry = this.entries.get(id);
+      if (entry && !this.canTrimEntry(entry)) return false;
+    }
+    return true;
+  }
+
+  private trimToLimitInternal(options: TranscriptTrimOptions): number {
+    const { maxEntries, preserveTailEntries } = options;
+    if (maxEntries <= 0) return 0;
+    if (this.order.length <= maxEntries) return 0;
+
+    const preserveTail = Math.max(0, Math.min(preserveTailEntries, this.order.length));
+    const hardCutoffIndex = Math.max(0, this.order.length - preserveTail);
+
+    const groups: Array<{ ids: string[] }> = [];
+    const groupById = new Map<string, { ids: string[] }>();
+
+    for (let i = 0; i < hardCutoffIndex; i++) {
+      const id = this.order[i];
+      const groupId = this.getTrimGroupId(id, this.entries.get(id));
+      let group = groupById.get(groupId);
+      if (!group) {
+        group = { ids: [] };
+        groupById.set(groupId, group);
+        groups.push(group);
+      }
+      group.ids.push(id);
+    }
+
+    const removableIds: string[] = [];
+
+    for (const group of groups) {
+      if (!this.canTrimGroup(group.ids)) continue;
+      const wouldRemove = removableIds.length + group.ids.length;
+      if (this.order.length - wouldRemove <= maxEntries) {
+        removableIds.push(...group.ids);
+        break;
+      }
+      removableIds.push(...group.ids);
+    }
+
+    if (removableIds.length === 0) return 0;
+
+    const removeSet = new Set(removableIds);
+    this.order = this.order.filter(id => !removeSet.has(id));
+    for (const id of removeSet) {
+      this.entries.delete(id);
+      this.liveTouchedIds.delete(id);
+      this.entryRevision.delete(id);
+    }
+    return removeSet.size;
+  }
+
+  private bumpAfterMutation(): void {
+    this.trimToLimitInternal(this.trimOptions);
     this.bump();
   }
 

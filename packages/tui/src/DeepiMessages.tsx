@@ -10,6 +10,24 @@ import { FG, SURFACE, TONE } from './reasonix/tokens.js';
 import { t } from './i18n/index.js';
 import { useTranscriptTimeline } from './store/TranscriptContext.js';
 
+const DEFAULT_RENDER_WINDOW = 300;
+
+export function getVisibleTimeline<T>(timeline: T[], windowSize: number): {
+  visible: T[];
+  hiddenCount: number;
+} {
+  if (windowSize <= 0) {
+    return { visible: [], hiddenCount: timeline.length };
+  }
+  if (timeline.length <= windowSize) {
+    return { visible: timeline, hiddenCount: 0 };
+  }
+  return {
+    visible: timeline.slice(-windowSize),
+    hiddenCount: timeline.length - windowSize,
+  };
+}
+
 /**
  * 角色标签样式映射。
  * worker → 青色圆点 + 青色 Worker 名；supervisor → 紫色圆点 + 紫色 Supervisor 名；
@@ -410,13 +428,23 @@ export function DeepiMessages({
     }
   });
 
+  const { visible: visibleTimeline, hiddenCount } = useMemo(
+    () => getVisibleTimeline(timeline, DEFAULT_RENDER_WINDOW),
+    [timeline],
+  );
+
   const renderedItems = useMemo(() =>
-    timeline.map(item => <MessageBlock key={item.id} item={item} expanded={expanded} />),
-    [timeline, expanded]
+    visibleTimeline.map(item => <MessageBlock key={item.id} item={item} expanded={expanded} />),
+    [visibleTimeline, expanded]
   );
 
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
+      {hiddenCount > 0 && (
+        <Box paddingX={1}>
+          <Text dimColor>{`\u2026 ${hiddenCount} older items hidden for TUI performance`}</Text>
+        </Box>
+      )}
       {renderedItems}
       {timeline.length === 0 && (
         <Box paddingX={1}>

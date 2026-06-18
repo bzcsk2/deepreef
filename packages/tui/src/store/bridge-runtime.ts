@@ -118,6 +118,16 @@ export class BridgeRuntime {
   }
 
   /**
+   * @returns 轻量队列规模指标
+   */
+  getStats(): { warningsLength: number; messageQueueLength: number } {
+    return {
+      warningsLength: this.feedback.getSnapshot().warnings.length,
+      messageQueueLength: this.promptQueue.getSnapshot().messageQueue.length,
+    };
+  }
+
+  /**
    * 重置为初始状态（session 切换等）。
    */
   reset(): void {

@@ -31,4 +31,18 @@ describe('BridgeRuntime', () => {
     expect(runtime.statusUsage.getSnapshot().isLoading).toBe(false);
     expect(runtime.feedback.getSnapshot().error).toBeNull();
   });
+
+  it('getStats returns queue lengths', () => {
+    const runtime = new BridgeRuntime();
+    const stats = runtime.getStats();
+    expect(stats.warningsLength).toBe(0);
+    expect(stats.messageQueueLength).toBe(0);
+
+    runtime.applyPatch({ warnings: ['warn1', 'warn2'] });
+    runtime.applyPatch({ messageQueue: ['msg1'] });
+
+    const updated = runtime.getStats();
+    expect(updated.warningsLength).toBe(2);
+    expect(updated.messageQueueLength).toBe(1);
+  });
 });

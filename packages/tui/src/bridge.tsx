@@ -16,6 +16,16 @@ import {
   BridgeRuntime,
 } from './store/index.js';
 
+const MAX_WARNINGS = 100;
+const MAX_MESSAGE_QUEUE = 50;
+
+function appendBoundedQueue(queue: string[], text: string): string[] {
+  if (queue.length >= MAX_MESSAGE_QUEUE) {
+    return [...queue.slice(1), text];
+  }
+  return [...queue, text];
+}
+
 export interface ToolStatus {
   key: string;
   name: string;
@@ -324,11 +334,11 @@ export function createBridge(
       if (result.status === 'full') {
         commitBridge(prev => ({
           pendingInstructionCount: result.queueLength,
-          messageQueue: [...prev.messageQueue, text],
+          messageQueue: appendBoundedQueue(prev.messageQueue, text),
         }));
         return;
       }
-      commitBridge(prev => ({ messageQueue: [...prev.messageQueue, text] }));
+      commitBridge(prev => ({ messageQueue: appendBoundedQueue(prev.messageQueue, text) }));
       return;
     }
 
@@ -777,7 +787,7 @@ export function createBridge(
             const warning = event.content ?? t().unknownWarning;
             if (isToolLoopNotice(warning)) break;
             commitBridge(prev => ({
-              warnings: [...prev.warnings, warning],
+              warnings: [...prev.warnings, warning].slice(-MAX_WARNINGS),
             }));
             break;
           }
@@ -1259,7 +1269,7 @@ export function createBridge(
               const warning = loopEvent.content ?? 'Warning';
               if (isToolLoopNotice(warning)) break;
               commitBridge(prev => ({
-                warnings: [...prev.warnings, warning],
+                warnings: [...prev.warnings, warning].slice(-MAX_WARNINGS),
               }));
               break;
             }
@@ -1337,7 +1347,7 @@ export function createBridge(
     } catch (err) {
       commitBridge(prev => ({
         ...prev,
-        warnings: [...prev.warnings, `Workflow error: ${(err as Error).message ?? String(err)}`],
+        warnings: [...prev.warnings, `Workflow error: ${(err as Error).message ?? String(err)}`].slice(-MAX_WARNINGS),
       }));
     } finally {
       finalizeWorkflowTurn();

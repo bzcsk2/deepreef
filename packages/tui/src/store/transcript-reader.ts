@@ -2,6 +2,12 @@ import type { TimelineItem } from '../bridge.js';
 import type { TranscriptStore } from './transcript-store.js';
 import { transcriptToTimeline } from './timeline-adapter.js';
 
+export interface TranscriptReaderStats {
+  cachedTimelineLength: number;
+  cachedVersion: number;
+  itemCacheSize: number;
+}
+
 /**
  * TranscriptStore 的 React 订阅层：缓存投影 timeline，保证 getSnapshot 引用稳定。
  */
@@ -33,6 +39,17 @@ export class TranscriptReader {
     this.cachedTimeline = transcriptToTimeline(this.store, this.itemCache);
     this.cachedVersion = version;
     return this.cachedTimeline;
+  }
+
+  /**
+   * @returns reader 缓存状态指标
+   */
+  getStats(): TranscriptReaderStats {
+    return {
+      cachedTimelineLength: this.cachedTimeline.length,
+      cachedVersion: this.cachedVersion,
+      itemCacheSize: this.itemCache.size,
+    };
   }
 
   /**

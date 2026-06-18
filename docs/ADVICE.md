@@ -1,665 +1,867 @@
-请修改 Deepreef 的 workflow 工具权限系统，解决 supervisor_analyse 阶段 Supervisor 自己反复规划/探索、不进入 worker_do 的问题。
+# Deepreef TUI 长时间运行变卡问题整改方案
 
-核心目标：
+## 一、问题目标
 
-1. `resolveEffectiveTools()` 必须从 `role + mode` 过滤升级为 `role + mode + workflowPhase` 过滤。
-2. `supervisor_analyse` 阶段禁止 Supervisor 拿到会诱导深度探索/执行的工具，尤其禁止 `read_file`、`grep`、`bash`、`edit`、`write_file`、`apply_patch`、`AgentTool`、mailbox 工具。
-3. `supervisor_check` 阶段才允许 Supervisor 使用 `read_file` / `grep` 做验证。
-4. Worker 阶段工具权限保持原样，不要误伤 Worker 执行能力。
-5. 不要在 TUI bridge 层靠字符串判断绕过。这个问题属于 core 层工具权限模型，不是 TUI 渲染问题。
+请优化 Deepreef TUI 在长时间会话、长时间 workflow、长时间流式输出后的卡顿问题。
 
-一、当前问题
+当前问题不应简单定性为传统“内存泄漏”，更准确的描述是：
 
-当前 `packages/core/src/resolve-effective-tools.ts` 里，Supervisor loop 工具是统一集合：
-
-```ts
-const SUPERVISOR_LOOP_TOOLS = new Set([
-  "get_goal",
-  "update_goal",
-  "list_dir",
-  "read_file",
-  "grep",
-])
+```text
+TUI 缺少历史窗口化和数据保留上限，导致 transcript/timeline 在长时间会话中无界增长；同时 UI 每次变更仍存在全量投影、全量遍历和全量渲染路径，最终造成内存占用上升、GC 压力增大、Ink/React reconcile 成本上升、Markdown 渲染成本上升，表现为 TUI 越跑越卡。
 ```
 
-这意味着 Supervisor 在 `supervisor_analyse`、`supervisor_check`、`supervisor_intervene` 阶段拿到的是同一组工具。
+本次整改只处理 **TUI 显示层和 bridge runtime 层的历史数据保留与渲染性能**。不要修改 core 的模型上下文、任务逻辑、workflow phase 状态机、工具权限逻辑。
+
+核心原则：
+
+1. 不裁剪 core engine 的模型上下文。
+2. 不影响 session 持久化。
+3. 不丢失当前正在流式输出的消息、reasoning、tool。
+4. 不破坏 worker/supervisor reasoning 的历史显示结构。
+5. 不破坏用户正在交互的 permission/question prompt。
+6. 优先解决 TUI 长时间运行卡顿，而不是做复杂的全局重构。
+
+---
+
+## 二、当前风险点
+
+### 1. TranscriptStore 无界增长
+
+当前 `TranscriptStore` 内部维护：
+
+```ts
+order: string[]
+entries: Map<string, TimelineItem>
+liveTouchedIds: Set<string>
+entryRevision: Map<string, number>
+```
+
+这些结构会随着 TUI timeline 增长而持续增长。
+
+新增 message、assistant text、reasoning、tool 时，会向 `order` 和 `entries` 追加条目；`markLiveTouch()` 又会同步增加 `liveTouchedIds` 和 `entryRevision`。
 
 这会导致：
 
 ```text
-supervisor_analyse
-  -> Supervisor 拿到 read_file / grep
-  -> Supervisor 自己开始搜索、读取、验证
-  -> runLoop 工具调用完成后继续下一轮 LLM turn
-  -> Supervisor 继续探索
-  -> runSupervisorAnalyse() 不返回
-  -> transition("worker_do") 不执行
-  -> Worker 不被调动
+会话越长 -> order 越长 -> entries 越多 -> liveTouchedIds 越多 -> entryRevision 越多
 ```
 
-必须让 Supervisor 在不同 workflow phase 拿到不同工具。
+### 2. Timeline 投影存在 O(n) 路径
 
-二、修改 Workflow phase 类型传递
+`TranscriptStore.toTimelineItems()` 会按 `order` 全量 map：
 
-文件：
+```ts
+return this.order.map(id => this.entries.get(id)!);
+```
+
+`transcriptToTimeline()` 又会遍历所有 timeline item，进行缓存复用、active id 收集和缓存清理。
+
+这意味着每次 store version 变化后，UI 订阅层仍然要处理完整 timeline。
+
+### 3. DeepiMessages 全量渲染 timeline
+
+`DeepiMessages` 当前使用：
+
+```tsx
+timeline.map(item => <MessageBlock key={item.id} item={item} expanded={expanded} />)
+```
+
+timeline 越长，每次 render 的元素创建、React reconcile、Ink layout、Markdown 处理成本都会上升。
+
+### 4. BridgeState 的 warnings / messageQueue 也缺少明确上限
+
+`warnings` 当前是 append 形式：
+
+```ts
+warnings: [...prev.warnings, warning]
+```
+
+`messageQueue` 也可能 append 用户输入：
+
+```ts
+messageQueue: [...prev.messageQueue, text]
+```
+
+这些不是主要瓶颈，但应该同步加上限，避免极端情况下无界增长。
+
+---
+
+## 三、不要做的错误修复
+
+不要简单粗暴地做：
+
+```ts
+order.splice(0, overflow)
+```
+
+原因：
+
+1. 可能裁掉当前正在 streaming 的 reasoning。
+2. 可能裁掉正在 running 的 tool。
+3. 可能破坏同一个 round 内 assistant / reasoning / tool 的关系。
+4. 可能破坏 hydration merge 对 liveTouchedIds 的保护。
+5. 可能让用户正在看的上下文突然消失。
+6. 可能导致 TranscriptReader 的 cache 和 store 状态不一致。
+
+也不要直接清空所有历史：
+
+```ts
+transcriptStore.replaceAll([])
+```
+
+这会破坏用户体验，也会让 TUI 像“丢消息”。
+
+正确方向是：
 
 ```text
-packages/core/src/resolve-effective-tools.ts
+做 UI 层的 round-aware trim + bridge 数组上限 + 渲染窗口化 + 性能指标。
 ```
 
-新增类型导入：
+---
 
-```ts
-import type { WorkflowPhase } from "./workflow-coordinator/types.js"
+## 四、整改优先级
+
+建议分四个阶段做。
+
+```text
+P0：加监控指标，先能看见数据规模
+P1：限制 warnings / messageQueue 等低风险数组
+P2：实现 TranscriptStore round-aware trim
+P3：实现 DeepiMessages 渲染窗口化
+P4：补测试，防止裁剪破坏 streaming / round 结构
 ```
 
-把 `ResolveEffectiveToolsOpts` 改为：
+P1 和 P2 是直接止血。P3 是真正改善长 timeline 渲染卡顿的关键。P0 和 P4 用来防回归。
+
+---
+
+# P0：增加 TUI 数据规模指标
+
+## 目标
+
+开发态能看到以下指标：
+
+```text
+transcript.order.length
+transcript.entries.size
+transcript.liveTouchedIds.size
+transcript.entryRevision.size
+reader.itemCache.size
+timeline.length
+warnings.length
+messageQueue.length
+```
+
+## 修改文件
+
+优先修改：
+
+```text
+packages/tui/src/store/transcript-store.ts
+packages/tui/src/store/transcript-reader.ts
+packages/tui/src/store/bridge-runtime.ts
+```
+
+## TranscriptStore 增加 stats 方法
+
+在 `TranscriptStore` 中增加：
 
 ```ts
-export interface ResolveEffectiveToolsOpts {
-  registeredTools: Map<string, AgentTool>
-  role: AgentRole
-  mode: WorkflowMode
-  agentToolNames?: string[]
-  workflowPhase?: WorkflowPhase
+export interface TranscriptStoreStats {
+  orderLength: number;
+  entriesSize: number;
+  liveTouchedSize: number;
+  entryRevisionSize: number;
+  version: number;
+}
+
+getStats(): TranscriptStoreStats {
+  return {
+    orderLength: this.order.length,
+    entriesSize: this.entries.size,
+    liveTouchedSize: this.liveTouchedIds.size,
+    entryRevisionSize: this.entryRevision.size,
+    version: this.version,
+  };
 }
 ```
 
-三、拆分 Supervisor loop 工具集合
+## TranscriptReader 增加 cache stats
 
-在 `resolve-effective-tools.ts` 中替换原来的 `SUPERVISOR_LOOP_TOOLS`。
-
-建议采用保守策略：
+在 `TranscriptReader` 中增加：
 
 ```ts
-const SUPERVISOR_LOOP_ANALYSE_TOOLS = new Set([
-  "get_goal",
-  // 可选：如果确实需要看项目顶层结构，保留 list_dir。
-  // 如果仍然观察到 Supervisor 在 plan 阶段循环，把 list_dir 也移除。
-  "list_dir",
-])
+export interface TranscriptReaderStats {
+  cachedTimelineLength: number;
+  cachedVersion: number;
+  itemCacheSize: number;
+}
 
-const SUPERVISOR_LOOP_CHECK_TOOLS = new Set([
-  "get_goal",
-  "list_dir",
-  "read_file",
-  "grep",
-])
-
-const SUPERVISOR_LOOP_INTERVENE_TOOLS = new Set([
-  "get_goal",
-])
-
-const SUPERVISOR_LOOP_DEFAULT_TOOLS = new Set([
-  "get_goal",
-])
-```
-
-注意：
-
-* 不要把 `update_goal` 放进 `supervisor_analyse`。
-* 默认也不建议把 `update_goal` 放进 `supervisor_check`，因为 workflow coordinator 已经在解析 approve 后更新 goal 状态。
-* 如果项目中确实依赖模型主动调用 `update_goal`，也只能放到 `supervisor_check`，不要放到 `supervisor_analyse`。
-
-四、增加 phase-aware helper
-
-在 `resolve-effective-tools.ts` 中新增：
-
-```ts
-function supervisorLoopToolsForPhase(phase: WorkflowPhase | undefined): Set<string> {
-  switch (phase) {
-    case "supervisor_analyse":
-      return SUPERVISOR_LOOP_ANALYSE_TOOLS
-    case "supervisor_check":
-      return SUPERVISOR_LOOP_CHECK_TOOLS
-    case "supervisor_intervene":
-      return SUPERVISOR_LOOP_INTERVENE_TOOLS
-    default:
-      return SUPERVISOR_LOOP_DEFAULT_TOOLS
-  }
+getStats(): TranscriptReaderStats {
+  return {
+    cachedTimelineLength: this.cachedTimeline.length,
+    cachedVersion: this.cachedVersion,
+    itemCacheSize: this.itemCache.size,
+  };
 }
 ```
 
-五、修改 resolveEffectiveTools 的 supervisor loop 分支
+## BridgeRuntime 增加轻量 stats
 
-找到当前逻辑：
+在 `BridgeRuntime` 中增加方法：
 
 ```ts
-if (role === "supervisor" && mode === "loop") {
-  if (SUPERVISOR_LOOP_TOOLS.has(name)) {
-    toolSpecs.push(toSpec(tool))
-    continue
-  }
-  filteredCount++
-  if (!filteredReason) filteredReason = "supervisor loop mode: governance tools only"
-  continue
+getStats(): {
+  warningsLength: number;
+  messageQueueLength: number;
+} {
+  return {
+    warningsLength: this.feedback.getSnapshot().warnings.length,
+    messageQueueLength: this.promptQueue.getSnapshot().messageQueue.length,
+  };
 }
+```
+
+如果 `SubscribeStore` 没有 `getSnapshot()`，使用现有读取方法；不要为此大改 store 架构。
+
+---
+
+# P1：限制 warnings 和 messageQueue
+
+## 目标
+
+低风险地阻止 bridge 反馈队列无界增长。
+
+## 常量建议
+
+新增常量位置可以放在 `bridge.tsx` 或 `bridge-runtime.ts` 附近：
+
+```ts
+const MAX_WARNINGS = 100;
+const MAX_MESSAGE_QUEUE = 50;
+```
+
+## 限制 warnings
+
+把所有：
+
+```ts
+warnings: [...prev.warnings, warning]
 ```
 
 改为：
 
 ```ts
-if (role === "supervisor" && mode === "loop") {
-  const allowedSupervisorTools = supervisorLoopToolsForPhase(workflowPhase)
+warnings: [...prev.warnings, warning].slice(-MAX_WARNINGS)
+```
 
-  if (allowedSupervisorTools.has(name)) {
-    toolSpecs.push(toSpec(tool))
-    continue
-  }
+如果 warnings 需要去重，可以额外做：
 
-  filteredCount++
-  if (!filteredReason) {
-    filteredReason = workflowPhase
-      ? `supervisor loop phase ${workflowPhase}: phase-scoped tools only`
-      : "supervisor loop mode: default governance tools only"
-  }
-  continue
+```ts
+const nextWarnings = [...prev.warnings, warning].slice(-MAX_WARNINGS);
+return { warnings: nextWarnings };
+```
+
+不要吞掉非 tool-loop warning。之前已经隐藏 tool-loop notice 的逻辑应保留。
+
+## 限制 messageQueue
+
+当前 messageQueue 可能在 running 时继续追加。建议封装 helper：
+
+```ts
+function appendBoundedQueue(queue: string[], text: string): string[] {
+  return [...queue, text].slice(-MAX_MESSAGE_QUEUE);
 }
 ```
 
-六、把 workflowPhase 从 engine.submit 传到 resolveEffectiveTools
-
-文件：
-
-```text
-packages/core/src/engine.ts
-```
-
-新增导入：
+然后把：
 
 ```ts
-import type { WorkflowPhase } from "./workflow-coordinator/types.js"
-```
-
-把 `submit` 签名从类似：
-
-```ts
-async *submit(
-  userInput: string,
-  agentConfig?: AgentConfig,
-  role?: "worker" | "supervisor",
-  mode?: WorkflowMode,
-): AsyncGenerator<LoopEvent> {
+messageQueue: [...prev.messageQueue, text]
 ```
 
 改成：
 
 ```ts
-async *submit(
-  userInput: string,
-  agentConfig?: AgentConfig,
-  role?: "worker" | "supervisor",
-  mode?: WorkflowMode,
-  workflowPhase?: WorkflowPhase,
-): AsyncGenerator<LoopEvent> {
+messageQueue: appendBoundedQueue(prev.messageQueue, text)
 ```
 
-然后在 `resolveEffectiveTools()` 调用处补上：
+如果队列满时不想静默丢弃最旧输入，可以选择更严格策略：
 
 ```ts
-const { tools: toolSpecs, filteredCount, filteredReason } = resolveEffectiveTools({
-  registeredTools: this.tools,
-  role: effectiveRole,
-  mode: effectiveMode,
-  agentToolNames: ac.toolNames,
-  workflowPhase,
-})
-```
-
-七、把 workflowPhase 从 AgentRuntime 传到 Engine
-
-文件：
-
-```text
-packages/core/src/dual-agent-runtime/runtime.ts
-```
-
-当前大概是：
-
-```ts
-async *submit(input: string, mode?: WorkflowMode): AsyncGenerator<LoopEvent> {
-  ...
-  const ctx: SubmitContext = { role: this.role, mode: mode ?? "alone" }
-  for await (const event of this.engine.submit(input, undefined, ctx.role, ctx.mode)) {
-    yield event
-  }
+if (prev.messageQueue.length >= MAX_MESSAGE_QUEUE) {
+  return {
+    warnings: [...prev.warnings, 'Message queue is full; oldest queued input was dropped.'].slice(-MAX_WARNINGS),
+    messageQueue: [...prev.messageQueue.slice(1), text],
+  };
 }
 ```
 
-改成：
+建议第一版采用“丢最旧 + warning”策略。
+
+---
+
+# P2：实现 TranscriptStore round-aware trim
+
+## 目标
+
+对 TUI transcript 做安全裁剪，避免 `order / entries / liveTouchedIds / entryRevision` 无界增长。
+
+注意：这只裁剪 **TUI transcript store**，不是裁剪 core engine 的对话上下文，也不是裁剪 session 文件。
+
+## 建议上限
+
+第一版建议：
 
 ```ts
-import type { WorkflowPhase } from "../workflow-coordinator/types.js"
-```
-
-然后改签名：
-
-```ts
-async *submit(
-  input: string,
-  mode?: WorkflowMode,
-  workflowPhase?: WorkflowPhase,
-): AsyncGenerator<LoopEvent> {
-  if (this.status === "running") {
-    throw new Error(`Agent ${this.role} is already running`)
-  }
-
-  this.status = "running"
-  this.startTime = Date.now()
-  this.currentTask = input
-
-  try {
-    const ctx: SubmitContext = { role: this.role, mode: mode ?? "alone" }
-    for await (const event of this.engine.submit(input, undefined, ctx.role, ctx.mode, workflowPhase)) {
-      yield event
-    }
-    this.status = "completed"
-  } catch (error) {
-    this.status = "failed"
-    yield {
-      role: "error",
-      content: error instanceof Error ? error.message : String(error),
-    }
-  } finally {
-    this.currentTask = undefined
-  }
-}
-```
-
-八、在 WorkflowCoordinator 各阶段传入 phase
-
-文件：
-
-```text
-packages/core/src/workflow-coordinator/coordinator.ts
-```
-
-修改 `runSupervisorAnalyse()`：
-
-```ts
-for await (const event of this.runtime!.getSupervisor().submit(
-  supervisorInput,
-  "loop",
-  "supervisor_analyse",
-)) {
-  yield event as any
-  if (event.role === "error") errorMessage = event.content ?? "Supervisor analysis failed"
-}
-```
-
-修改 `runWorkerDo()`：
-
-```ts
-for await (const event of this.runtime!.getWorker().submit(
-  workerInput,
-  "loop",
-  "worker_do",
-)) {
-  yield event as any
-  if (event.role === "error") {
-    hasError = true
-    errorCount++
-  }
-}
-```
-
-修改 `runWorkerReport()`：
-
-```ts
-for await (const event of this.runtime!.getWorker().submit(
-  workerInput,
-  "loop",
-  "worker_report",
-)) {
-  yield event as any
-}
-```
-
-修改 `runSupervisorCheck()`：
-
-```ts
-for await (const event of this.runtime!.getSupervisor().submit(
-  supervisorInput,
-  "loop",
-  "supervisor_check",
-)) {
-  yield event as any
-}
-```
-
-修改 `runSupervisorIntervene()`：
-
-```ts
-for await (const event of this.runtime!.getSupervisor().submit(
-  supervisorInput,
-  "loop",
-  "supervisor_intervene",
-)) {
-  yield event as any
-}
-```
-
-九、同步调整 Supervisor loop system prompt
-
-文件：
-
-```text
-packages/core/src/engine.ts
-```
-
-当前 `role === "supervisor" && mode === "loop"` 的 system prompt 是统一的，里面同时写了 analyse 和 check 的规则。这会让模型在 plan 阶段仍然以为自己可以做很多事。
-
-把 supervisor loop prompt 拆成 phase-specific。
-
-新增 helper，放在 engine.ts 里合适位置：
-
-```ts
-function buildSupervisorLoopModePrompt(workflowPhase?: WorkflowPhase): string {
-  if (workflowPhase === "supervisor_analyse") {
-    return `## Loop Mode — Supervisor Analyse
-
-You are the Supervisor in the planning phase.
-
-The WorkflowCoordinator owns execution order:
-supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
-
-Your current job:
-- Create a concrete plan for the Worker.
-- Do not execute the plan yourself.
-- Do not inspect implementation files.
-- Do not verify code.
-- Do not perform Worker tasks.
-- Do not call read_file, grep, bash, edit, write, apply_patch, AgentTool, mailbox, or dispatch tools.
-- If tools are available, use at most get_goal and list_dir for shallow orientation.
-- After producing the plan, stop. The coordinator will pass your plan to the Worker.
-
-Return a structured plan with:
-- objective
-- concrete Worker steps
-- constraints
-- risks
-- expected evidence / verification criteria`
-  }
-
-  if (workflowPhase === "supervisor_check") {
-    return `## Loop Mode — Supervisor Check
-
-You are the Supervisor in the review phase.
-
-Your current job:
-- Review the Worker report.
-- Verify the Worker output against the plan and goal.
-- You may use read_file and grep to inspect evidence.
-- Do not perform Worker tasks yourself.
-- Do not edit files.
-- Do not run implementation steps.
-- Decide one of: continue, revise, approve, ask_user, or blocked.
-
-Do not approve unless you provide a requirement-by-requirement completion audit with concrete evidence.`
-  }
-
-  if (workflowPhase === "supervisor_intervene") {
-    return `## Loop Mode — Supervisor Intervention
-
-You are giving brief mid-workflow guidance to the Worker.
-
-Your current job:
-- Diagnose the Worker blocker.
-- Provide concise guidance.
-- Do not perform Worker tasks yourself.
-- Do not approve or complete the workflow.
-- Do not edit files.
-- Use no tools unless strictly necessary.`
-  }
-
-  return `## Loop Mode — Supervisor
-
-You are the Supervisor for the active loop goal.
-
-The WorkflowCoordinator owns execution order:
-supervisor_analyse -> worker_do -> worker_report -> supervisor_check.
-
-Follow the current workflow phase. Do not perform Worker tasks yourself.`
-}
-```
-
-然后把原来的：
-
-```ts
-role === "supervisor" && mode === "loop"
-  ? `## Loop Mode — Supervisor ...`
-```
-
-替换为：
-
-```ts
-role === "supervisor" && mode === "loop"
-  ? buildSupervisorLoopModePrompt(workflowPhase)
-```
-
-十、可选但建议：plan 阶段进一步限制 maxTurns
-
-仅靠移除 `read_file/grep` 通常够用，但如果模型仍然反复 `list_dir`，建议给 `supervisor_analyse` 加硬限制。
-
-在 `engine.ts` 生成 `loopOpts` 前增加：
-
-```ts
-const phaseMaxTurns =
-  role === "supervisor" && mode === "loop" && workflowPhase === "supervisor_analyse"
-    ? 2
-    : role === "supervisor" && mode === "loop" && workflowPhase === "supervisor_intervene"
-      ? 1
-      : this.effectivePolicy?.maxTurns
-```
-
-然后把 loopOpts 里的：
-
-```ts
-maxTurns: this.effectivePolicy?.maxTurns,
-```
-
-改成：
-
-```ts
-maxTurns: phaseMaxTurns,
+const DEFAULT_MAX_TRANSCRIPT_ENTRIES = 1200;
+const DEFAULT_MIN_PRESERVE_TAIL_ENTRIES = 300;
 ```
 
 解释：
 
-* `supervisor_analyse` 如果允许 `list_dir`，最多 2 turns：第一轮可浅层看结构，第二轮必须输出 plan。
-* 如果你选择 analyse 阶段 no-tools，则可以把 `phaseMaxTurns` 改为 1。
-* `supervisor_check` 不建议限制太死，因为它可能需要 read_file / grep 验证。
+* `maxEntries = 1200`：超过后开始裁剪。
+* `preserveTailEntries = 300`：至少保留尾部最近 300 条，避免刚发生的上下文被裁掉。
+* 如果 workflow 很长，可后续改成可配置环境变量。
 
-十一、如果想采用 no-tools plan 阶段
-
-如果你想让 plan 阶段完全不使用工具，把：
+例如：
 
 ```ts
-const SUPERVISOR_LOOP_ANALYSE_TOOLS = new Set([
-  "get_goal",
-  "list_dir",
-])
+const DEFAULT_TRANSCRIPT_TRIM_LIMITS = {
+  maxEntries: 1200,
+  preserveTailEntries: 300,
+};
 ```
 
-改成：
+## 新增 trim options 类型
+
+在 `transcript-store.ts` 增加：
 
 ```ts
-const SUPERVISOR_LOOP_ANALYSE_TOOLS = new Set<string>([])
+export interface TranscriptTrimOptions {
+  maxEntries: number;
+  preserveTailEntries: number;
+}
 ```
 
-同时把 analyse prompt 改成：
+## 新增 public 方法
+
+在 `TranscriptStore` 中增加：
+
+```ts
+trimToLimit(options: TranscriptTrimOptions): number {
+  const { maxEntries, preserveTailEntries } = options;
+
+  if (maxEntries <= 0) return 0;
+  if (this.order.length <= maxEntries) return 0;
+
+  const preserveTail = Math.max(0, Math.min(preserveTailEntries, this.order.length));
+  const hardCutoffIndex = Math.max(0, this.order.length - preserveTail);
+
+  const removableIds: string[] = [];
+
+  for (let i = 0; i < hardCutoffIndex; i++) {
+    const id = this.order[i];
+    const entry = this.entries.get(id);
+    if (!entry) {
+      removableIds.push(id);
+      continue;
+    }
+
+    if (!this.canTrimEntry(entry)) {
+      continue;
+    }
+
+    removableIds.push(id);
+
+    if (this.order.length - removableIds.length <= maxEntries) {
+      break;
+    }
+  }
+
+  if (removableIds.length === 0) return 0;
+
+  const removeSet = new Set(removableIds);
+  this.order = this.order.filter(id => !removeSet.has(id));
+
+  for (const id of removeSet) {
+    this.entries.delete(id);
+    this.liveTouchedIds.delete(id);
+    this.entryRevision.delete(id);
+  }
+
+  this.bump();
+  return removeSet.size;
+}
+```
+
+## 新增 canTrimEntry
+
+在 `TranscriptStore` 内新增私有方法：
+
+```ts
+private canTrimEntry(entry: TimelineItem): boolean {
+  switch (entry.kind) {
+    case 'assistant_text':
+    case 'reasoning':
+      return entry.isStreaming !== true;
+
+    case 'tool':
+      return entry.tool.status !== 'running';
+
+    case 'message':
+      return true;
+  }
+}
+```
+
+## 更安全的 round-aware 版本
+
+上面的版本是 entry-aware。更推荐做 round-aware，避免裁剪掉一个 round 的一半。
+
+实现思路：
+
+1. 根据 `roundId` 聚合 timeline item。
+2. 没有 `roundId` 的 message 独立成组。
+3. 从最旧的 group 开始裁。
+4. 如果 group 内存在 streaming reasoning / assistant 或 running tool，则整个 group 不裁。
+5. 至少保留尾部 `preserveTailEntries`。
+
+可以实现 helper：
+
+```ts
+private getTrimGroupId(id: string, entry: TimelineItem | undefined): string {
+  if (!entry) return `missing:${id}`;
+  if ('roundId' in entry) return `round:${entry.roundId}`;
+  return `entry:${id}`;
+}
+```
+
+再构建 group：
+
+```ts
+const groups: Array<{ groupId: string; ids: string[]; startIndex: number }> = [];
+const groupById = new Map<string, { groupId: string; ids: string[]; startIndex: number }>();
+
+for (let i = 0; i < hardCutoffIndex; i++) {
+  const id = this.order[i];
+  const groupId = this.getTrimGroupId(id, this.entries.get(id));
+  let group = groupById.get(groupId);
+  if (!group) {
+    group = { groupId, ids: [], startIndex: i };
+    groupById.set(groupId, group);
+    groups.push(group);
+  }
+  group.ids.push(id);
+}
+```
+
+判断 group 是否可裁：
+
+```ts
+private canTrimGroup(ids: string[]): boolean {
+  for (const id of ids) {
+    const entry = this.entries.get(id);
+    if (entry && !this.canTrimEntry(entry)) return false;
+  }
+  return true;
+}
+```
+
+然后按 group 删除。
+
+推荐第一版实现 round-aware，不要只按单条 entry 裁。
+
+## trim 调用时机
+
+在以下写入路径末尾调用：
+
+```ts
+appendMessage
+ensureTextPart
+upsertAssistantText
+upsertReasoning
+upsertTool
+upsertItem
+replaceAll
+mergeHydration
+```
+
+不要在 `appendPartDelta()` 每个 chunk 都 trim。流式每个 chunk 都 trim 会增加开销。
+
+建议方式：
+
+* 新增 `maybeTrimAfterStructuralChange()`。
+* 只在新增条目或全量替换后调用。
+* 对 `appendPartDelta()`、`setTextPart()`、`finalizePart()` 不调用 trim。
+
+示例：
+
+```ts
+private trimOptions: TranscriptTrimOptions = {
+  maxEntries: 1200,
+  preserveTailEntries: 300,
+};
+
+private maybeTrimAfterStructuralChange(): void {
+  this.trimToLimit(this.trimOptions);
+}
+```
+
+但要注意：`trimToLimit()` 内部会 `bump()`，如果外部方法也会 `bump()`，可能导致重复通知。
+
+更好的方式：
+
+```ts
+private trimToLimitInternal(options: TranscriptTrimOptions): number {
+  // 执行删除，但不 bump
+}
+
+private bumpAfterMutation(): void {
+  this.trimToLimitInternal(this.trimOptions);
+  this.bump();
+}
+```
+
+然后把新增结构的方法中原来的 `this.bump()` 改成 `this.bumpAfterMutation()`。
+
+第一版也可以接受重复 bump，但不优雅。
+
+## 不要裁剪 liveTouchedIds 的语义
+
+删除 entry 时必须同步：
+
+```ts
+this.liveTouchedIds.delete(id);
+this.entryRevision.delete(id);
+```
+
+否则即使 entries 已删，liveTouchedIds 和 entryRevision 也会继续增长。
+
+## 需要暴露设置入口
+
+可以先硬编码默认值。后续再从环境变量读取：
+
+```ts
+DEEPCODE_TUI_MAX_TRANSCRIPT_ENTRIES=1200
+DEEPCODE_TUI_PRESERVE_TAIL_ENTRIES=300
+```
+
+第一版不强制环境变量，避免改动过多。
+
+---
+
+# P3：DeepiMessages 渲染窗口化
+
+## 目标
+
+即使 store 内保留 1200 条，也不一定每次渲染全部。TUI 默认只渲染最近 N 条，避免 Ink 长列表 layout 卡顿。
+
+## 建议默认值
+
+```ts
+const DEFAULT_RENDER_WINDOW = 300;
+```
+
+第一版可以只做尾部窗口：
+
+```ts
+const visibleTimeline = timeline.length > DEFAULT_RENDER_WINDOW
+  ? timeline.slice(-DEFAULT_RENDER_WINDOW)
+  : timeline;
+```
+
+然后：
+
+```tsx
+const renderedItems = useMemo(() =>
+  visibleTimeline.map(item => <MessageBlock key={item.id} item={item} expanded={expanded} />),
+  [visibleTimeline, expanded]
+);
+```
+
+但要避免 `slice()` 每次 render 都创建新数组导致 memo 失效。建议：
+
+```tsx
+const visibleTimeline = useMemo(() => {
+  if (timeline.length <= DEFAULT_RENDER_WINDOW) return timeline;
+  return timeline.slice(-DEFAULT_RENDER_WINDOW);
+}, [timeline]);
+```
+
+再 map：
+
+```tsx
+const renderedItems = useMemo(() =>
+  visibleTimeline.map(item => <MessageBlock key={item.id} item={item} expanded={expanded} />),
+  [visibleTimeline, expanded]
+);
+```
+
+## 加隐藏历史提示
+
+当 timeline 被窗口化时，在顶部显示一行：
+
+```tsx
+{hiddenCount > 0 && (
+  <Box paddingX={1}>
+    <Text dimColor>{`… ${hiddenCount} older items hidden for TUI performance`}</Text>
+  </Box>
+)}
+```
+
+其中：
+
+```ts
+const hiddenCount = timeline.length - visibleTimeline.length;
+```
+
+不要把这行做成 warning，不要进入 bridge warnings；它只是 UI 提示。
+
+## 注意
+
+这不是完整虚拟列表，但对 TUI 足够有效。终端里完整虚拟列表成本较高，可以后续再做。
+
+如果用户需要查看完整历史，后续可以加快捷键：
 
 ```text
-No tools are available in this phase. Produce the Worker plan from the goal, previous report, previous review, and user instruction only.
+Ctrl+H: toggle full history
 ```
 
-我建议先用：
+第一版不强制做。先默认窗口化，保证长时间运行不卡。
 
-```text
-get_goal + list_dir
-```
+---
 
-如果还循环，再改成 no-tools。
+# P4：TranscriptReader cache 同步
 
-十二、不要这样修
+## 目标
 
-不要在 `runSupervisorAnalyse()` 里看到 `tools_completed` 就强行 `transition("worker_do")`。
+保证 store trim 后，reader 的 `itemCache` 能清理掉被裁掉的 id。
 
-原因：
+当前 `transcriptToTimeline()` 已经会删除 inactive cache id。只要 trim 后 store version 变化，reader 下次 getSnapshot 会重新投影并清理缓存。
 
-* `tools_completed` 只表示当前工具批次完成，不表示 Supervisor 已经生成 plan。
-* 如果强行转 Worker，可能拿不到有效 plan。
-* 正确方式是限制 Supervisor 在 analyse 阶段能调用的工具，让它自然快速 stop 并返回 plan。
+但建议补两个小改进。
 
-不要在 TUI bridge 层过滤 Supervisor 工具事件。
+## 增加 itemCache size 指标
 
-原因：
+已在 P0 提到。
 
-* TUI 只负责显示。
-* 即使 TUI 不显示，core 仍然会执行工具循环。
-* 必须从 `resolveEffectiveTools()` 源头减少 Supervisor 可见工具。
+## trim 后无需手动 invalidate
 
-不要只改 prompt，不改工具过滤。
+不要在每次 trim 后都调用 `reader.invalidate()`，否则会失去结构共享优势。
 
-原因：
+只有全量 replace/session 切换时才 invalidate。普通 trim 让 `transcriptToTimeline()` 自己清理 cache 即可。
 
-* 本地/小模型经常不稳定，prompt 禁止不等于工具不可用。
-* 工具权限必须由代码 enforce。
+---
 
-十三、测试方案
+# P5：优化 timeline-adapter 的热点
 
-新增或修改测试，至少覆盖以下情况。
-
-测试 1：Supervisor analyse 工具过滤
-
-输入：
+`timelineEntryEquals()` 里 tool args 比较使用：
 
 ```ts
-resolveEffectiveTools({
-  registeredTools,
-  role: "supervisor",
-  mode: "loop",
-  workflowPhase: "supervisor_analyse",
-})
+JSON.stringify(a.tool.args) === JSON.stringify(b.tool.args)
+```
+
+当工具 args 很大、tool 很多时，这会成为热点。
+
+第一版可以先不改。若 profile 显示这里明显耗时，再做优化。
+
+可选优化：
+
+1. 在 `ToolStatus` 中增加 `argsSummary` 或 `argsHash`。
+2. 或在 `TranscriptStore` 写入 tool 时把 args 结构冻结/复用，减少深比较需求。
+3. 或只比较 object reference，再在 store 写入时保证 args 更新时换引用。
+
+不要现在大改。先做 trim 和 render window。
+
+---
+
+# P6：测试方案
+
+## 1. TranscriptStore trim 测试
+
+新增测试文件，例如：
+
+```text
+packages/tui/src/store/transcript-store.test.ts
+```
+
+按项目现有测试结构放置。
+
+测试场景：
+
+### 测试 1：超过 maxEntries 后会裁剪旧条目
+
+构造 20 个 message item，设置：
+
+```ts
+maxEntries: 10
+preserveTailEntries: 5
 ```
 
 断言：
 
-* 包含：`get_goal`
-* 包含或不包含：`list_dir`，取决于你采用 shallow-plan 还是 no-tools
-* 不包含：`read_file`
-* 不包含：`grep`
-* 不包含：`update_goal`
-* 不包含：`bash`
-* 不包含：`edit`
-* 不包含：`write_file`
-* 不包含：`AgentTool`
-* 不包含：`send_message`
-* 不包含：`followup_task`
-* 不包含：`read_mailbox`
-
-测试 2：Supervisor check 工具过滤
-
-输入：
-
-```ts
-resolveEffectiveTools({
-  registeredTools,
-  role: "supervisor",
-  mode: "loop",
-  workflowPhase: "supervisor_check",
-})
+```text
+entry count <= 10
+旧 id 被删除
+新 id 保留
+entries / order 数量一致
 ```
 
-断言：
+### 测试 2：同步清理 liveTouchedIds 和 entryRevision
 
-* 包含：`get_goal`
-* 包含：`list_dir`
-* 包含：`read_file`
-* 包含：`grep`
-* 不包含：`bash`
-* 不包含：`edit`
-* 不包含：`write_file`
-* 不包含：`AgentTool`
-* 不包含：`send_message`
-* 不包含：`followup_task`
-* 不包含：`read_mailbox`
+append 20 个条目后 trim。
 
-测试 3：Worker loop 不受影响
-
-输入：
+断言被删除 id：
 
 ```ts
-resolveEffectiveTools({
-  registeredTools,
-  role: "worker",
-  mode: "loop",
-  workflowPhase: "worker_do",
-  agentToolNames,
-})
+entries.has(id) === false
+liveTouchedIds.has(id) === false
+entryRevision.has(id) === false
 ```
 
-断言：
+如果私有字段不好测，可以通过新增 debug stats 检查 size 不超过 entry count。
 
-* Worker 的工程工具仍按 agent config 正常可用。
-* goal/mailbox orchestration 工具仍被过滤。
+### 测试 3：不裁剪 streaming reasoning
 
-测试 4：Coordinator phase 传递
+构造一个旧的 reasoning：
 
-mock `AgentRuntime.submit`，断言调用参数：
+```ts
+{
+  kind: 'reasoning',
+  isStreaming: true
+}
+```
+
+即使它在头部，也不能被 trim 删除。
+
+### 测试 4：不裁剪 running tool
+
+构造：
+
+```ts
+{
+  kind: 'tool',
+  tool: { status: 'running' }
+}
+```
+
+断言 trim 后仍保留。
+
+### 测试 5：round-aware 裁剪不会留下半个 round
+
+构造一个 round：
 
 ```text
-runSupervisorAnalyse -> submit(input, "loop", "supervisor_analyse")
-runWorkerDo -> submit(input, "loop", "worker_do")
-runWorkerReport -> submit(input, "loop", "worker_report")
-runSupervisorCheck -> submit(input, "loop", "supervisor_check")
-runSupervisorIntervene -> submit(input, "loop", "supervisor_intervene")
+assistant_text round-1
+reasoning round-1
+tool round-1
 ```
 
-测试 5：Plan 阶段不会拿 read_file/grep
+如果 round 被裁，应全部删除；如果保留，应全部保留。
 
-构造一个 fake registeredTools，包含 `read_file` 和 `grep`，让 Supervisor analyse submit 走到 `resolveEffectiveTools()`，确认 toolSpecs 里没有它们。
+不要出现只删除 reasoning、保留 tool 的情况。
 
-十四、验收标准
+## 2. DeepiMessages 窗口化测试
+
+如果已有 React/Ink 测试环境，可以测：
+
+```text
+timeline length = 500
+render window = 300
+实际 MessageBlock 数量 = 300
+顶部显示 hidden count = 200
+```
+
+如果现有测试不方便，至少把窗口化逻辑提取成纯函数：
+
+```ts
+export function getVisibleTimeline<T>(timeline: T[], windowSize: number): {
+  visible: T[];
+  hiddenCount: number;
+}
+```
+
+然后测这个纯函数。
+
+## 3. Bridge queue/warnings 测试
+
+测试 warnings 超过 100 后只保留最后 100 条。
+
+测试 messageQueue 超过 50 后只保留最后 50 条，并产生 queue full warning。
+
+---
+
+# P7：手动验收
 
 运行：
 
 ```bash
 bun run typecheck
-```
-
-再运行相关测试：
-
-```bash
 bun test
 ```
 
-如果没有完整测试命令，至少运行 core 包测试和类型检查。
+然后手动测试：
 
-手工验证：
+## 短会话
 
-1. 启动 loop workflow。
-2. 输入一个需要代码执行的目标。
-3. 观察 plan 阶段：
+1. 普通聊天正常显示。
+2. reasoning 流式显示正常。
+3. tool running/done 显示正常。
+4. worker/supervisor role 显示正常。
+5. Ctrl+O 展开/折叠 reasoning 正常。
 
-   * Supervisor 应该快速产出 plan。
-   * Supervisor 不应反复 read_file / grep。
-   * Supervisor 不应自己执行 Worker 工作。
-4. 观察 phase：
+## 长会话
 
-   * plan 完成后应进入 worker_do。
-   * worker_do 中 Worker 开始实际读取/修改/验证。
-5. 观察 check 阶段：
+构造长 workflow 或模拟大量 timeline item。
 
-   * Supervisor 可以 read_file / grep 验证 Worker 报告。
-   * Supervisor 不应 edit/write/bash。
-6. 若 plan 阶段仍反复 list_dir：
+检查：
 
-   * 把 `SUPERVISOR_LOOP_ANALYSE_TOOLS` 改成空集合。
-   * 把 analyse 阶段 `phaseMaxTurns` 改成 1。
+1. TUI 不再随时间明显变卡。
+2. 最近消息始终显示。
+3. 正在 streaming 的 reasoning 不会消失。
+4. running tool 不会被裁掉。
+5. Worker/Supervisor 的最近 reasoning 不会被新 reasoning 覆盖。
+6. 顶部能看到“older items hidden”的提示。
+7. `TranscriptStore.getStats()` 中 entries/order 不再无限增长。
+8. `TranscriptReader.getStats()` 中 itemCache 不再无限增长。
+9. warnings 长度不会超过上限。
+10. messageQueue 长度不会超过上限。
 
-十五、建议提交信息
+---
+
+# P8：建议修改顺序
+
+请按以下顺序做，降低风险：
 
 ```text
-fix(core): scope supervisor loop tools by workflow phase
+1. 加 stats，不改变行为
+2. 加 warnings/messageQueue 上限
+3. 加 TranscriptStore trim，但先只在 append/upsert 新条目后触发
+4. 加 DeepiMessages render window
+5. 补测试
+6. 跑 typecheck / test
+7. 手动长会话回归
+```
+
+不要一上来重构整个 TUI store。不要改 core engine 上下文裁剪。不要把 session 持久化和 UI 裁剪混在一起。
+
+---
+
+# P9：建议提交信息
+
+如果一次性完成：
+
+```text
+fix(tui): bound transcript history and render window for long sessions
+```
+
+如果拆成多次提交：
+
+```text
+chore(tui): add transcript runtime stats
+fix(tui): bound bridge warning and message queues
+fix(tui): trim transcript store by safe timeline groups
+perf(tui): render bounded recent timeline window
+test(tui): cover transcript trimming behavior
 ```
