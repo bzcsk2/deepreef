@@ -980,41 +980,6 @@ export function createBridge(
     let toolOutputs = new Map<string, string>();
     let assistantText = '';
     let reasoningText = '';
-    let wfToolSequence = 0;
-    let activeWorkflowToolKeys = new Map<number, string>();
-    let activeWorkflowToolKeysByBase = new Map<string, string>();
-
-    const beginWorkflowToolKey = (index: number | undefined, name: string | undefined): string => {
-      const base = fallbackToolKey(index, name);
-      const key = `${base}_${++wfToolSequence}`;
-      if (index !== undefined) {
-        activeWorkflowToolKeys.set(index, key);
-      } else {
-        activeWorkflowToolKeysByBase.set(base, key);
-      }
-      return key;
-    };
-
-    const resolveWorkflowToolKey = (index: number | undefined, name: string | undefined): string => {
-      const base = fallbackToolKey(index, name);
-      if (index !== undefined) {
-        const existing = activeWorkflowToolKeys.get(index);
-        if (existing) return existing;
-        return beginWorkflowToolKey(index, name);
-      }
-      const existing = activeWorkflowToolKeysByBase.get(base);
-      if (existing) return existing;
-      return beginWorkflowToolKey(index, name);
-    };
-
-    const clearWorkflowToolKey = (index: number | undefined, name: string | undefined): void => {
-      const base = fallbackToolKey(index, name);
-      if (index !== undefined) {
-        activeWorkflowToolKeys.delete(index);
-      } else {
-        activeWorkflowToolKeysByBase.delete(base);
-      }
-    };
 
     const finalizeWorkflowRound = () => {
       if (!wfRoundId) return;
@@ -1115,9 +1080,6 @@ export function createBridge(
             toolItemIds = new Map<string, string>();
             toolCallArgs = new Map<number, string>();
             toolOutputs = new Map<string, string>();
-            wfToolSequence = 0;
-            activeWorkflowToolKeys = new Map<number, string>();
-            activeWorkflowToolKeysByBase = new Map<string, string>();
           }
           if (wfEvent.type === 'completed') {
             onPhaseChange?.('completed', 0, 'completed');
@@ -1178,7 +1140,7 @@ export function createBridge(
               }
               break;
             case 'tool_start': {
-              const key = beginWorkflowToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
+              const key = fallbackToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
               upsertWorkflowTool(key, {
                 name: loopEvent.toolName ?? 'unknown',
                 status: 'running',
@@ -1189,13 +1151,10 @@ export function createBridge(
               break;
             }
             case 'tool_progress': {
-              const key = resolveWorkflowToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
+              const key = fallbackToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
               if (loopEvent.content === 'done') {
                 upsertWorkflowTool(key, { status: 'done' });
-                clearWorkflowToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
-                break;
-              }
-              if (loopEvent.content && loopEvent.content !== 'running') {
+              } else if (loopEvent.content && loopEvent.content !== 'running') {
                 const previous = toolOutputs.get(key) ?? '';
                 const output = previous + (previous ? '\n' : '') + loopEvent.content;
                 toolOutputs.set(key, output);
@@ -1204,13 +1163,12 @@ export function createBridge(
               break;
             }
             case 'tool': {
-              const key = resolveWorkflowToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
+              const key = fallbackToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
               upsertWorkflowTool(key, {
                 name: loopEvent.toolName ?? 'tool',
                 status: loopEvent.severity === 'error' ? 'error' : 'done',
                 output: loopEvent.content ?? '',
               });
-              toolOutputs.set(key, loopEvent.content ?? '');
               break;
             }
             case 'error': {
