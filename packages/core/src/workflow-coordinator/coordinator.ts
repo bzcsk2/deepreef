@@ -18,6 +18,7 @@ import type { AgentCommController } from "../agent-comm/controller.js"
 import type { GoalStore } from "../goal/store.js"
 import type { Mailbox } from "../agent-comm/mailbox.js"
 import { AgentCommController as AgentCommControllerImpl } from "../agent-comm/controller.js"
+import { buildContinuationPrompt, buildBudgetLimitPrompt, buildUsageLimitPrompt } from "../goal/steering.js"
 
 export interface StartWorkflowOptions {
   goal: string
@@ -367,6 +368,22 @@ export class WorkflowCoordinator {
     yield* this.drainEvents()
   }
 
+  private buildSteeringPrompt(): string {
+    if (!this.goalStore || !this.state) return ""
+    const goal = this.goalStore.getGoal(this.state.workflowId)
+    if (!goal) return ""
+    if (goal.status === "budget_limited") {
+      return "\n\n" + buildBudgetLimitPrompt(goal)
+    }
+    if (goal.status === "usage_limited") {
+      return "\n\n" + buildUsageLimitPrompt()
+    }
+    if (goal.status === "active") {
+      return "\n\n" + buildContinuationPrompt(goal, this.state.iteration)
+    }
+    return ""
+  }
+
   private async *runSupervisorAnalyse(): AsyncGenerator<WorkflowEvent> {
     const previousRound = this.state!.supervisorPlan || this.state!.workerReport || this.state!.supervisorFeedback
       ? `\n\nPrevious Plan:\n${this.state!.supervisorPlan ?? ""}\n\nPrevious Worker Report:\n${this.state!.workerReport ?? ""}\n\nYour Previous Review:\n${this.state!.supervisorFeedback ?? ""}`
@@ -374,7 +391,8 @@ export class WorkflowCoordinator {
     const resumeInstruction = this.state!.resumeInstruction
       ? `\n\nUser instruction after interrupt:\n${this.state!.resumeInstruction}`
       : ""
-    const supervisorInput = `Analyse the following goal and create a plan for iteration ${this.state!.iteration}:\n\nGoal: ${this.state!.goal}${previousRound}${resumeInstruction}\n\nProvide an updated structured plan with concrete next steps, constraints, and risks. Incorporate the previous Worker report, review, and user instruction when present.`
+    const steering = this.buildSteeringPrompt()
+    const supervisorInput = `Analyse the following goal and create a plan for iteration ${this.state!.iteration}:\n\nGoal: ${this.state!.goal}${previousRound}${resumeInstruction}${steering}\n\nProvide an updated structured plan with concrete next steps, constraints, and risks. Incorporate the previous Worker report, review, and user instruction when present.`
 
     let errorMessage = ""
     // SFR-10: 使用 "loop" mode
@@ -472,7 +490,8 @@ export class WorkflowCoordinator {
       }
     }
 
-    const supervisorInput = `Review the following worker report and decide next action:\n\nPlan: ${this.state!.supervisorPlan ?? ""}\n\nReport: ${reportedContent}\n\nDecide: continue, revise, approve, ask_user, or blocked`
+    const steering = this.buildSteeringPrompt()
+    const supervisorInput = `Review the following worker report and decide next action:\n\nPlan: ${this.state!.supervisorPlan ?? ""}\n\nReport: ${reportedContent}${steering}\n\nDecide: continue, revise, approve, ask_user, or blocked`
 
     // SFR-10: 使用 "loop" mode
     for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop")) {
