@@ -36,6 +36,17 @@ export const WorkerReportSchema = z.object({
   requestsSupervisor: z.boolean(),
 })
 
+export const CompletionAuditItemSchema = z.object({
+  requirement: z.string(),
+  status: z.enum(["proven", "incomplete", "contradicted", "missing_evidence", "not_applicable"]),
+  evidence: z.array(z.string()),
+})
+
+export const BlockerAuditSchema = z.object({
+  blocker: z.string(),
+  canMakeProgress: z.boolean(),
+}).optional()
+
 export const SupervisorDecisionSchema = z.object({
   version: z.literal(1),
   workflowId: z.string(),
@@ -48,11 +59,20 @@ export const SupervisorDecisionSchema = z.object({
   verification: z.array(z.string()),
   revisedGoal: z.string().optional(),
   question: z.string().optional(),
+  completionAudit: z.array(CompletionAuditItemSchema).optional(),
+  blockerAudit: BlockerAuditSchema,
 })
 
 export type ParsedSupervisorPlan = z.infer<typeof SupervisorPlanSchema>
 export type ParsedWorkerReport = z.infer<typeof WorkerReportSchema>
 export type ParsedSupervisorDecision = z.infer<typeof SupervisorDecisionSchema>
+
+export interface BlockerAuditState {
+  normalizedBlocker: string
+  consecutiveTurns: number
+  firstSeenAt: number
+  lastSeenAt: number
+}
 
 function extractFencedJson(text: string): string | null {
   const fenceMatch = text.match(/```(?:json)?\s*\n([\s\S]*?)```/)

@@ -35,6 +35,7 @@ describe("CL-52: slash command routing helpers", () => {
     expect(parseSlashCommand("/goal clear")).toEqual({ name: "goal", subcommand: "clear" })
     expect(parseSlashCommand("/goal budget 50000")).toEqual({ name: "goal", subcommand: "budget", arg: "50000" })
     expect(parseSlashCommand("/goal no-budget")).toEqual({ name: "goal", subcommand: "no-budget" })
+    expect(parseSlashCommand("/goal edit fix the tests")).toEqual({ name: "goal", subcommand: "edit", arg: "fix the tests" })
   })
 
   it("parses and validates thinking modes", () => {

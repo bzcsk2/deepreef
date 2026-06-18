@@ -6,6 +6,10 @@ import { buildSystemPrompt } from "@deepreef/core"
 import { DualAgentRuntime } from "@deepreef/core/dual-agent-runtime/dual-runtime.js"
 import { WorkflowCoordinator } from "@deepreef/core/workflow-coordinator/coordinator.js"
 import { QuestionService } from "@deepreef/core/question/service.js"
+import { GoalStore } from "@deepreef/core/goal/store.js"
+import { Mailbox } from "@deepreef/core/agent-comm/mailbox.js"
+import { createGoalTools } from "@deepreef/core/goal/tools.js"
+import { createMailboxTools } from "@deepreef/core/agent-comm/tools.js"
 import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend, createAgentToolTool, createAskUserQuestionTool, createReadFileTool, createGrepTool, createListDirTool, createTodoWriteTool } from "@deepreef/tools"
 import { McpHost, createListMcpResourcesTool, createReadMcpResourceTool, createMcpAuthTool, createListMcpToolsTool, createCallMcpToolTool, setMcpHost } from "@deepreef/mcp"
 import { PluginRuntime, pluginToolsToAgentTools } from "@deepreef/plugin"
@@ -322,15 +326,38 @@ async function main(): Promise<void> {
     }
 
     // SFR-60: Coordinator 阶段事件写入标准输出和进程诊断日志
+    const goalStore = new GoalStore()
+    const mailbox = new Mailbox()
     const workflowCoordinator = new WorkflowCoordinator({
       runtime: dualRuntime,
       questionService,
+      goalStore,
+      mailbox,
       onEvent: (event) => {
         if (event.type === 'phase_change' || event.type === 'blocked' || event.type === 'completed' || event.type === 'failed') {
           process.stderr.write(`[workflow] ${event.type} phase=${event.phase ?? ''} iteration=${event.iteration ?? 0}\n`)
         }
       },
     })
+
+    // Phase D+H: 注册动态 governance 工具（不固定 threadId/controller）
+    for (const tool of createGoalTools({
+      getGoalStore: () => workflowCoordinator.getGoalStore()!,
+      getThreadId: () => workflowCoordinator.getCurrentThreadId(),
+    })) engine.registerTool(tool)
+
+    for (const tool of createMailboxTools({
+      getController: () => workflowCoordinator.getCurrentAgentComm(),
+    }, "worker")) engine.registerTool(tool)
+
+    for (const tool of createMailboxTools({
+      getController: () => workflowCoordinator.getCurrentAgentComm(),
+    }, "supervisor")) supervisorEngine.registerTool(tool)
+
+    for (const tool of createGoalTools({
+      getGoalStore: () => workflowCoordinator.getGoalStore()!,
+      getThreadId: () => workflowCoordinator.getCurrentThreadId(),
+    })) supervisorEngine.registerTool(tool)
 
     await runTUIMode(
       engine,

@@ -151,12 +151,30 @@ describe("GoalStore", () => {
     expect(updated.objective).toBe("New")
   })
 
-  it("clearGoal clears the goal file", () => {
+  it("clearGoal deletes the goal file", () => {
     store.createGoal(threadId, "Test")
+    expect(store.getGoal(threadId)).not.toBeNull()
     store.clearGoal(threadId)
-    const path = resolve(TEST_DIR, threadId, "goal.json")
-    const content = JSON.parse(readFileSync(path, "utf-8"))
-    expect(content.cleared).toBe(true)
+    expect(store.getGoal(threadId)).toBeNull()
+  })
+
+  it("clearGoal returns false for non-existent thread", () => {
+    expect(store.clearGoal("nonexistent")).toBe(false)
+  })
+
+  it("setTokenBudget updates budget on active goal", () => {
+    store.createGoal(threadId, "Test")
+    const updated = store.setTokenBudget(threadId, 50000)
+    expect(updated.tokenBudget).toBe(50000)
+    const readBack = store.getGoal(threadId)
+    expect(readBack!.tokenBudget).toBe(50000)
+  })
+
+  it("setTokenBudget clears budget when undefined", () => {
+    store.createGoal(threadId, "Test", 50000)
+    store.setTokenBudget(threadId, undefined)
+    const readBack = store.getGoal(threadId)
+    expect(readBack!.tokenBudget).toBeUndefined()
   })
 
   it("accountProgress accumulates tokens and time", () => {

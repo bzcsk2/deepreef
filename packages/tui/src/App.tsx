@@ -674,37 +674,54 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       const goalStore = new GoalStore();
       const goal = goalStore.getGoal(sessionId);
       if (command.objective) {
-        goalStore.createGoal(sessionId, command.objective);
-        appendMessage({
-          role: 'assistant' as const,
-          content: `Goal set: ${command.objective}`,
-        });
+        try {
+          goalStore.createGoal(sessionId, command.objective);
+          appendMessage({ role: 'assistant' as const, content: `Goal set: ${command.objective}` });
+        } catch {
+          // If there's an active goal, replace it
+          goalStore.replaceGoal(sessionId, command.objective);
+          appendMessage({ role: 'assistant' as const, content: `Goal replaced: ${command.objective}` });
+        }
+      } else if (command.subcommand === 'edit' && command.arg) {
+        if (goal) {
+          goalStore.setTokenBudget(sessionId, goal.tokenBudget);
+          const updated = goalStore.getGoal(sessionId);
+          if (updated) {
+            updated.objective = command.arg;
+            goalStore.replaceGoal(sessionId, command.arg, goal.tokenBudget);
+          }
+          appendMessage({ role: 'assistant' as const, content: `Goal objective updated: ${command.arg}` });
+        } else {
+          appendMessage({ role: 'assistant' as const, content: 'No active goal to edit.' });
+        }
       } else if (command.subcommand === 'edit') {
-        appendMessage({
-          role: 'assistant' as const,
-          content: 'To edit the goal objective: reply with your updated objective text.',
-        });
-        // A future update will wire the prompt overlay for inline editing.
+        appendMessage({ role: 'assistant' as const, content: 'Usage: /goal edit <new objective>' });
       } else if (command.subcommand === 'pause') {
-        if (goal) { goalStore.updateGoal(sessionId, { status: 'paused' }); }
+        if (goal) { goalStore.systemSetStatus(sessionId, 'paused'); }
         appendMessage({ role: 'assistant' as const, content: goal ? 'Goal paused.' : 'No active goal.' });
       } else if (command.subcommand === 'resume') {
-        if (goal) { goalStore.updateGoal(sessionId, { status: 'active' }); }
+        if (goal) { goalStore.systemSetStatus(sessionId, 'active'); }
         appendMessage({ role: 'assistant' as const, content: goal ? 'Goal resumed.' : 'No active goal.' });
       } else if (command.subcommand === 'clear') {
-        if (goal) { goalStore.updateGoal(sessionId, { status: 'complete' }); }
+        if (goal) { goalStore.clearGoal(sessionId); }
         appendMessage({ role: 'assistant' as const, content: goal ? 'Goal cleared.' : 'No active goal.' });
       } else if (command.subcommand === 'budget' && command.arg) {
         const budget = parseInt(command.arg, 10);
         if (isNaN(budget) || budget <= 0) {
           appendMessage({ role: 'assistant' as const, content: 'Invalid budget. Usage: /goal budget <number>' });
-        } else {
-          goalStore.createGoal(sessionId, goal?.objective ?? 'New goal', budget);
+        } else if (goal) {
+          goalStore.setTokenBudget(sessionId, budget);
           appendMessage({ role: 'assistant' as const, content: `Token budget set to: ${budget}` });
+        } else {
+          appendMessage({ role: 'assistant' as const, content: 'No active goal. Create one first with /goal <objective>.' });
         }
       } else if (command.subcommand === 'no-budget') {
-        goalStore.createGoal(sessionId, goal?.objective ?? 'New goal', undefined);
-        appendMessage({ role: 'assistant' as const, content: 'Token budget removed (unlimited).' });
+        if (goal) {
+          goalStore.setTokenBudget(sessionId, undefined);
+          appendMessage({ role: 'assistant' as const, content: 'Token budget removed (unlimited).' });
+        } else {
+          appendMessage({ role: 'assistant' as const, content: 'No active goal.' });
+        }
       } else {
         // /goal — show current goal status
         if (goal) {
@@ -773,6 +790,10 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           return;
         }
         workflowRunningRef.current = true;
+        // Phase B: loop start = goal creation
+        const goalStore = new GoalStore();
+        const sessionId = engineRef.current.getSessionId();
+        try { goalStore.createGoal(sessionId, goal); } catch { goalStore.replaceGoal(sessionId, goal); }
         const workflowId = 'wf-' + Date.now();
         setWorkflowLifecycle({ status: 'running', workflowId });
         setWorkflowState({

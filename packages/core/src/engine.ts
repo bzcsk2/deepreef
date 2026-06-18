@@ -680,10 +680,20 @@ Proactively call AgentTool whenever the task requires codebase exploration, impl
 Do not wait for the user to explicitly ask you to delegate. Keep only planning, synthesis, review, and user communication for yourself.
 Give each Worker a complete, self-contained task with context, constraints, relevant files, and expected output.`
       : role === "supervisor" && mode === "loop"
-        ? `## Loop Mode
-Analyze, plan, and review the Worker report supplied by the workflow coordinator.
-Do not call tools or modify files during this workflow turn.`
-        : ""
+        ? `## Loop Mode — Supervisor
+You are the Supervisor for the active loop goal.
+You may use only governance tools: get_goal, update_goal, send_message, followup_task, read_mailbox.
+Do NOT use engineering tools such as bash/edit/write/apply_patch/AgentTool.
+Use update_goal only for complete or strictly blocked (same blocker 3+ turns).
+Do NOT complete without a requirement-by-requirement completion audit with evidence.`
+        : role === "worker" && mode === "loop"
+          ? `## Loop Mode — Worker
+You are the Worker for the active loop goal.
+Read mailbox tasks from Supervisor via read_mailbox.
+Use engineering tools to execute the assigned tasks.
+Send reports and blockers to Supervisor via send_message.
+Do NOT update_goal or change goal status.`
+          : ""
     const layers = [baseLayer, roleLayer, modeLayer, activeSkillsPrompt].filter(Boolean)
     const systemPrompt = layers.join("\n\n")
     this.ctx.prefix.build(systemPrompt)

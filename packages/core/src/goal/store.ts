@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs"
 import { resolve, dirname } from "node:path"
 import { randomUUID } from "node:crypto"
 import type { ThreadGoal, GoalStatus } from "./types.js"
@@ -100,11 +100,20 @@ export class GoalStore {
     return goal
   }
 
-  clearGoal(threadId: string): void {
+  clearGoal(threadId: string): boolean {
     const path = this.goalPath(threadId)
-    if (existsSync(path)) {
-      writeFileSync(path, JSON.stringify({ cleared: true, clearedAt: Date.now() }), "utf-8")
-    }
+    if (!existsSync(path)) return false
+    rmSync(path, { force: true })
+    return true
+  }
+
+  setTokenBudget(threadId: string, tokenBudget: number | undefined): ThreadGoal {
+    const goal = this.getGoal(threadId)
+    if (!goal) throw new Error(`No goal found for thread ${threadId}`)
+    goal.tokenBudget = tokenBudget
+    goal.updatedAt = Date.now()
+    this.writeGoal(goal)
+    return goal
   }
 
   accountProgress(threadId: string, tokensUsed: number, timeUsedSeconds: number): ThreadGoal {

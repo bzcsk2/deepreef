@@ -13,9 +13,11 @@ import { DEFAULT_WORKFLOW_CONFIG } from "./types.js"
 import type { DualAgentRuntime } from "../dual-agent-runtime/dual-runtime.js"
 import type { QuestionService } from "../question/service.js"
 import type { LoopEvent } from "../interface.js"
-import { parseSupervisorDecision, parseSupervisorPlan } from "./structured-protocol.js"
+import { parseSupervisorDecision, parseSupervisorPlan, type BlockerAuditState } from "./structured-protocol.js"
 import type { AgentCommController } from "../agent-comm/controller.js"
 import type { GoalStore } from "../goal/store.js"
+import type { Mailbox } from "../agent-comm/mailbox.js"
+import { AgentCommController as AgentCommControllerImpl } from "../agent-comm/controller.js"
 
 export interface StartWorkflowOptions {
   goal: string
@@ -31,6 +33,7 @@ export interface WorkflowCoordinatorOptions {
   questionService?: QuestionService
   agentComm?: AgentCommController
   goalStore?: GoalStore
+  mailbox?: Mailbox
 }
 
 export class WorkflowCoordinator {
@@ -43,6 +46,8 @@ export class WorkflowCoordinator {
   private pendingEvents: WorkflowEvent[] = []
   private agentComm?: AgentCommController
   private goalStore?: GoalStore
+  private mailbox?: Mailbox
+  private blockerAuditState: BlockerAuditState | null = null
 
   constructor(options: WorkflowCoordinatorOptions = {}) {
     this.config = { ...DEFAULT_WORKFLOW_CONFIG, ...options.config }
@@ -51,6 +56,36 @@ export class WorkflowCoordinator {
     this.questionService = options.questionService
     this.agentComm = options.agentComm
     this.goalStore = options.goalStore
+    this.mailbox = options.mailbox
+  }
+
+  getCurrentGoal(): ReturnType<GoalStore["getGoal"]> {
+    if (!this.goalStore || !this.state) return null
+    return this.goalStore.getGoal(this.state.workflowId)
+  }
+
+  getGoalStore(): GoalStore | undefined {
+    return this.goalStore
+  }
+
+  getCurrentThreadId(): string {
+    return this.state?.workflowId ?? ""
+  }
+
+  getCurrentAgentComm(): AgentCommController | null {
+    return this.getOrCreateController()
+  }
+
+  private getOrCreateController(): AgentCommController | null {
+    if (this.agentComm) return this.agentComm
+    if (!this.mailbox || !this.state) return null
+    const goal = this.goalStore?.getGoal(this.state.workflowId)
+    return new AgentCommControllerImpl({
+      threadId: this.state.workflowId,
+      workflowId: this.state.workflowId,
+      goalId: goal?.goalId ?? "no-goal",
+      iteration: this.state.iteration,
+    }, this.mailbox)
   }
 
   getState(): WorkflowLoopState | null {
@@ -232,6 +267,13 @@ export class WorkflowCoordinator {
     return true
   }
 
+  private goalShouldContinue(): boolean {
+    if (!this.goalStore) return true // no goal tracking, use legacy maxRounds
+    const goal = this.goalStore.getGoal(this.state!.workflowId)
+    if (!goal) return false
+    return goal.status === "active" || goal.status === "blocked"
+  }
+
   canContinue(): boolean {
     if (!this.state) {
       return false
@@ -243,6 +285,11 @@ export class WorkflowCoordinator {
 
     if (this.state.currentPhase === "waiting_user") {
       return false
+    }
+
+    // Phase G: continuation is goal-driven when goalStore is present
+    if (this.goalStore) {
+      if (!this.goalShouldContinue()) return false
     }
 
     if (this.state.currentPhase === "supervisor_analyse") {
@@ -303,10 +350,16 @@ export class WorkflowCoordinator {
       yield* this.drainEvents()
     }
 
-    // If we exited the loop without finishing, distinguish interrupt from max rounds
+    // If we exited the loop without finishing
     if (this.state && !this.isFinished()) {
       if (this.abortController?.signal.aborted) {
         this.transition("blocked", "Interrupted by user")
+      } else if (this.goalStore) {
+        const goal = this.goalStore.getGoal(this.state.workflowId)
+        if (goal?.status === "budget_limited" || goal?.status === "usage_limited" || goal?.status === "paused") {
+          this.transition("blocked", `Goal is ${goal.status}`)
+        }
+        // Active goal: just stop the generator, let caller decide to continue
       } else {
         this.transition("blocked", "Max rounds reached")
       }
@@ -340,8 +393,9 @@ export class WorkflowCoordinator {
     this.state!.resumeInstruction = undefined
 
     // Mailbox: write plan as task to Worker
-    if (this.agentComm) {
-      this.agentComm.followupTask("supervisor", plan)
+    const ctrl = this.getOrCreateController()
+    if (ctrl) {
+      ctrl.followupTask("supervisor", plan)
     }
 
     this.transition("worker_do")
@@ -350,11 +404,12 @@ export class WorkflowCoordinator {
   private async *runWorkerDo(): AsyncGenerator<WorkflowEvent> {
     // Mailbox: read pending task from Supervisor
     let taskContent = ""
-    if (this.agentComm) {
-      const pendingTasks = this.agentComm.readMailbox({ to: "worker", unreadOnly: true, limit: 1 })
+    const ctrl = this.getOrCreateController()
+    if (ctrl) {
+      const pendingTasks = ctrl.readMailbox({ to: "worker", unreadOnly: true, limit: 1 })
       if (pendingTasks.length > 0) {
         taskContent = pendingTasks[0].content
-        this.agentComm.markRead(pendingTasks[0].id)
+        ctrl.markRead(pendingTasks[0].id)
       }
     }
 
@@ -397,8 +452,9 @@ export class WorkflowCoordinator {
     this.setWorkerReport(report)
 
     // Mailbox: write report to Supervisor
-    if (this.agentComm) {
-      this.agentComm.sendMessage("worker", "supervisor", "report", report)
+    const ctrl = this.getOrCreateController()
+    if (ctrl) {
+      ctrl.sendMessage("worker", "supervisor", "report", report)
     }
 
     this.transition("supervisor_check")
@@ -407,11 +463,12 @@ export class WorkflowCoordinator {
   private async *runSupervisorCheck(): AsyncGenerator<WorkflowEvent> {
     // Mailbox: read pending report from Worker
     let reportedContent = this.state!.workerReport ?? ""
-    if (this.agentComm) {
-      const pendingReports = this.agentComm.readMailbox({ to: "supervisor", unreadOnly: true, limit: 1 })
+    const ctrl = this.getOrCreateController()
+    if (ctrl) {
+      const pendingReports = ctrl.readMailbox({ to: "supervisor", unreadOnly: true, limit: 1 })
       if (pendingReports.length > 0) {
         reportedContent = pendingReports[0].content
-        this.agentComm.markRead(pendingReports[0].id)
+        ctrl.markRead(pendingReports[0].id)
       }
     }
 
@@ -450,27 +507,78 @@ export class WorkflowCoordinator {
     this.state!.supervisorFeedback = response
     this.state!.updatedAt = Date.now()
 
+    // Phase F: enforce audit gates
     if (decision === "approve") {
-      if (this.goalStore) {
-        try {
-          this.goalStore.updateGoal(this.state!.workflowId, { status: "complete" })
-        } catch {
-          // Goal might not exist, non-blocking
+      // Require structured completionAudit
+      if (confidence === "low") {
+        // Legacy approve cannot complete
+        decision = "continue"
+      } else if (parsed?.decision.completionAudit && parsed.decision.completionAudit.length > 0) {
+        const allProven = parsed.decision.completionAudit.every(
+          a => a.status === "proven" || a.status === "not_applicable"
+        )
+        const allHaveEvidence = parsed.decision.completionAudit
+          .filter(a => a.status === "proven")
+          .every(a => a.evidence.length > 0)
+        if (allProven && allHaveEvidence) {
+          if (this.goalStore) {
+            try {
+              this.goalStore.updateGoal(this.state!.workflowId, { status: "complete" })
+            } catch { /* non-blocking */}
+          }
+          this.transition("completed")
+        } else {
+          decision = "continue"
         }
+      } else {
+        decision = "continue"
       }
-      this.transition("completed")
+      if (decision === "continue") {
+        this.transition("supervisor_analyse")
+      }
     } else if (decision === "ask_user") {
       const question = this.extractQuestion(response)
       yield* this.handleAskUser(question)
     } else if (decision === "blocked") {
-      if (this.goalStore) {
-        try {
-          this.goalStore.updateGoal(this.state!.workflowId, { status: "blocked" })
-        } catch {
-          // Goal might not exist, non-blocking
+      // Require 3+ consecutive same blocker via runtime audit
+      let canBlock = false
+      if (confidence === "high" && parsed?.decision.blockerAudit) {
+        const ba = parsed.decision.blockerAudit
+        if (ba && !ba.canMakeProgress) {
+          const normalized = ba.blocker.toLowerCase().trim()
+          if (this.blockerAuditState && this.blockerAuditState.normalizedBlocker === normalized) {
+            this.blockerAuditState.consecutiveTurns++
+            this.blockerAuditState.lastSeenAt = Date.now()
+          } else {
+            this.blockerAuditState = {
+              normalizedBlocker: normalized,
+              consecutiveTurns: 1,
+              firstSeenAt: Date.now(),
+              lastSeenAt: Date.now(),
+            }
+          }
+          if (this.blockerAuditState.consecutiveTurns >= 3) {
+            canBlock = true
+          }
+        } else if (ba && ba.canMakeProgress) {
+          this.blockerAuditState = null
         }
+      } else {
+        // Legacy blocked: mark as continue
+        decision = "continue"
       }
-      this.transition("blocked", response)
+      if (canBlock) {
+        if (this.goalStore) {
+          try {
+            this.goalStore.updateGoal(this.state!.workflowId, { status: "blocked" })
+          } catch { /* non-blocking */}
+        }
+        this.transition("blocked", response)
+      } else {
+        this.blockerAuditState = null
+        decision = "continue"
+        this.transition("supervisor_analyse")
+      }
     } else if (this.state!.iteration >= this.state!.maxRounds) {
       this.transition("blocked", "Max rounds reached")
     } else {

@@ -80,6 +80,7 @@ export function parseSlashCommand(text: string): SlashCommand | null {
     const parts = trimmed.split(/\s+/)
     if (parts.length === 1) return { name: "goal" }
     const sub = parts[1]
+    if (sub === "edit" && parts[2]) return { name: "goal", subcommand: "edit", arg: parts.slice(2).join(" ") }
     if (sub === "edit") return { name: "goal", subcommand: "edit" }
     if (sub === "pause") return { name: "goal", subcommand: "pause" }
     if (sub === "resume") return { name: "goal", subcommand: "resume" }

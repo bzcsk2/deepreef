@@ -13,7 +13,18 @@ describe("WorkflowCoordinator", () => {
         submit: async function* (input: string) {
           supervisorInputs.push(input)
           supervisorCalls++
-          supervisorMessage = supervisorCalls === 1 ? "Initial plan" : supervisorCalls === 2 ? "Resumed plan" : "approve"
+          supervisorMessage = supervisorCalls === 1 ? "Initial plan" : supervisorCalls === 2 ? "Resumed plan" : JSON.stringify({
+            version: 1,
+            workflowId: "wf-1",
+            iteration: 1,
+            basedOnLedgerVersion: 0,
+            decision: "approve",
+            diagnosis: "done",
+            nextActions: [],
+            constraints: [],
+            verification: [],
+            completionAudit: [{ requirement: "fix interrupt recovery", status: "proven", evidence: ["completed"] }],
+          })
           yield { role: "assistant_final", content: supervisorMessage }
           if (supervisorCalls === 1) coordinator.interrupt()
         },
@@ -72,7 +83,18 @@ describe("WorkflowCoordinator", () => {
               ? "continue: inspect the remaining rendering path"
               : supervisorCalls === 3
                 ? "Plan iteration two using the previous report"
-                : "approve"
+                : JSON.stringify({
+                    version: 1,
+                    workflowId: "wf-1",
+                    iteration: 2,
+                    basedOnLedgerVersion: 0,
+                    decision: "approve",
+                    diagnosis: "done",
+                    nextActions: [],
+                    constraints: [],
+                    verification: [],
+                    completionAudit: [{ requirement: "fix rendering", status: "proven", evidence: ["tests pass"] }],
+                  })
           yield { role: "assistant_final", content: supervisorMessage }
         },
         getState: () => ({ messages: [{ role: "assistant", content: supervisorMessage }] }),
@@ -657,10 +679,22 @@ describe("WorkflowCoordinator", () => {
       const threadId = randomUUID()
       goalStore.createGoal(threadId, "Test goal")
 
+      const approveJson = JSON.stringify({
+        version: 1,
+        workflowId: threadId,
+        iteration: 1,
+        basedOnLedgerVersion: 0,
+        decision: "approve",
+        diagnosis: "All tasks completed",
+        nextActions: [],
+        constraints: [],
+        verification: [],
+        completionAudit: [{ requirement: "Test goal", status: "proven", evidence: ["completed"] }],
+      })
       const runtime = {
         getSupervisor: () => ({
-          submit: async function* () { yield { role: "assistant_final", content: "I approve, all tasks completed" } },
-          getState: () => ({ messages: [{ role: "assistant", content: "I approve, all tasks completed" }] }),
+          submit: async function* () { yield { role: "assistant_final", content: approveJson } },
+          getState: () => ({ messages: [{ role: "assistant", content: approveJson }] }),
         }),
         getWorker: () => ({
           submit: async function* () { yield { role: "assistant_final", content: "done" } },

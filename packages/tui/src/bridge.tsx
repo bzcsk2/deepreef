@@ -1012,7 +1012,11 @@ export function createBridge(
     };
 
     try {
-      for await (const rawEvent of workflowCoordinator.runWorkflow()) {
+      // Phase G: 主动重跑直到 goal 终结
+      let runAgain = true;
+      while (runAgain) {
+        runAgain = false;
+        for await (const rawEvent of workflowCoordinator.runWorkflow()) {
         const hasType = (rawEvent as any).type !== undefined;
         const hasRole = (rawEvent as any).role !== undefined;
 
@@ -1192,6 +1196,18 @@ export function createBridge(
             case 'orchestration':
               if (loopEvent.orchestration && orchestrationStore) orchestrationStore.apply(loopEvent.orchestration);
               break;
+          }
+        }
+      }
+        // Phase G: 检查 goal 状态决定是否继续下一轮
+        const coordState = workflowCoordinator.getState();
+        if (coordState && !workflowCoordinator.isFinished()) {
+          const store = workflowCoordinator.getGoalStore?.();
+          if (store) {
+            const goal = store.getGoal(coordState.workflowId);
+            if (goal && goal.status === "active") {
+              runAgain = true;
+            }
           }
         }
       }

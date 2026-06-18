@@ -1,7 +1,12 @@
 import type { AgentTool, ToolContext, ToolResult } from "../interface.js"
 import type { AgentCommController } from "./controller.js"
+import type { AgentRole } from "./types.js"
 
-export function createSendMessageTool(controller: AgentCommController): AgentTool {
+export interface MailboxToolProvider {
+  getController(): AgentCommController | null
+}
+
+export function createSendMessageTool(provider: MailboxToolProvider, role: AgentRole): AgentTool {
   return {
     name: "send_message",
     description: "Send a message to the other agent. The message will be queued for the next turn.",
@@ -36,14 +41,26 @@ export function createSendMessageTool(controller: AgentCommController): AgentToo
         return { content: "Error: to, kind, and content are required", isError: true }
       }
 
-      const from = to === "supervisor" ? "worker" : "supervisor"
-      const msg = controller.sendMessage(from as any, to as any, kind as any, content)
+      // Enforce role direction
+      if (role === "supervisor" && to !== "worker") {
+        return { content: "Error: Supervisor can only send messages to worker.", isError: true }
+      }
+      if (role === "worker" && to !== "supervisor") {
+        return { content: "Error: Worker can only send messages to supervisor.", isError: true }
+      }
+
+      const ctrl = provider.getController()
+      if (!ctrl) {
+        return { content: "Error: no active workflow mailbox.", isError: true }
+      }
+
+      const msg = ctrl.sendMessage(role, to as any, kind as any, content)
       return { content: `Message sent (id: ${msg.id})`, isError: false }
     },
   }
 }
 
-export function createFollowupTaskTool(controller: AgentCommController): AgentTool {
+export function createFollowupTaskTool(provider: MailboxToolProvider, role: AgentRole): AgentTool {
   return {
     name: "followup_task",
     description: "Assign a follow-up task to the other agent. This will trigger their next turn.",
@@ -72,25 +89,33 @@ export function createFollowupTaskTool(controller: AgentCommController): AgentTo
         return { content: "Error: to and content are required", isError: true }
       }
 
-      const from = to === "supervisor" ? "worker" : "supervisor"
-      const msg = controller.followupTask(from as any, content)
+      // Supervisor can followup_task to worker (assign work)
+      // Worker can followup_task to supervisor only for review/clarification
+      if (role === "supervisor" && to !== "worker") {
+        return { content: "Error: Supervisor can only assign tasks to worker.", isError: true }
+      }
+      if (role === "worker" && to !== "supervisor") {
+        return { content: "Error: Worker can only request review from supervisor.", isError: true }
+      }
+
+      const ctrl = provider.getController()
+      if (!ctrl) {
+        return { content: "Error: no active workflow mailbox.", isError: true }
+      }
+
+      const msg = ctrl.followupTask(role, content)
       return { content: `Follow-up task sent (id: ${msg.id})`, isError: false }
     },
   }
 }
 
-export function createReadMailboxTool(controller: AgentCommController): AgentTool {
+export function createReadMailboxTool(provider: MailboxToolProvider, role: AgentRole): AgentTool {
   return {
     name: "read_mailbox",
-    description: "Read pending messages from the mailbox, optionally filtered by sender and read status.",
+    description: "Read pending messages from the mailbox. Returns messages addressed to you.",
     parameters: {
       type: "object",
       properties: {
-        to: {
-          type: "string",
-          enum: ["supervisor", "worker"],
-          description: "Filter by recipient role.",
-        },
         unreadOnly: {
           type: "boolean",
           description: "Only return unread messages.",
@@ -104,8 +129,13 @@ export function createReadMailboxTool(controller: AgentCommController): AgentToo
     concurrency: "shared",
     approval: "read",
     async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
-      const messages = controller.readMailbox({
-        to: args.to as any,
+      const ctrl = provider.getController()
+      if (!ctrl) {
+        return { content: "No active workflow mailbox.", isError: false }
+      }
+
+      const messages = ctrl.readMailbox({
+        to: role,
         unreadOnly: args.unreadOnly as boolean | undefined,
         limit: args.limit as number | undefined,
       })
@@ -117,7 +147,6 @@ export function createReadMailboxTool(controller: AgentCommController): AgentToo
       const summary = messages.map(m => ({
         id: m.id,
         from: m.from,
-        to: m.to,
         kind: m.kind,
         delivery: m.delivery,
         content: m.content.slice(0, 500),
@@ -130,10 +159,10 @@ export function createReadMailboxTool(controller: AgentCommController): AgentToo
   }
 }
 
-export function createMailboxTools(controller: AgentCommController): AgentTool[] {
+export function createMailboxTools(provider: MailboxToolProvider, role: AgentRole): AgentTool[] {
   return [
-    createSendMessageTool(controller),
-    createFollowupTaskTool(controller),
-    createReadMailboxTool(controller),
+    createSendMessageTool(provider, role),
+    createFollowupTaskTool(provider, role),
+    createReadMailboxTool(provider, role),
   ]
 }

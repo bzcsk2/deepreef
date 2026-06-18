@@ -131,14 +131,16 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
     expect(systemMessage.content).toContain("Do not wait for the user to explicitly ask you to delegate")
   })
 
-  it("Supervisor loop 模式应禁止工具调用而不污染 subagent 模式", async () => {
+  it("Supervisor loop 模式授予治理工具而不污染 subagent 模式", async () => {
     const engine = makeEngine({ systemPrompt: cwdMarker })
     registerSupervisionTools(engine)
 
     for await (const _event of engine.submit("review report", undefined, "supervisor", "loop")) { /* consume */ }
 
     const systemMessage = capturedMessages?.messages?.find((m: any) => m.role === "system")
-    expect(systemMessage.content).toContain("Do not call tools or modify files during this workflow turn")
+    expect(systemMessage.content).toContain("You may use only governance tools")
+    expect(systemMessage.content).toContain("get_goal")
+    expect(systemMessage.content).toContain("send_message")
     expect(systemMessage.content).not.toContain("Proactively call AgentTool")
   })
 
