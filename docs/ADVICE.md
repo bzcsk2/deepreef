@@ -54,29 +54,35 @@ function AssistantThinkingMessage({ text, isStreaming, startTs, expanded, role }
 
 改成 `Box paddingLeft / minWidth / gap` 之类的结构化缩进。现在这些空格和外层 `paddingX/paddingLeft` 叠在一起，很容易在不同组件路径下产生视觉偏移。
 
+
+
+问题 1 的根因不是“Markdown 自身缩进不稳定”，而是 **streaming 态和 finalized 态使用了两套不同的消息外壳布局**，导致正文起始列不同。
+
+具体对齐关系是：
+
+| 状态                       | 组件路径                                                                              | 正文额外缩进 |
+| ------------------------ | --------------------------------------------------------------------------------- | -----: |
+| streaming thinking       | `AssistantThinkingMessage -> StreamingCard -> Card -> Markdown`                   |  约 0 列 |
+| finalized thinking 展开态   | `AssistantThinkingMessage -> Box paddingX={1} -> Box paddingLeft={2} -> Markdown` |  约 3 列 |
+| finalized assistant text | `AssistantTextMessage -> Box paddingX={1} -> minWidth={2} -> Markdown`            |  约 3 列 |
+
+源码上可以直接看到：`AssistantThinkingMessage` 在 `isStreaming` 时直接返回 `StreamingCard`，没有经过 finalized thinking 的 `paddingX={1}` 和 `paddingLeft={2}` 布局。 而 finalized thinking 展开态外层有 `paddingX={1}`，正文再包一层 `paddingLeft={2}`。
+
+`AssistantTextMessage` 也是类似，它本身有 `paddingX={1}`，正文行里还有 `<Box minWidth={2} />`，所以正文相对组件起点多了 3 列。
+
+而 `StreamingCard` 内部确实是 `<Card>` 之后直接渲染 `<Markdown text={text} />`，没有给正文加 `paddingX` 或 `paddingLeft`。 `Card` 自己也只设置 `flexDirection="column" marginTop={1} width="100%"`，没有 padding。
+
+唯一需要补一句：最外层 `DeepiMessages` 对整个 timeline 统一有 `paddingX={1}`，所以这里说的 “0 列 vs 3 列” 是**组件内部相对缩进差**，不是终端绝对列号。
+
+所以你的判断是对的：**StreamingCard 的 body 是 0 额外缩进，非流式 AssistantText/Thinking 的正文是 3 列额外缩进，这就是视觉不统一的直接根因。**
+
+
 ## 2. loop 模式下 work 工作过程消息会被冲刷掉、消失
 
-这里有两个相关根因，要看你说的“work 工作过程消息”具体指哪一类。
 
-### A. 如果你指的是 Worker 活动面板里的过程信息
 
-这个区域不是 transcript 日志，而是 orchestration 的实时状态投影。
 
-`App.tsx` 里，滚动区先渲染 `AgentGroupDisplayFromStore`，再渲染真正的消息时间线 `DeepiMessages`。 `AgentGroupDisplayFromStore` 只是从 `OrchestrationStore` 读当前 workers，然后传给 `AgentGroupDisplay`。
-
-问题是：`OrchestrationStore` 虽然有 `activities` map，用来保存 worker 的活动历史。 但 `useOrchestrationWorkers()` 里的 `workerToDisplay()` 只把 `id/model/status/currentTask/duration` 映射出来，没有把 `activities` 挂到 `progress.activities` 上。
-
-更关键的是，`AgentGroupDisplay` 默认 `isExpanded = false`，而 `App` 没有传 `isExpanded` 和 `onToggleExpand`，所以它默认只显示每个 worker 的一行 compact 状态；详细活动列表那条路径基本不会被走到。
-
-因此，如果你看到的是“worker 正在做什么”的实时面板内容消失，这不是 ScrollBox 把它冲掉，而是设计上它就不是持久 transcript。它是当前 orchestration state 的展示，状态变化、worker remove、workflow reset 都可能让它消失；`worker_remove` 甚至会删除对应 worker 和 activities。
-
-修复方向：
-
-1. `workerToDisplay` 应该接收 `state.activities`，把活动挂到 `progress.activities`。
-2. `AgentGroupDisplayFromStore` 应该支持 expanded 状态，至少 loop 模式下默认展开。
-3. 如果你希望“工作过程”能像聊天记录一样保留，就不要只放在 `OrchestrationStore`，应该同时 append 到 `TranscriptStore` / timeline，或者新增一种 `TimelineItem.kind = 'activity' | 'workflow_event'`。
-
-### B. 如果你指的是 loop 中 Worker 的 assistant/tool/reasoning 输出本身
+### loop 中 Worker 的 assistant/tool/reasoning 输出本身
 
 那根因在 `bridge.tsx` 的 workflow 路径。普通 submit 有一套相对完整的 round 生命周期：`startRound()` 初始化，`finalizeRound()` 把 assistant/reasoning 设为 `isStreaming:false`，并在 `tools_completed` 时 finalize 后开启新 round。
 
