@@ -20,7 +20,7 @@ const SUPERVISOR_TOOLS_ALONE = new Set([
   "todowrite",
 ])
 
-const SUPERVISOR_TOOLS_LOOP = new Set([
+const LOOP_ORCHESTRATION_TOOLS = new Set([
   "get_goal",
   "update_goal",
   "send_message",
@@ -28,15 +28,10 @@ const SUPERVISOR_TOOLS_LOOP = new Set([
   "read_mailbox",
 ])
 
-const WORKER_TOOLS_LOOP_EXTRA = new Set([
+const SUPERVISOR_LOOP_TOOLS = new Set([
   "get_goal",
-  "send_message",
-  "followup_task",
-  "read_mailbox",
-])
-
-const WORKER_TOOLS_LOOP_DENY = new Set([
   "update_goal",
+  "read_mailbox",
 ])
 
 export interface ResolveEffectiveToolsOpts {
@@ -61,26 +56,24 @@ export function resolveEffectiveTools(opts: ResolveEffectiveToolsOpts): ResolveE
   for (const tool of registeredTools.values()) {
     const name = tool.name
 
-    // Phase 6: Supervisor + loop → only governance/mailbox tools
+    // Loop is coordinator-orchestrated: Supervisor keeps governance tools for
+    // goal/mailbox control, but never receives engineering tools.
     if (role === "supervisor" && mode === "loop") {
-      if (SUPERVISOR_TOOLS_LOOP.has(name)) {
+      if (SUPERVISOR_LOOP_TOOLS.has(name)) {
         toolSpecs.push(toSpec(tool))
-      } else {
-        filteredCount++
-        if (!filteredReason) filteredReason = "supervisor loop mode: governance tools only"
+        continue
       }
+      filteredCount++
+      if (!filteredReason) filteredReason = "supervisor loop mode: governance tools only"
       continue
     }
 
-    // Phase 6: Worker + loop → engineering tools + extra, deny update_goal
+    // Worker loop gets only configured engineering tools. Goal/mailbox tools are
+    // driven by WorkflowCoordinator so the fixed phase order stays intact.
     if (role === "worker" && mode === "loop") {
-      if (WORKER_TOOLS_LOOP_DENY.has(name)) {
+      if (LOOP_ORCHESTRATION_TOOLS.has(name)) {
         filteredCount++
-        if (!filteredReason) filteredReason = "worker loop mode: cannot update_goal"
-        continue
-      }
-      if (WORKER_TOOLS_LOOP_EXTRA.has(name)) {
-        toolSpecs.push(toSpec(tool))
+        if (!filteredReason) filteredReason = "worker loop mode: goal/mailbox tools are coordinator-managed"
         continue
       }
       // For engineering tools, check agentToolNames

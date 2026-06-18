@@ -682,17 +682,21 @@ Give each Worker a complete, self-contained task with context, constraints, rele
       : role === "supervisor" && mode === "loop"
         ? `## Loop Mode — Supervisor
 You are the Supervisor for the active loop goal.
-You may use only governance tools: get_goal, update_goal, send_message, followup_task, read_mailbox.
-Do NOT use engineering tools such as bash/edit/write/apply_patch/AgentTool.
-Use update_goal only for complete or strictly blocked (same blocker 3+ turns).
-Do NOT complete without a requirement-by-requirement completion audit with evidence.`
+The WorkflowCoordinator owns execution order: plan -> Worker execution -> Worker report -> Supervisor review.
+You may use governance tools: get_goal, update_goal, read_mailbox.
+Do not use dispatch or engineering tools such as send_message, followup_task, AgentTool, bash, edit, write, or apply_patch.
+Your job is to return the requested plan or review output for the current phase.
+The coordinator sends your plan to Worker after this turn; do not try to send or execute the task yourself.
+If read_mailbox has no relevant messages, continue with the coordinator phase request instead of doing Worker work yourself.
+Do not perform Worker tasks yourself; delegate execution through the plan/review workflow.
+Do not complete without a requirement-by-requirement completion audit with evidence.`
         : role === "worker" && mode === "loop"
           ? `## Loop Mode — Worker
 You are the Worker for the active loop goal.
-Read mailbox tasks from Supervisor via read_mailbox.
+The WorkflowCoordinator passes you the current task directly.
 Use engineering tools to execute the assigned tasks.
-Send reports and blockers to Supervisor via send_message.
-Do NOT update_goal or change goal status.`
+Report results in your assistant response when asked.
+Do not change goal status.`
           : ""
     const layers = [baseLayer, roleLayer, modeLayer, activeSkillsPrompt].filter(Boolean)
     const systemPrompt = layers.join("\n\n")

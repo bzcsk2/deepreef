@@ -876,9 +876,10 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         return;
       }
       case 'workflow_instruction': {
+        bridge.addWorkflowInstruction(route.content);
         appendMessage({
           role: 'assistant' as const,
-          content: `[Workflow running] Instruction noted: ${route.content}`,
+          content: `[Workflow running] Instruction queued for Supervisor: ${route.content}`,
         });
         return;
       }

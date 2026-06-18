@@ -47,7 +47,7 @@ function makeEngine(opts?: { systemPrompt?: string }) {
 const cwdMarker = "CURRENT_WORKING_DIRECTORY: /test/project"
 const supervisorFullPrompt = "You are the Supervisor agent. Analyze goals, create plans, review evidence, delegate execution, and provide guidance. Follow the active workflow mode rules."
 
-// 注册 Supervisor 应拥有的六个监督工具
+// 注册 Supervisor 可能拥有的监督/治理工具；不同模式由 resolveEffectiveTools 过滤。
 function registerSupervisionTools(engine: ReasonixEngine) {
   const tools: AgentTool[] = [
     { name: "AgentTool", description: "Delegate tasks", parameters: {}, concurrency: "shared", approval: "read", execute: async () => ({ content: "", isError: false }) },
@@ -56,6 +56,11 @@ function registerSupervisionTools(engine: ReasonixEngine) {
     { name: "grep", description: "Search", parameters: {}, concurrency: "shared", approval: "read", execute: async () => ({ content: "", isError: false }) },
     { name: "list_dir", description: "List dir", parameters: {}, concurrency: "shared", approval: "read", execute: async () => ({ content: "", isError: false }) },
     { name: "todowrite", description: "Todo list", parameters: {}, concurrency: "shared", approval: "read", execute: async () => ({ content: "", isError: false }) },
+    { name: "get_goal", description: "Read goal", parameters: {}, concurrency: "shared", approval: "read", execute: async () => ({ content: "", isError: false }) },
+    { name: "update_goal", description: "Update goal", parameters: {}, concurrency: "exclusive", approval: "write", execute: async () => ({ content: "", isError: false }) },
+    { name: "send_message", description: "Send message", parameters: {}, concurrency: "shared", approval: "read", execute: async () => ({ content: "", isError: false }) },
+    { name: "followup_task", description: "Follow up", parameters: {}, concurrency: "exclusive", approval: "write", execute: async () => ({ content: "", isError: false }) },
+    { name: "read_mailbox", description: "Read mailbox", parameters: {}, concurrency: "shared", approval: "read", execute: async () => ({ content: "", isError: false }) },
   ]
   for (const t of tools) engine.registerTool(t)
 }
@@ -131,17 +136,25 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
     expect(systemMessage.content).toContain("Do not wait for the user to explicitly ask you to delegate")
   })
 
-  it("Supervisor loop 模式授予治理工具而不污染 subagent 模式", async () => {
+  it("Supervisor loop 模式保持 coordinator 编排，只暴露治理工具", async () => {
     const engine = makeEngine({ systemPrompt: cwdMarker })
     registerSupervisionTools(engine)
 
     for await (const _event of engine.submit("review report", undefined, "supervisor", "loop")) { /* consume */ }
 
     const systemMessage = capturedMessages?.messages?.find((m: any) => m.role === "system")
-    expect(systemMessage.content).toContain("You may use only governance tools")
-    expect(systemMessage.content).toContain("get_goal")
-    expect(systemMessage.content).toContain("send_message")
+    expect(systemMessage.content).toContain("The WorkflowCoordinator owns execution order")
+    expect(systemMessage.content).toContain("You may use governance tools")
+    expect(systemMessage.content).toContain("Do not use dispatch or engineering tools")
+    expect(systemMessage.content).toContain("The coordinator sends your plan to Worker after this turn")
+    expect(systemMessage.content).toContain("Do not perform Worker tasks yourself")
     expect(systemMessage.content).not.toContain("Proactively call AgentTool")
+
+    const toolsInRequest = capturedMessages?.opts?.tools ?? []
+    const toolNames = toolsInRequest.map((t: any) => t.function.name).sort()
+    expect(toolNames).toEqual(["get_goal", "read_mailbox", "update_goal"])
+    expect(toolNames).not.toContain("send_message")
+    expect(toolNames).not.toContain("followup_task")
   })
 
   // ─── 测试 2: 系统提示被覆盖，cwd 丢失 ───
@@ -228,11 +241,12 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
     const toolsInRequest = capturedMessages?.opts?.tools ?? []
     const toolNames = toolsInRequest.map((t: any) => t.function.name)
     // Loop 阶段只暴露治理工具，不暴露工程工具
+    expect(toolNames.sort()).toEqual(["get_goal", "read_mailbox", "update_goal"])
     expect(toolNames).not.toContain("bash")
     expect(toolNames).not.toContain("write_file")
     expect(toolNames).not.toContain("edit")
-    // 如果治理工具已注册，应出现在列表中
-    // 实际工具列表由注册的工具决定
+    expect(toolNames).not.toContain("send_message")
+    expect(toolNames).not.toContain("followup_task")
   })
 
   // ─── 测试 4c: Worker alone 模式应有完整工具 ───
@@ -281,13 +295,14 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
     expect(names).not.toContain("AgentTool")
     expect(names).toHaveLength(5)
 
-    // 5c: supervisor + loop → 0 工具
+    // 5c: supervisor + loop → governance tools only
     events = []
     for await (const e of engine.submit("task", undefined, "supervisor", "loop")) {
       events.push(e)
     }
     tools = capturedMessages?.opts?.tools ?? []
-    expect(tools).toHaveLength(0)
+    names = tools.map((t: any) => t.function.name).sort()
+    expect(names).toEqual(["get_goal", "read_mailbox", "update_goal"])
 
     // 5d: worker + alone → 全部工具（包含 bash/write_file）
     events = []
@@ -369,10 +384,14 @@ describe("SFR-00: 工具策略边界测试", () => {
       mode: "loop",
       agentToolNames: undefined,
     })
-    expect(loop.tools).toHaveLength(0)
+    expect(loop.tools.map(t => t.function.name).sort()).toEqual([
+      "get_goal",
+      "read_mailbox",
+      "update_goal",
+    ])
   })
 
-  it("loop 模式 Supervisor 零工具的回归测试", async () => {
+  it("loop 模式 Supervisor 仅暴露治理工具的回归测试", async () => {
     const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
     const registeredTools = new Map()
     registerSupervisionToolsMock(registeredTools)
@@ -394,12 +413,12 @@ describe("SFR-00: 工具策略边界测试", () => {
       mode: "loop",
       agentToolNames: undefined,
     })
-    // Supervisor loop 现在允许治理工具（get_goal, update_goal, send_message, etc.）
-    // 所以 tools 长度取决于注册的治理工具
-    // 工程工具（bash, write_file）应被过滤
-    expect(result.tools.length).toBeGreaterThanOrEqual(0)
+    // Supervisor loop 由 WorkflowCoordinator 固定编排，模型侧只允许治理工具。
+    expect(result.tools.map(t => t.function.name).sort()).toEqual(["get_goal", "read_mailbox", "update_goal"])
     expect(result.tools.find(t => t.function.name === "bash")).toBeUndefined()
     expect(result.tools.find(t => t.function.name === "write_file")).toBeUndefined()
+    expect(result.tools.find(t => t.function.name === "send_message")).toBeUndefined()
+    expect(result.tools.find(t => t.function.name === "followup_task")).toBeUndefined()
   })
 
   it("Worker + loop 按 agentToolNames 生效", async () => {
@@ -449,7 +468,19 @@ describe("SFR-00: 工具策略边界测试", () => {
 })
 
 function registerSupervisionToolsMock(map: Map<string, any>) {
-  const names = ["AgentTool", "AskUserQuestion", "read_file", "grep", "list_dir", "todowrite"]
+  const names = [
+    "AgentTool",
+    "AskUserQuestion",
+    "read_file",
+    "grep",
+    "list_dir",
+    "todowrite",
+    "get_goal",
+    "update_goal",
+    "send_message",
+    "followup_task",
+    "read_mailbox",
+  ]
   for (const name of names) {
     map.set(name, {
       name, description: "", parameters: {},
@@ -460,26 +491,27 @@ function registerSupervisionToolsMock(map: Map<string, any>) {
 }
 
 describe("SFR-00: 配置与诊断契约", () => {
-  it("[SFR-30] Supervisor loop 模式零工具时应有诊断日志（不会静默退化）", async () => {
+  it("[SFR-30] Supervisor loop 模式只暴露治理工具（不会静默退化）", async () => {
     const engine = makeEngine()
     registerSupervisionTools(engine)
 
     const supervisorConfig = agentConfigFor("supervisor")
-    // loop 模式 Supervisor 零工具，resolveEffectiveTools 会输出 warn 日志
-    // 不会静默退化
     const events: any[] = []
     for await (const e of engine.submit("test", supervisorConfig, "supervisor", "loop")) {
       events.push(e)
     }
 
     const toolsInRequest = capturedMessages?.opts?.tools ?? []
-    // loop 模式 Supervisor 工具应为空
-    expect(toolsInRequest).toHaveLength(0)
+    expect(toolsInRequest.map((t: any) => t.function.name).sort()).toEqual([
+      "get_goal",
+      "read_mailbox",
+      "update_goal",
+    ])
   })
 })
 
 describe("Phase 6: 工具过滤重构", () => {
-  it("Supervisor loop 允许治理工具，过滤工程工具", async () => {
+  it("Supervisor loop 只暴露治理工具，保持固定编排", async () => {
     const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
     const tools = new Map()
     const toolNames = ["get_goal", "update_goal", "send_message", "followup_task", "read_mailbox", "bash", "write_file", "edit", "AgentTool"]
@@ -493,10 +525,15 @@ describe("Phase 6: 工具过滤重构", () => {
 
     const result = resolveEffectiveTools({ registeredTools: tools, role: "supervisor", mode: "loop" })
     const names = result.tools.map(t => t.function.name).sort()
-    expect(names).toEqual(["followup_task", "get_goal", "read_mailbox", "send_message", "update_goal"])
+    expect(names).toEqual(["get_goal", "read_mailbox", "update_goal"])
+    expect(names).not.toContain("bash")
+    expect(names).not.toContain("edit")
+    expect(names).not.toContain("AgentTool")
+    expect(names).not.toContain("send_message")
+    expect(names).not.toContain("followup_task")
   })
 
-  it("Worker loop 允许工程工具+mailbox，拒绝 update_goal", async () => {
+  it("Worker loop 只允许配置内工程工具，拒绝 goal/mailbox 工具", async () => {
     const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
     const tools = new Map()
     const toolNames = ["get_goal", "update_goal", "send_message", "followup_task", "read_mailbox", "bash", "edit"]
@@ -511,16 +548,13 @@ describe("Phase 6: 工具过滤重构", () => {
     // Worker loop with agentToolNames containing bash
     const result = resolveEffectiveTools({ registeredTools: tools, role: "worker", mode: "loop", agentToolNames: ["bash", "edit"] })
     const names = result.tools.map(t => t.function.name).sort()
-    // Should have: bash, edit (from agentToolNames) + get_goal, send_message, followup_task, read_mailbox (extra)
-    // NOT: update_goal
-    expect(names).toContain("bash")
-    expect(names).toContain("edit")
-    expect(names).toContain("get_goal")
-    expect(names).toContain("send_message")
+    expect(names).toEqual(["bash", "edit"])
+    expect(names).not.toContain("get_goal")
+    expect(names).not.toContain("send_message")
     expect(names).not.toContain("update_goal")
   })
 
-  it("Worker loop 带空 agentToolNames 只保留 mailbox 工具", async () => {
+  it("Worker loop 带空 agentToolNames 不保留 goal/mailbox 工具", async () => {
     const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
     const tools = new Map()
     const toolNames = ["get_goal", "update_goal", "send_message", "followup_task", "read_mailbox", "bash"]
@@ -534,9 +568,9 @@ describe("Phase 6: 工具过滤重构", () => {
 
     const result = resolveEffectiveTools({ registeredTools: tools, role: "worker", mode: "loop", agentToolNames: [] })
     const names = result.tools.map(t => t.function.name)
-    // Empty agentToolNames = no engineering tools, but mailbox extra tools still pass
-    expect(names).toContain("get_goal")
-    expect(names).toContain("send_message")
+    expect(names).not.toContain("get_goal")
+    expect(names).not.toContain("send_message")
+    expect(names).toHaveLength(0)
     expect(names).not.toContain("bash")
     expect(names).not.toContain("update_goal")
   })

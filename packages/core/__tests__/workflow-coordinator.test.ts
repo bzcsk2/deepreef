@@ -48,7 +48,7 @@ describe("WorkflowCoordinator", () => {
     coordinator.resumeInterruptedWorkflow("continue from the latest state")
     for await (const _event of coordinator.runWorkflow()) { /* consume */ }
 
-    expect(supervisorInputs[1]).toContain("User instruction after interrupt:\ncontinue from the latest state")
+    expect(supervisorInputs[1]).toContain("User instruction for this workflow:\ncontinue from the latest state")
     expect(supervisorInputs[1]).toContain("Previous Plan:\nInitial plan")
     expect(coordinator.getState()?.iteration).toBe(1)
     expect(coordinator.getState()?.currentPhase).toBe("completed")
@@ -62,6 +62,47 @@ describe("WorkflowCoordinator", () => {
     expect(() => coordinator.resumeInterruptedWorkflow("continue")).toThrow(
       "Only a workflow interrupted by the user can be resumed",
     )
+  })
+
+  it("carries user instructions added during a running workflow into Supervisor analysis", async () => {
+    const supervisorInputs: string[] = []
+    let supervisorCalls = 0
+    let supervisorMessage = ""
+    const runtime = {
+      getSupervisor: () => ({
+        submit: async function* (input: string) {
+          supervisorInputs.push(input)
+          supervisorCalls++
+          supervisorMessage = supervisorCalls === 1 ? "Plan with updated user instruction" : JSON.stringify({
+            version: 1,
+            workflowId: "wf-1",
+            iteration: 1,
+            basedOnLedgerVersion: 0,
+            decision: "approve",
+            diagnosis: "done",
+            nextActions: [],
+            constraints: [],
+            verification: [],
+            completionAudit: [{ requirement: "handle user instruction", status: "proven", evidence: ["instruction applied"] }],
+          })
+          yield { role: "assistant_final", content: supervisorMessage }
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: supervisorMessage }] }),
+      }),
+      getWorker: () => ({
+        submit: async function* () {
+          yield { role: "assistant_final", content: "done" }
+        },
+        getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+      }),
+    }
+
+    const coordinator = new WorkflowCoordinator({ runtime: runtime as any })
+    coordinator.startWorkflow({ goal: "test" })
+    coordinator.addUserInstruction("change the goal emphasis and report current status")
+    for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+    expect(supervisorInputs[0]).toContain("User instruction for this workflow:\nchange the goal emphasis and report current status")
   })
 
   it("carries Supervisor review into a real second workflow iteration", async () => {

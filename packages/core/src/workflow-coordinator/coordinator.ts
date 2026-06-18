@@ -389,7 +389,7 @@ export class WorkflowCoordinator {
       ? `\n\nPrevious Plan:\n${this.state!.supervisorPlan ?? ""}\n\nPrevious Worker Report:\n${this.state!.workerReport ?? ""}\n\nYour Previous Review:\n${this.state!.supervisorFeedback ?? ""}`
       : ""
     const resumeInstruction = this.state!.resumeInstruction
-      ? `\n\nUser instruction after interrupt:\n${this.state!.resumeInstruction}`
+      ? `\n\nUser instruction for this workflow:\n${this.state!.resumeInstruction}`
       : ""
     const steering = this.buildSteeringPrompt()
     const supervisorInput = `Analyse the following goal and create a plan for iteration ${this.state!.iteration}:\n\nGoal: ${this.state!.goal}${previousRound}${resumeInstruction}${steering}\n\nProvide an updated structured plan with concrete next steps, constraints, and risks. Incorporate the previous Worker report, review, and user instruction when present.`
@@ -747,6 +747,21 @@ Return your guidance as structured advice.`
 
   interrupt(): void {
     this.abortController?.abort()
+  }
+
+  addUserInstruction(instruction: string): WorkflowLoopState {
+    if (!this.state) {
+      throw new Error("No workflow in progress")
+    }
+    const trimmed = instruction.trim()
+    if (!trimmed) {
+      return this.getState()!
+    }
+    this.state.resumeInstruction = this.state.resumeInstruction
+      ? `${this.state.resumeInstruction}\n\n${trimmed}`
+      : trimmed
+    this.state.updatedAt = Date.now()
+    return this.getState()!
   }
 
   resumeInterruptedWorkflow(instruction: string): WorkflowLoopState {

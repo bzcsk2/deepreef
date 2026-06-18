@@ -157,6 +157,8 @@ export function createBridge(
   runWorkflow: (goal: string, onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void, workflowId?: string) => Promise<void>;
   /** Resume a workflow that was blocked by a user interrupt */
   resumeWorkflow: (instruction: string, onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void) => Promise<void>;
+  /** Add a user instruction for the next Supervisor analysis turn */
+  addWorkflowInstruction: (instruction: string) => void;
   /** Store 路径下用 timeline 全量同步 transcript（session 恢复等） */
   replaceTranscript: (items: TimelineItem[]) => void;
   /** 追加一条消息到 transcript（系统提示 / 模型切换等） */
@@ -1239,6 +1241,10 @@ export function createBridge(
     onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void,
   ) => driveWorkflow(null, onPhaseChange, instruction);
 
+  const addWorkflowInstruction = (instruction: string) => {
+    workflowCoordinator?.addUserInstruction(instruction);
+  };
+
   return {
     submit,
     cancel,
@@ -1247,6 +1253,7 @@ export function createBridge(
     rejectQuestion,
     runWorkflow,
     resumeWorkflow,
+    addWorkflowInstruction,
     replaceTranscript,
     appendTimelineMessage,
     getTranscriptReader: () => transcriptReader,
