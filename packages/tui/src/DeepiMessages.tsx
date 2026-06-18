@@ -5,7 +5,7 @@ import type { AgentRole } from '@deepreef/core/agent-profile/types.js';
 import type { TimelineItem, ToolStatus } from './bridge.js';
 import { Markdown } from './MarkdownRenderer.js';
 import { Card } from './reasonix/Card.js';
-import { StreamingCard } from './reasonix/StreamingCard.js';
+import { Spinner } from './reasonix/Spinner.js';
 import { FG, SURFACE, TONE } from './reasonix/tokens.js';
 import { t } from './i18n/index.js';
 import { useTranscriptTimeline } from './store/TranscriptContext.js';
@@ -240,10 +240,9 @@ const AssistantThinkingMessage = memo(function AssistantThinkingMessage({
   role?: AgentRole;
 }) {
   if (!text) return null;
-  if (isStreaming) {
-    return <StreamingCard text={text} startTs={startTs} title={`${roleTitle(role)} · ${t().thinking}`} />;
-  }
-  if (!expanded) {
+
+  // Collapsed preview (finalized only)
+  if (!isStreaming && !expanded) {
     const preview = text.replace(/\s+/g, ' ').trim().slice(0, 80);
     return (
       <Box flexDirection="column" width="100%" paddingX={1}>
@@ -256,15 +255,18 @@ const AssistantThinkingMessage = memo(function AssistantThinkingMessage({
       </Box>
     );
   }
+
+  // Unified expanded/streaming layout with consistent padding
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
       <RoleTag role={role} />
       <Box flexDirection="row">
         <Text color={TONE.warn} bold>{`  ${'\u2234'} ${t().thinking}`}</Text>
-        <Text dimColor>{t().ctrlO}</Text>
+        {isStreaming ? <Spinner kind="braille" color={TONE.brand} /> : <Text dimColor>{t().ctrlO}</Text>}
       </Box>
       <Box paddingLeft={2}>
         <Markdown text={text} />
+        {isStreaming ? <Text color={TONE.ok}>{'\u258A'}</Text> : null}
       </Box>
     </Box>
   );
@@ -356,13 +358,18 @@ const MessageBlock = memo(function MessageBlock({
 
     case 'assistant_text':
       if (item.isStreaming) {
+        const style = roleStyle(item.role);
         return (
-          <StreamingCard
-            text={item.text}
-            startTs={item.startTs}
-            title={`${roleTitle(item.role)} · ${t().writing}`}
-            doneTitle={`${roleTitle(item.role)} · ${t().reply}`}
-          />
+          <Box flexDirection="column" width="100%" paddingX={1} paddingY={1}>
+            <Text color={style.color as any} bold>{`${style.glyph} ${style.label}`}</Text>
+            <Box flexDirection="row">
+              <Box minWidth={2} />
+              <Box flexDirection="column" flexGrow={1}>
+                {markdownText(item.text)}
+                <Text color={TONE.ok}>{'\u258A'}</Text>
+              </Box>
+            </Box>
+          </Box>
         );
       }
       return <AssistantTextMessage text={item.text} role={item.role} />;

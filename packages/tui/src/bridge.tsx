@@ -975,6 +975,32 @@ export function createBridge(
     let assistantText = '';
     let reasoningText = '';
 
+    const finalizeWorkflowRound = () => {
+      if (!wfRoundId) return;
+      if (assistantText) {
+        upsertWorkflowItem({
+          id: wfRoundId + '-text',
+          kind: 'assistant_text',
+          roundId: wfRoundId,
+          text: assistantText,
+          isStreaming: false,
+          startTs: wfRoundTs,
+          role: activeRole,
+        });
+      }
+      if (reasoningText) {
+        upsertWorkflowItem({
+          id: wfRoundId + '-reasoning',
+          kind: 'reasoning',
+          roundId: wfRoundId,
+          text: reasoningText,
+          isStreaming: false,
+          startTs: wfRoundTs,
+          role: activeRole,
+        });
+      }
+    };
+
     const upsertWorkflowItem = (item: TimelineItem) => {
       commitBridge(prev => {
         const index = prev.timeline.findIndex(existing => existing.id === item.id);
@@ -1026,7 +1052,8 @@ export function createBridge(
         if (hasType) {
           const wfEvent = rawEvent as unknown as WorkflowEvent;
 
-          if (wfEvent.type === 'phase_change' && wfEvent.phase && wfEvent.iteration != null) {
+            if (wfEvent.type === 'phase_change' && wfEvent.phase && wfEvent.iteration != null) {
+            finalizeWorkflowRound();
             activeRole = wfEvent.phase === 'worker_do' || wfEvent.phase === 'worker_report' ? 'worker' : 'supervisor';
             onPhaseChange?.(wfEvent.phase, wfEvent.iteration);
             if (orchestrationStore) {
@@ -1223,6 +1250,7 @@ export function createBridge(
         warnings: [...prev.warnings, `Workflow error: ${(err as Error).message ?? String(err)}`],
       }));
     } finally {
+      finalizeWorkflowRound();
       // SFR-70: 确保 always 恢复 idle，即使中断或异常
       setTUIState('idle');
       commitBridge(() => ({
