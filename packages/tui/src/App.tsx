@@ -831,7 +831,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             supervisorStatus: mapped.supervisor,
             workerStatus: mapped.worker,
           }));
-        }).catch((err: unknown) => {
+        }, workflowId).catch((err: unknown) => {
           setWorkflowLifecycle({ status: 'failed', workflowId: 'wf-' + Date.now(), reason: (err as Error).message });
         }).finally(() => {
           workflowRunningRef.current = false;

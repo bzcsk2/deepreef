@@ -149,3 +149,38 @@ describe("Mailbox 工具角色验收", () => {
     expect(result.isError).toBe(true)
   })
 })
+
+describe("App → bridge → coordinator workflowId 集成", () => {
+  it("startWorkflow 使用传入的 workflowId 而非随机 UUID", () => {
+    const { WorkflowCoordinator } = require("../src/workflow-coordinator/coordinator.js")
+    const { GoalStore } = require("../src/goal/store.js")
+
+    const store = new GoalStore(TEST_DIR)
+    const workflowId = "session-12345"
+    store.createGoal(workflowId, "Test goal integration")
+
+    const coordinator = new WorkflowCoordinator({} as any, { goalStore: store })
+    coordinator.startWorkflow({ goal: "Test goal integration", workflowId })
+
+    const state = coordinator.getState()
+    expect(state).not.toBeNull()
+    expect(state!.workflowId).toBe(workflowId)
+
+    // coordinator 应能通过 workflowId 读到同一个 goal
+    const goal = store.getGoal(workflowId)
+    expect(goal).not.toBeNull()
+    expect(goal!.objective).toBe("Test goal integration")
+  })
+
+  it("不传 workflowId 时仍生成随机 UUID（向后兼容）", () => {
+    const { WorkflowCoordinator } = require("../src/workflow-coordinator/coordinator.js")
+
+    const coordinator = new WorkflowCoordinator({} as any, {})
+    coordinator.startWorkflow({ goal: "Test" })
+
+    const state = coordinator.getState()
+    expect(state).not.toBeNull()
+    expect(state!.workflowId).toBeDefined()
+    expect(state!.workflowId).not.toBe("")
+  })
+})

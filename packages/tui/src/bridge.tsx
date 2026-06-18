@@ -154,7 +154,7 @@ export function createBridge(
   respondQuestion: (requestId: string, answers: string[][]) => void;
   rejectQuestion: (requestId: string) => void;
   /** Run a workflow goal through the WorkflowCoordinator */
-  runWorkflow: (goal: string, onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void) => Promise<void>;
+  runWorkflow: (goal: string, onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void, workflowId?: string) => Promise<void>;
   /** Resume a workflow that was blocked by a user interrupt */
   resumeWorkflow: (instruction: string, onPhaseChange?: (phase: string, iteration: number, finalStatus?: string, reason?: string) => void) => Promise<void>;
   /** Store 路径下用 timeline 全量同步 transcript（session 恢复等） */
