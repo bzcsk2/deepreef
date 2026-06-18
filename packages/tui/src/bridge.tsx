@@ -973,37 +973,116 @@ export function createBridge(
       workflowCoordinator.startWorkflow({ goal: goal!, workflowId });
     }
     let activeRole: AgentRole = 'supervisor';
-    let wfRoundId = '';
-    let wfRoundTs = 0;
+    let wfPhaseId = '';
+    let wfPhaseTs = 0;
+    let wfTurnSeq = 0;
+    let wfTurnId = '';
+    let wfTurnTs = 0;
+    let wfAssistantId: string | null = null;
+    let wfReasoningId: string | null = null;
     let toolItemIds = new Map<string, string>();
     let toolCallArgs = new Map<number, string>();
     let toolOutputs = new Map<string, string>();
     let assistantText = '';
     let reasoningText = '';
 
-    const finalizeWorkflowRound = () => {
-      if (!wfRoundId) return;
-      if (assistantText) {
-        upsertWorkflowItem({
-          id: wfRoundId + '-text',
-          kind: 'assistant_text',
-          roundId: wfRoundId,
-          text: assistantText,
-          isStreaming: false,
-          startTs: wfRoundTs,
-          role: activeRole,
-        });
+    const startWorkflowTurn = () => {
+      wfTurnSeq += 1;
+      wfTurnId = `${wfPhaseId}-turn-${wfTurnSeq}-${crypto.randomUUID()}`;
+      wfTurnTs = Date.now();
+      wfAssistantId = null;
+      wfReasoningId = null;
+      assistantText = '';
+      reasoningText = '';
+      toolItemIds = new Map<string, string>();
+      toolCallArgs = new Map<number, string>();
+      toolOutputs = new Map<string, string>();
+    };
+
+    const startWorkflowPhase = () => {
+      wfPhaseId = `wf-phase-${crypto.randomUUID()}`;
+      wfPhaseTs = Date.now();
+      wfTurnSeq = 0;
+      startWorkflowTurn();
+    };
+
+    const ensureWorkflowTurn = () => {
+      if (!wfPhaseId) {
+        wfPhaseId = `wf-phase-${crypto.randomUUID()}`;
+        wfPhaseTs = Date.now();
+        wfTurnSeq = 0;
       }
-      if (reasoningText) {
-        upsertWorkflowItem({
-          id: wfRoundId + '-reasoning',
-          kind: 'reasoning',
-          roundId: wfRoundId,
-          text: reasoningText,
-          isStreaming: false,
-          startTs: wfRoundTs,
-          role: activeRole,
-        });
+      if (!wfTurnId) {
+        startWorkflowTurn();
+      }
+    };
+
+    const ensureWorkflowAssistantId = () => {
+      ensureWorkflowTurn();
+      if (!wfAssistantId) {
+        wfAssistantId = `${wfTurnId}-assistant`;
+      }
+      return wfAssistantId;
+    };
+
+    const ensureWorkflowReasoningId = () => {
+      ensureWorkflowTurn();
+      if (!wfReasoningId) {
+        wfReasoningId = `${wfTurnId}-reasoning`;
+      }
+      return wfReasoningId;
+    };
+
+    const upsertWorkflowTextItem = (
+      item: TimelineItem & { kind: 'assistant_text' | 'reasoning' },
+    ) => {
+      if (transcriptStore) {
+        if (item.kind === 'assistant_text') {
+          transcriptStore.upsertAssistantText(item);
+        } else {
+          transcriptStore.upsertReasoning(item);
+        }
+        publishTimeline();
+        return;
+      }
+      upsertWorkflowItem(item);
+    };
+
+    const finalizeWorkflowTurn = () => {
+      if (!wfTurnId) return;
+
+      if (wfAssistantId) {
+        if (assistantText) {
+          upsertWorkflowTextItem({
+            id: wfAssistantId,
+            kind: 'assistant_text',
+            roundId: wfTurnId,
+            text: assistantText,
+            isStreaming: false,
+            startTs: wfTurnTs,
+            role: activeRole,
+          });
+        } else if (transcriptStore) {
+          transcriptStore.finalizePart(wfAssistantId);
+          publishTimeline();
+        }
+      }
+
+      if (wfReasoningId) {
+        if (reasoningText) {
+          upsertWorkflowTextItem({
+            id: wfReasoningId,
+            kind: 'reasoning',
+            roundId: wfTurnId,
+            text: reasoningText,
+            isStreaming: false,
+            startTs: wfTurnTs,
+            role: activeRole,
+          });
+        } else if (transcriptStore) {
+          transcriptStore.finalizePart(wfReasoningId);
+          publishTimeline();
+        }
       }
     };
 
@@ -1030,13 +1109,13 @@ export function createBridge(
         elapsedMs: patch.elapsedMs,
       };
       if (transcriptStore) {
-        transcriptStore.upsertTool(itemId, wfRoundId, tool, current => ({ ...current, ...patch }), activeRole);
+        transcriptStore.upsertTool(itemId, wfTurnId, tool, current => ({ ...current, ...patch }), activeRole);
         publishTimeline();
       } else {
         commitBridge(prev => {
           const current = prev.timeline.find(item => item.id === itemId);
           const merged = current?.kind === 'tool' ? { ...current.tool, ...patch } : tool;
-          const item: TimelineItem = { id: itemId, kind: 'tool', roundId: wfRoundId, tool: merged, role: activeRole };
+          const item: TimelineItem = { id: itemId, kind: 'tool', roundId: wfTurnId, tool: merged, role: activeRole };
           const index = prev.timeline.findIndex(entry => entry.id === itemId);
           if (index === -1) return { timeline: [...prev.timeline, item] };
           const timeline = [...prev.timeline];
@@ -1059,7 +1138,7 @@ export function createBridge(
           const wfEvent = rawEvent as unknown as WorkflowEvent;
 
             if (wfEvent.type === 'phase_change' && wfEvent.phase && wfEvent.iteration != null) {
-            finalizeWorkflowRound();
+            finalizeWorkflowTurn();
             activeRole = wfEvent.phase === 'worker_do' || wfEvent.phase === 'worker_report' ? 'worker' : 'supervisor';
             onPhaseChange?.(wfEvent.phase, wfEvent.iteration);
             if (orchestrationStore) {
@@ -1073,13 +1152,7 @@ export function createBridge(
                 },
               });
             }
-            wfRoundId = `wf-round-${crypto.randomUUID()}`;
-            wfRoundTs = Date.now();
-            assistantText = '';
-            reasoningText = '';
-            toolItemIds = new Map<string, string>();
-            toolCallArgs = new Map<number, string>();
-            toolOutputs = new Map<string, string>();
+            startWorkflowPhase();
           }
           if (wfEvent.type === 'completed') {
             onPhaseChange?.('completed', 0, 'completed');
@@ -1092,54 +1165,56 @@ export function createBridge(
           const loopEvent = rawEvent as unknown as LoopEvent;
           switch (loopEvent.role) {
             case 'assistant_delta': {
-              if (!wfRoundId) break;
-              assistantText += loopEvent.content ?? '';
+              ensureWorkflowTurn();
+              const chunk = loopEvent.content ?? '';
+              assistantText += chunk;
+              const id = ensureWorkflowAssistantId();
               if (transcriptStore) {
-                transcriptStore.ensureTextPart(wfRoundId + '-text', 'assistant_text', wfRoundId, wfRoundTs, activeRole);
-                transcriptStore.appendPartDelta(wfRoundId + '-text', loopEvent.content ?? '');
+                transcriptStore.ensureTextPart(id, 'assistant_text', wfTurnId, wfTurnTs, activeRole);
+                transcriptStore.appendPartDelta(id, chunk);
                 publishTimeline();
               } else {
-                upsertWorkflowItem({ id: wfRoundId + '-text', kind: 'assistant_text', roundId: wfRoundId, text: assistantText, isStreaming: true, startTs: wfRoundTs, role: activeRole });
+                upsertWorkflowItem({ id, kind: 'assistant_text', roundId: wfTurnId, text: assistantText, isStreaming: true, startTs: wfTurnTs, role: activeRole });
               }
               break;
             }
             case 'assistant_final': {
-              if (!wfRoundId) break;
+              ensureWorkflowTurn();
               if (loopEvent.content) assistantText = loopEvent.content;
               const metadataReasoning = loopEvent.metadata?.reasoning;
               if (typeof metadataReasoning === 'string' && metadataReasoning.length > 0) reasoningText = metadataReasoning;
-              if (transcriptStore) {
-                transcriptStore.ensureTextPart(wfRoundId + '-text', 'assistant_text', wfRoundId, wfRoundTs, activeRole);
-                transcriptStore.setTextPart(wfRoundId + '-text', assistantText, false);
-                publishTimeline();
-              } else {
-                upsertWorkflowItem({ id: wfRoundId + '-text', kind: 'assistant_text', roundId: wfRoundId, text: assistantText, isStreaming: false, startTs: wfRoundTs, role: activeRole });
+              if (assistantText) {
+                const id = ensureWorkflowAssistantId();
+                upsertWorkflowTextItem({ id, kind: 'assistant_text', roundId: wfTurnId, text: assistantText, isStreaming: false, startTs: wfTurnTs, role: activeRole });
               }
               if (reasoningText) {
-                const item: TimelineItem = { id: wfRoundId + '-reasoning', kind: 'reasoning', roundId: wfRoundId, text: reasoningText, isStreaming: false, startTs: wfRoundTs, role: activeRole };
-                if (transcriptStore) transcriptStore.upsertReasoning(item);
-                else upsertWorkflowItem(item);
+                const id = ensureWorkflowReasoningId();
+                upsertWorkflowTextItem({ id, kind: 'reasoning', roundId: wfTurnId, text: reasoningText, isStreaming: false, startTs: wfTurnTs, role: activeRole });
               }
               break;
             }
             case 'reasoning_delta': {
-              if (!wfRoundId) break;
-              reasoningText += loopEvent.content ?? '';
+              ensureWorkflowTurn();
+              const chunk = loopEvent.content ?? '';
+              reasoningText += chunk;
+              const id = ensureWorkflowReasoningId();
               if (transcriptStore) {
-                transcriptStore.ensureTextPart(wfRoundId + '-reasoning', 'reasoning', wfRoundId, wfRoundTs, activeRole);
-                transcriptStore.appendPartDelta(wfRoundId + '-reasoning', loopEvent.content ?? '');
+                transcriptStore.ensureTextPart(id, 'reasoning', wfTurnId, wfTurnTs, activeRole);
+                transcriptStore.appendPartDelta(id, chunk);
                 publishTimeline();
               } else {
-                upsertWorkflowItem({ id: wfRoundId + '-reasoning', kind: 'reasoning', roundId: wfRoundId, text: reasoningText, isStreaming: true, startTs: wfRoundTs, role: activeRole });
+                upsertWorkflowItem({ id, kind: 'reasoning', roundId: wfTurnId, text: reasoningText, isStreaming: true, startTs: wfTurnTs, role: activeRole });
               }
               break;
             }
             case 'tool_call_delta':
+              ensureWorkflowTurn();
               if (loopEvent.toolCallIndex !== undefined && loopEvent.content) {
                 toolCallArgs.set(loopEvent.toolCallIndex, loopEvent.content);
               }
               break;
             case 'tool_start': {
+              ensureWorkflowTurn();
               const key = fallbackToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
               upsertWorkflowTool(key, {
                 name: loopEvent.toolName ?? 'unknown',
@@ -1151,6 +1226,7 @@ export function createBridge(
               break;
             }
             case 'tool_progress': {
+              ensureWorkflowTurn();
               const key = fallbackToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
               if (loopEvent.content === 'done') {
                 upsertWorkflowTool(key, { status: 'done' });
@@ -1163,6 +1239,7 @@ export function createBridge(
               break;
             }
             case 'tool': {
+              ensureWorkflowTurn();
               const key = fallbackToolKey(loopEvent.toolCallIndex, loopEvent.toolName);
               upsertWorkflowTool(key, {
                 name: loopEvent.toolName ?? 'tool',
@@ -1187,6 +1264,10 @@ export function createBridge(
               break;
             }
             case 'status':
+              if (loopEvent.content === 'tools_completed') {
+                finalizeWorkflowTurn();
+                startWorkflowTurn();
+              }
               break;
             case 'done':
               break;
@@ -1259,7 +1340,7 @@ export function createBridge(
         warnings: [...prev.warnings, `Workflow error: ${(err as Error).message ?? String(err)}`],
       }));
     } finally {
-      finalizeWorkflowRound();
+      finalizeWorkflowTurn();
       // SFR-70: 确保 always 恢复 idle，即使中断或异常
       setTUIState('idle');
       commitBridge(() => ({
