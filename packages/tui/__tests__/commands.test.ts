@@ -26,6 +26,17 @@ describe("CL-52: slash command routing helpers", () => {
     expect(parseSlashCommand("/unknown")).toBeNull()
   })
 
+  it("parses /goal commands", () => {
+    expect(parseSlashCommand("/goal")).toEqual({ name: "goal" })
+    expect(parseSlashCommand("/goal fix all bugs")).toEqual({ name: "goal", subcommand: "status", objective: "fix all bugs" })
+    expect(parseSlashCommand("/goal edit")).toEqual({ name: "goal", subcommand: "edit" })
+    expect(parseSlashCommand("/goal pause")).toEqual({ name: "goal", subcommand: "pause" })
+    expect(parseSlashCommand("/goal resume")).toEqual({ name: "goal", subcommand: "resume" })
+    expect(parseSlashCommand("/goal clear")).toEqual({ name: "goal", subcommand: "clear" })
+    expect(parseSlashCommand("/goal budget 50000")).toEqual({ name: "goal", subcommand: "budget", arg: "50000" })
+    expect(parseSlashCommand("/goal no-budget")).toEqual({ name: "goal", subcommand: "no-budget" })
+  })
+
   it("parses and validates thinking modes", () => {
     expect(parseSlashCommand("/thinking high")).toEqual({ name: "thinking", mode: "high" })
     expect(parseSlashCommand("/thinking")).toEqual({ name: "thinking", mode: "" })

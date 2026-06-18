@@ -48,6 +48,8 @@ export interface WorkflowLoopState {
   /** 用户在中断后提供的恢复指令，仅供下一次 Supervisor 分析使用 */
   resumeInstruction?: string
   lastDecision?: WorkflowDecision
+  /** Structured SupervisorDecision when parsed via zod */
+  supervisorDecision?: Record<string, unknown>
   blockedReason?: string
   waitingUserRequestId?: string
   waitingUserQuestion?: string
@@ -170,7 +172,7 @@ export interface StartWorkflowOptions {
 }
 
 export interface WorkflowEvent {
-  type: "phase_change" | "iteration_change" | "blocked" | "completed" | "failed" | "ask_user" | "supervisor_intervene" | "role_output"
+  type: "phase_change" | "iteration_change" | "blocked" | "completed" | "failed" | "ask_user" | "supervisor_intervene" | "role_output" | "low_confidence_decision"
   workflowId: string
   phase?: WorkflowPhase
   iteration?: number
@@ -179,6 +181,8 @@ export interface WorkflowEvent {
   question?: string
   /** 中途干预时的 advice 摘要 */
   adviceSummary?: string
+  /** low_confidence_decision 时的决策值 */
+  decision?: WorkflowDecision
   timestamp: number
   /** SFR-60: role_output 事件携带原始 AgentRuntime 事件 */
   roleEvent?: LoopEvent

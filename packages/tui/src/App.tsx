@@ -32,6 +32,7 @@ import { ContextModal } from './ContextModal.js';
 import { formatStatus } from './status/format.js';
 import { t, setLocale } from './i18n/index.js';
 import { loadTuiSettings, saveTuiSettings, type WorkflowMode } from './settings.js';
+import { GoalStore, GoalRuntime } from '@deepreef/core/goal/index.js';
 import {
   buildHelpText,
   parseSlashCommand,
@@ -664,6 +665,63 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           role: 'assistant' as const,
           content: `Input target switched to: ${newRole}`,
         });
+      }
+      return;
+    }
+    // /goal 命令 — 目标管理
+    if (command?.name === 'goal') {
+      const sessionId = engineRef.current.getSessionId();
+      const goalStore = new GoalStore();
+      const goal = goalStore.getGoal(sessionId);
+      if (command.objective) {
+        goalStore.createGoal(sessionId, command.objective);
+        appendMessage({
+          role: 'assistant' as const,
+          content: `Goal set: ${command.objective}`,
+        });
+      } else if (command.subcommand === 'edit') {
+        appendMessage({
+          role: 'assistant' as const,
+          content: 'To edit the goal objective: reply with your updated objective text.',
+        });
+        // A future update will wire the prompt overlay for inline editing.
+      } else if (command.subcommand === 'pause') {
+        if (goal) { goalStore.updateGoal(sessionId, { status: 'paused' }); }
+        appendMessage({ role: 'assistant' as const, content: goal ? 'Goal paused.' : 'No active goal.' });
+      } else if (command.subcommand === 'resume') {
+        if (goal) { goalStore.updateGoal(sessionId, { status: 'active' }); }
+        appendMessage({ role: 'assistant' as const, content: goal ? 'Goal resumed.' : 'No active goal.' });
+      } else if (command.subcommand === 'clear') {
+        if (goal) { goalStore.updateGoal(sessionId, { status: 'complete' }); }
+        appendMessage({ role: 'assistant' as const, content: goal ? 'Goal cleared.' : 'No active goal.' });
+      } else if (command.subcommand === 'budget' && command.arg) {
+        const budget = parseInt(command.arg, 10);
+        if (isNaN(budget) || budget <= 0) {
+          appendMessage({ role: 'assistant' as const, content: 'Invalid budget. Usage: /goal budget <number>' });
+        } else {
+          goalStore.createGoal(sessionId, goal?.objective ?? 'New goal', budget);
+          appendMessage({ role: 'assistant' as const, content: `Token budget set to: ${budget}` });
+        }
+      } else if (command.subcommand === 'no-budget') {
+        goalStore.createGoal(sessionId, goal?.objective ?? 'New goal', undefined);
+        appendMessage({ role: 'assistant' as const, content: 'Token budget removed (unlimited).' });
+      } else {
+        // /goal — show current goal status
+        if (goal) {
+          const budgetInfo = goal.tokenBudget ? ` | Budget: ${goal.tokensUsed}/${goal.tokenBudget}` : '';
+          appendMessage({
+            role: 'assistant' as const,
+            content: [
+              `Goal: ${goal.objective}`,
+              `Status: ${goal.status} | Tokens: ${goal.tokensUsed}${budgetInfo} | Time: ${goal.timeUsedSeconds}s`,
+            ].join('\n'),
+          });
+        } else {
+          appendMessage({
+            role: 'assistant' as const,
+            content: 'No goal set. Use /goal <objective> to create one.',
+          });
+        }
       }
       return;
     }

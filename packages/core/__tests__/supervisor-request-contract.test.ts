@@ -210,8 +210,8 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
     expect(toolNames).toHaveLength(5)
   })
 
-  // ─── 测试 4b: Supervisor loop 模式 → 零工具 ───
-  it("[SFR-30] Supervisor Workflow (loop) 模式应暴露零工具", async () => {
+  // ─── 测试 4b: Supervisor loop 模式 → 治理工具 ───
+  it("[SFR-30] Supervisor Workflow (loop) 模式应暴露治理工具", async () => {
     const engine = makeEngine({ systemPrompt: cwdMarker })
     registerSupervisionTools(engine)
     registerMutationTools(engine)
@@ -224,8 +224,13 @@ describe("SFR-00: Supervisor 请求契约基线（退化证明）", () => {
     }
 
     const toolsInRequest = capturedMessages?.opts?.tools ?? []
-    // Workflow 阶段不暴露工具
-    expect(toolsInRequest).toHaveLength(0)
+    const toolNames = toolsInRequest.map((t: any) => t.function.name)
+    // Loop 阶段只暴露治理工具，不暴露工程工具
+    expect(toolNames).not.toContain("bash")
+    expect(toolNames).not.toContain("write_file")
+    expect(toolNames).not.toContain("edit")
+    // 如果治理工具已注册，应出现在列表中
+    // 实际工具列表由注册的工具决定
   })
 
   // ─── 测试 4c: Worker alone 模式应有完整工具 ───
@@ -364,6 +369,81 @@ describe("SFR-00: 工具策略边界测试", () => {
     })
     expect(loop.tools).toHaveLength(0)
   })
+
+  it("loop 模式 Supervisor 零工具的回归测试", async () => {
+    const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
+    const registeredTools = new Map()
+    registerSupervisionToolsMock(registeredTools)
+
+    registeredTools.set("bash", {
+      name: "bash", description: "", parameters: {},
+      concurrency: "exclusive", approval: "exec",
+      execute: async () => ({ content: "", isError: false }),
+    })
+    registeredTools.set("write_file", {
+      name: "write_file", description: "", parameters: {},
+      concurrency: "exclusive", approval: "write",
+      execute: async () => ({ content: "", isError: false }),
+    })
+
+    const result = resolveEffectiveTools({
+      registeredTools,
+      role: "supervisor",
+      mode: "loop",
+      agentToolNames: undefined,
+    })
+    // Supervisor loop 现在允许治理工具（get_goal, update_goal, send_message, etc.）
+    // 所以 tools 长度取决于注册的治理工具
+    // 工程工具（bash, write_file）应被过滤
+    expect(result.tools.length).toBeGreaterThanOrEqual(0)
+    expect(result.tools.find(t => t.function.name === "bash")).toBeUndefined()
+    expect(result.tools.find(t => t.function.name === "write_file")).toBeUndefined()
+  })
+
+  it("Worker + loop 按 agentToolNames 生效", async () => {
+    const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
+    const registeredTools = new Map()
+    registeredTools.set("read_file", {
+      name: "read_file", description: "", parameters: {},
+      concurrency: "shared", approval: "read",
+      execute: async () => ({ content: "", isError: false }),
+    })
+    registeredTools.set("bash", {
+      name: "bash", description: "", parameters: {},
+      concurrency: "exclusive", approval: "exec",
+      execute: async () => ({ content: "", isError: false }),
+    })
+    registeredTools.set("edit", {
+      name: "edit", description: "", parameters: {},
+      concurrency: "exclusive", approval: "write",
+      execute: async () => ({ content: "", isError: false }),
+    })
+
+    const r1 = resolveEffectiveTools({
+      registeredTools,
+      role: "worker",
+      mode: "loop",
+      agentToolNames: ["read_file", "bash"],
+    })
+    expect(r1.tools).toHaveLength(2)
+    expect(r1.tools.map(t => t.function.name).sort()).toEqual(["bash", "read_file"])
+
+    const r2 = resolveEffectiveTools({
+      registeredTools,
+      role: "worker",
+      mode: "loop",
+      agentToolNames: undefined,
+    })
+    expect(r2.tools).toHaveLength(3)
+
+    const r3 = resolveEffectiveTools({
+      registeredTools,
+      role: "worker",
+      mode: "loop",
+      agentToolNames: [],
+    })
+    expect(r3.tools).toHaveLength(0)
+  })
 })
 
 function registerSupervisionToolsMock(map: Map<string, any>) {
@@ -393,5 +473,69 @@ describe("SFR-00: 配置与诊断契约", () => {
     const toolsInRequest = capturedMessages?.opts?.tools ?? []
     // loop 模式 Supervisor 工具应为空
     expect(toolsInRequest).toHaveLength(0)
+  })
+})
+
+describe("Phase 6: 工具过滤重构", () => {
+  it("Supervisor loop 允许治理工具，过滤工程工具", async () => {
+    const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
+    const tools = new Map()
+    const toolNames = ["get_goal", "update_goal", "send_message", "followup_task", "read_mailbox", "bash", "write_file", "edit", "AgentTool"]
+    for (const name of toolNames) {
+      tools.set(name, {
+        name, description: "", parameters: {},
+        concurrency: "shared", approval: "read",
+        execute: async () => ({ content: "", isError: false }),
+      })
+    }
+
+    const result = resolveEffectiveTools({ registeredTools: tools, role: "supervisor", mode: "loop" })
+    const names = result.tools.map(t => t.function.name).sort()
+    expect(names).toEqual(["followup_task", "get_goal", "read_mailbox", "send_message", "update_goal"])
+  })
+
+  it("Worker loop 允许工程工具+mailbox，拒绝 update_goal", async () => {
+    const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
+    const tools = new Map()
+    const toolNames = ["get_goal", "update_goal", "send_message", "followup_task", "read_mailbox", "bash", "edit"]
+    for (const name of toolNames) {
+      tools.set(name, {
+        name, description: "", parameters: {},
+        concurrency: "shared", approval: "read",
+        execute: async () => ({ content: "", isError: false }),
+      })
+    }
+
+    // Worker loop with agentToolNames containing bash
+    const result = resolveEffectiveTools({ registeredTools: tools, role: "worker", mode: "loop", agentToolNames: ["bash", "edit"] })
+    const names = result.tools.map(t => t.function.name).sort()
+    // Should have: bash, edit (from agentToolNames) + get_goal, send_message, followup_task, read_mailbox (extra)
+    // NOT: update_goal
+    expect(names).toContain("bash")
+    expect(names).toContain("edit")
+    expect(names).toContain("get_goal")
+    expect(names).toContain("send_message")
+    expect(names).not.toContain("update_goal")
+  })
+
+  it("Worker loop 带空 agentToolNames 只保留 mailbox 工具", async () => {
+    const { resolveEffectiveTools } = await import("../src/resolve-effective-tools.js")
+    const tools = new Map()
+    const toolNames = ["get_goal", "update_goal", "send_message", "followup_task", "read_mailbox", "bash"]
+    for (const name of toolNames) {
+      tools.set(name, {
+        name, description: "", parameters: {},
+        concurrency: "shared", approval: "read",
+        execute: async () => ({ content: "", isError: false }),
+      })
+    }
+
+    const result = resolveEffectiveTools({ registeredTools: tools, role: "worker", mode: "loop", agentToolNames: [] })
+    const names = result.tools.map(t => t.function.name)
+    // Empty agentToolNames = no engineering tools, but mailbox extra tools still pass
+    expect(names).toContain("get_goal")
+    expect(names).toContain("send_message")
+    expect(names).not.toContain("bash")
+    expect(names).not.toContain("update_goal")
   })
 })

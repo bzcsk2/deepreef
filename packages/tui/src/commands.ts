@@ -20,6 +20,7 @@ export type SlashCommand =
   | { name: "theme"; themeName?: string }
   | { name: "workflow" }
   | { name: "talk"; role?: "worker" | "supervisor" }
+  | { name: "goal"; subcommand?: "status" | "edit" | "pause" | "resume" | "clear" | "budget" | "no-budget"; arg?: string; objective?: string }
 
 const THINKING_MODES = ["off", "open", "high"]
 
@@ -73,6 +74,21 @@ export function parseSlashCommand(text: string): SlashCommand | null {
     const role = parts[1] as "worker" | "supervisor" | undefined
     if (role && role !== "worker" && role !== "supervisor") return null
     return { name: "talk", role }
+  }
+
+  if (trimmed.startsWith("/goal")) {
+    const parts = trimmed.split(/\s+/)
+    if (parts.length === 1) return { name: "goal" }
+    const sub = parts[1]
+    if (sub === "edit") return { name: "goal", subcommand: "edit" }
+    if (sub === "pause") return { name: "goal", subcommand: "pause" }
+    if (sub === "resume") return { name: "goal", subcommand: "resume" }
+    if (sub === "clear") return { name: "goal", subcommand: "clear" }
+    if (sub === "no-budget") return { name: "goal", subcommand: "no-budget" }
+    if (sub === "budget" && parts[2]) return { name: "goal", subcommand: "budget", arg: parts[2] }
+    // /goal <objective> — 剩余部分作为 objective
+    const rest = parts.slice(1).join(" ")
+    return { name: "goal", subcommand: "status", objective: rest }
   }
 
   return null
@@ -146,6 +162,14 @@ export function buildHelpText(activeAgent: string, cmdStrings: HelpCommandString
     `  /thinking    — set thinking mode`,
     `  /workflow    — switch workflow mode (alone | subagent | loop)`,
     `  /talk [role] — switch input target (worker|supervisor)`,
+    `  /goal        — show/set goal status`,
+    `  /goal <obj>  — set goal objective`,
+    `  /goal edit   — edit goal objective prompt`,
+    `  /goal pause  — pause goal tracking`,
+    `  /goal resume — resume goal tracking`,
+    `  /goal clear  — clear current goal`,
+    `  /goal budget — set token budget for goal`,
+    `  /goal no-budget — unlimited token budget`,
     "",
     "Agents:",
     agentList,

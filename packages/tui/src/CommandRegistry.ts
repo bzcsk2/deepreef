@@ -19,6 +19,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: '/thinking', description: 'set thinking mode (off/open/high)' },
   { name: '/harness', description: 'set harness strictness (strict/normal/loose)' },
   { name: '/workflow', description: 'switch workflow mode (alone/subagent/loop)' },
+  { name: '/goal', description: 'show/set goal status and objective' },
+  { name: '/goal edit', description: 'edit goal objective prompt' },
+  { name: '/goal pause', description: 'pause goal tracking' },
+  { name: '/goal resume', description: 'resume goal tracking' },
+  { name: '/goal clear', description: 'clear current goal' },
+  { name: '/goal budget', description: 'set token budget for goal' },
+  { name: '/goal no-budget', description: 'unlimited token budget' },
 ];
 
 export function filterCommands(query: string): SlashCommand[] {

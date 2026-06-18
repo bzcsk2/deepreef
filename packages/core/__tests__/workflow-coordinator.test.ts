@@ -498,11 +498,189 @@ describe("WorkflowCoordinator", () => {
     expect(blockedEvent.reason).toBe("Max rounds reached")
   })
 
+  describe("parseDecision legacy behavior", () => {
+    it('"approve" or "completed" in text → approve', () => {
+      const coordinator = new WorkflowCoordinator()
+      // Access private parseDecision via reflection for testing
+      const parse = (coordinator as any).parseDecision.bind(coordinator)
+      expect(parse("I approve this work")).toBe("approve")
+      expect(parse("All tasks completed")).toBe("approve")
+      expect(parse("The goal is completed and approved")).toBe("approve")
+    })
+
+    it('"ask_user" or "ask user" → ask_user', () => {
+      const parse = (new WorkflowCoordinator() as any).parseDecision.bind(new WorkflowCoordinator())
+      expect(parse("ask_user for clarification")).toBe("ask_user")
+      expect(parse("I need to ask user about this")).toBe("ask_user")
+    })
+
+    it('"blocked" or "cannot continue" → blocked', () => {
+      const parse = (new WorkflowCoordinator() as any).parseDecision.bind(new WorkflowCoordinator())
+      expect(parse("Workflow blocked")).toBe("blocked")
+      expect(parse("We cannot continue due to an issue")).toBe("blocked")
+    })
+
+    it('"revise" → revise', () => {
+      const parse = (new WorkflowCoordinator() as any).parseDecision.bind(new WorkflowCoordinator())
+      expect(parse("revise the approach")).toBe("revise")
+    })
+
+    it("fallback to continue for unknown text", () => {
+      const parse = (new WorkflowCoordinator() as any).parseDecision.bind(new WorkflowCoordinator())
+      expect(parse("keep going with the current plan")).toBe("continue")
+      expect(parse("random text")).toBe("continue")
+    })
+  })
+
   it("should not transition if no workflow in progress", () => {
     const coordinator = new WorkflowCoordinator()
     const result = coordinator.transition("supervisor_analyse")
     expect(result.success).toBe(false)
     expect(result.error).toBe("No workflow in progress")
+  })
+
+  describe("mailbox + goal integration", () => {
+    it("writes plan to mailbox on supervisor analyse", async () => {
+      const { AgentCommController } = await import("../src/agent-comm/controller.js")
+      const { Mailbox } = await import("../src/agent-comm/mailbox.js")
+      const { rmSync, mkdirSync, existsSync } = await import("node:fs")
+      const { resolve } = await import("node:path")
+      const testDir = resolve(process.cwd(), ".deepreef-test-coord-mailbox")
+      if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
+      mkdirSync(testDir, { recursive: true })
+
+      const mailbox = new Mailbox(testDir)
+      const agentComm = new AgentCommController({
+        threadId: "test-thread",
+        goalId: "test-goal",
+        workflowId: "test-wf",
+        iteration: 1,
+      }, mailbox)
+
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () { yield { role: "assistant_final", content: "Supervisor plan here" } },
+          getState: () => ({ messages: [{ role: "assistant", content: "Supervisor plan here" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () { yield { role: "assistant_final", content: "done" } },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      const coordinator = new WorkflowCoordinator({
+        runtime: runtime as any,
+        agentComm: agentComm as any,
+        config: { requireSupervisorPlan: false },
+      })
+      coordinator.startWorkflow({ goal: "test", workflowId: "test-wf" })
+      for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+      const messages = mailbox.read({ threadId: "test-thread" })
+      const supervisorTasks = messages.filter(m => m.from === "supervisor" && m.to === "worker")
+      expect(supervisorTasks.length).toBeGreaterThan(0)
+
+      if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
+    })
+
+    it("reads task from mailbox in worker_do", async () => {
+      const { AgentCommController } = await import("../src/agent-comm/controller.js")
+      const { Mailbox } = await import("../src/agent-comm/mailbox.js")
+      const { rmSync, mkdirSync, existsSync } = await import("node:fs")
+      const { resolve } = await import("node:path")
+      const testDir = resolve(process.cwd(), ".deepreef-test-coord-mailbox2")
+      if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
+      mkdirSync(testDir, { recursive: true })
+
+      const mailbox = new Mailbox(testDir)
+      const agentComm = new AgentCommController({
+        threadId: "test-thread",
+        goalId: "test-goal",
+        workflowId: "test-wf",
+        iteration: 1,
+      }, mailbox)
+
+      // Pre-write a task to the mailbox (simulating what supervisor_analyse would do)
+      mailbox.send({
+        threadId: "test-thread", goalId: "test-goal", workflowId: "test-wf",
+        iteration: 1, from: "supervisor", to: "worker",
+        kind: "task", delivery: "trigger_turn",
+        content: "Mailbox task content",
+      })
+
+      const workerInputs: string[] = []
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () { yield { role: "assistant_final", content: "approve" } },
+          getState: () => ({ messages: [{ role: "assistant", content: "approve" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* (input: string) {
+            workerInputs.push(input)
+            yield { role: "assistant_final", content: "done" }
+          },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      const coordinator = new WorkflowCoordinator({
+        runtime: runtime as any,
+        agentComm: agentComm as any,
+        config: { requireSupervisorPlan: false },
+      })
+      coordinator.startWorkflow({ goal: "test", workflowId: "test-wf" })
+
+      // Manually set supervisorPlan so coordinator has a plan
+      coordinator.setSupervisorPlan("Direct plan")
+
+      // Directly transition to worker_do
+      coordinator.transition("worker_do")
+      for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+      // The worker input should contain the mailbox task content
+      const hasMailboxContent = workerInputs.some(i => i.includes("Mailbox task content"))
+      expect(hasMailboxContent).toBe(true)
+
+      if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
+    })
+
+    it("updates goal to complete on approve", async () => {
+      const { GoalStore } = await import("../src/goal/store.js")
+      const { rmSync, mkdirSync, existsSync } = await import("node:fs")
+      const { resolve } = await import("node:path")
+      const { randomUUID } = await import("node:crypto")
+      const testDir = resolve(process.cwd(), ".deepreef-test-coord-goal")
+      if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
+      mkdirSync(testDir, { recursive: true })
+
+      const goalStore = new GoalStore(testDir)
+      const threadId = randomUUID()
+      goalStore.createGoal(threadId, "Test goal")
+
+      const runtime = {
+        getSupervisor: () => ({
+          submit: async function* () { yield { role: "assistant_final", content: "I approve, all tasks completed" } },
+          getState: () => ({ messages: [{ role: "assistant", content: "I approve, all tasks completed" }] }),
+        }),
+        getWorker: () => ({
+          submit: async function* () { yield { role: "assistant_final", content: "done" } },
+          getState: () => ({ messages: [{ role: "assistant", content: "done" }] }),
+        }),
+      }
+
+      const coordinator = new WorkflowCoordinator({
+        runtime: runtime as any,
+        goalStore,
+        config: { requireSupervisorPlan: false },
+      })
+      coordinator.startWorkflow({ goal: "Test goal", workflowId: threadId })
+      for await (const _event of coordinator.runWorkflow()) { /* consume */ }
+
+      const goal = goalStore.getGoal(threadId)
+      expect(goal?.status).toBe("complete")
+
+      if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
+    })
   })
 
   describe("supervisor_intervene 中途干预", () => {

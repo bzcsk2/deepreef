@@ -13,6 +13,9 @@ import { DEFAULT_WORKFLOW_CONFIG } from "./types.js"
 import type { DualAgentRuntime } from "../dual-agent-runtime/dual-runtime.js"
 import type { QuestionService } from "../question/service.js"
 import type { LoopEvent } from "../interface.js"
+import { parseSupervisorDecision, parseSupervisorPlan } from "./structured-protocol.js"
+import type { AgentCommController } from "../agent-comm/controller.js"
+import type { GoalStore } from "../goal/store.js"
 
 export interface StartWorkflowOptions {
   goal: string
@@ -26,6 +29,8 @@ export interface WorkflowCoordinatorOptions {
   onEvent?: (event: WorkflowEvent) => void
   runtime?: DualAgentRuntime
   questionService?: QuestionService
+  agentComm?: AgentCommController
+  goalStore?: GoalStore
 }
 
 export class WorkflowCoordinator {
@@ -36,12 +41,16 @@ export class WorkflowCoordinator {
   private questionService?: QuestionService
   private abortController?: AbortController
   private pendingEvents: WorkflowEvent[] = []
+  private agentComm?: AgentCommController
+  private goalStore?: GoalStore
 
   constructor(options: WorkflowCoordinatorOptions = {}) {
     this.config = { ...DEFAULT_WORKFLOW_CONFIG, ...options.config }
     this.onEvent = options.onEvent
     this.runtime = options.runtime
     this.questionService = options.questionService
+    this.agentComm = options.agentComm
+    this.goalStore = options.goalStore
   }
 
   getState(): WorkflowLoopState | null {
@@ -330,11 +339,27 @@ export class WorkflowCoordinator {
     this.setSupervisorPlan(plan)
     this.state!.resumeInstruction = undefined
 
+    // Mailbox: write plan as task to Worker
+    if (this.agentComm) {
+      this.agentComm.followupTask("supervisor", plan)
+    }
+
     this.transition("worker_do")
   }
 
   private async *runWorkerDo(): AsyncGenerator<WorkflowEvent> {
-    const workerInput = `Execute the following plan for iteration ${this.state!.iteration}:\n\n${this.state!.supervisorPlan ?? ""}\n\nGoal: ${this.state!.goal}${this.state!.supervisorFeedback ? `\n\nSupervisor feedback from the previous iteration:\n${this.state!.supervisorFeedback}` : ""}`
+    // Mailbox: read pending task from Supervisor
+    let taskContent = ""
+    if (this.agentComm) {
+      const pendingTasks = this.agentComm.readMailbox({ to: "worker", unreadOnly: true, limit: 1 })
+      if (pendingTasks.length > 0) {
+        taskContent = pendingTasks[0].content
+        this.agentComm.markRead(pendingTasks[0].id)
+      }
+    }
+
+    const planContent = taskContent || this.state!.supervisorPlan || ""
+    const workerInput = `Execute the following plan for iteration ${this.state!.iteration}:\n\n${planContent}\n\nGoal: ${this.state!.goal}${this.state!.supervisorFeedback ? `\n\nSupervisor feedback from the previous iteration:\n${this.state!.supervisorFeedback}` : ""}`
 
     let hasError = false
     let errorCount = 0
@@ -371,11 +396,26 @@ export class WorkflowCoordinator {
     const report = workerState.messages.findLast(m => m.role === "assistant")?.content ?? ""
     this.setWorkerReport(report)
 
+    // Mailbox: write report to Supervisor
+    if (this.agentComm) {
+      this.agentComm.sendMessage("worker", "supervisor", "report", report)
+    }
+
     this.transition("supervisor_check")
   }
 
   private async *runSupervisorCheck(): AsyncGenerator<WorkflowEvent> {
-    const supervisorInput = `Review the following worker report and decide next action:\n\nPlan: ${this.state!.supervisorPlan ?? ""}\n\nReport: ${this.state!.workerReport ?? ""}\n\nDecide: continue, revise, approve, ask_user, or blocked`
+    // Mailbox: read pending report from Worker
+    let reportedContent = this.state!.workerReport ?? ""
+    if (this.agentComm) {
+      const pendingReports = this.agentComm.readMailbox({ to: "supervisor", unreadOnly: true, limit: 1 })
+      if (pendingReports.length > 0) {
+        reportedContent = pendingReports[0].content
+        this.agentComm.markRead(pendingReports[0].id)
+      }
+    }
+
+    const supervisorInput = `Review the following worker report and decide next action:\n\nPlan: ${this.state!.supervisorPlan ?? ""}\n\nReport: ${reportedContent}\n\nDecide: continue, revise, approve, ask_user, or blocked`
 
     // SFR-10: 使用 "loop" mode
     for await (const event of this.runtime!.getSupervisor().submit(supervisorInput, "loop")) {
@@ -385,17 +425,51 @@ export class WorkflowCoordinator {
     const supervisorState = this.runtime!.getSupervisor().getState()
     const response = supervisorState.messages.findLast(m => m.role === "assistant")?.content ?? ""
 
-    const decision = this.parseDecision(response)
+    // Try structured protocol first
+    const parsed = parseSupervisorDecision(response)
+    let decision: WorkflowDecision
+    let confidence: "high" | "low" = "high"
+
+    if (parsed && parsed.confidence === "high") {
+      decision = parsed.decision.decision
+      this.state!.supervisorDecision = parsed.decision
+    } else {
+      // Fallback to legacy string matching
+      decision = this.parseDecision(response)
+      confidence = "low"
+      this.emitEvent({
+        type: "low_confidence_decision",
+        workflowId: this.state!.workflowId,
+        decision,
+        iteration: this.state!.iteration,
+        timestamp: Date.now(),
+      })
+    }
+
     this.state!.lastDecision = decision
     this.state!.supervisorFeedback = response
     this.state!.updatedAt = Date.now()
 
     if (decision === "approve") {
+      if (this.goalStore) {
+        try {
+          this.goalStore.updateGoal(this.state!.workflowId, { status: "complete" })
+        } catch {
+          // Goal might not exist, non-blocking
+        }
+      }
       this.transition("completed")
     } else if (decision === "ask_user") {
       const question = this.extractQuestion(response)
       yield* this.handleAskUser(question)
     } else if (decision === "blocked") {
+      if (this.goalStore) {
+        try {
+          this.goalStore.updateGoal(this.state!.workflowId, { status: "blocked" })
+        } catch {
+          // Goal might not exist, non-blocking
+        }
+      }
       this.transition("blocked", response)
     } else if (this.state!.iteration >= this.state!.maxRounds) {
       this.transition("blocked", "Max rounds reached")
