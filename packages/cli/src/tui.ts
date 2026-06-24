@@ -8,6 +8,7 @@ import { WorkflowCoordinator } from "@deepreef/core/workflow-coordinator/coordin
 import { QuestionService } from "@deepreef/core/question/service.js"
 import { GoalStore } from "@deepreef/core/goal/store.js"
 import { Mailbox } from "@deepreef/core/agent-comm/mailbox.js"
+import { AgentScoreStore } from "@deepreef/core/scoring/index.js"
 import { createGoalTools } from "@deepreef/core/goal/tools.js"
 import { createMailboxTools } from "@deepreef/core/agent-comm/tools.js"
 import { createDefaultTools, clearReadTracker, normalizePlatform, resolveShellBackend, createAgentToolTool, createAskUserQuestionTool, createReadFileTool, createGrepTool, createListDirTool, createTodoWriteTool } from "@deepreef/tools"
@@ -328,11 +329,13 @@ async function main(): Promise<void> {
     // SFR-60: Coordinator 阶段事件写入标准输出和进程诊断日志
     const goalStore = new GoalStore()
     const mailbox = new Mailbox()
+    const scoreStore = new AgentScoreStore()
     const workflowCoordinator = new WorkflowCoordinator({
       runtime: dualRuntime,
       questionService,
       goalStore,
       mailbox,
+      scoreStore,
       onEvent: (event) => {
         if (event.type === 'phase_change' || event.type === 'blocked' || event.type === 'completed' || event.type === 'failed') {
           process.stderr.write(`[workflow] ${event.type} phase=${event.phase ?? ''} iteration=${event.iteration ?? 0}\n`)
