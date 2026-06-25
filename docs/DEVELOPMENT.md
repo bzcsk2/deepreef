@@ -1,35 +1,52 @@
 # Development
 
-最后整理：2026-06-24。
+Last consolidated: 2026-06-25.
 
-## 环境
+This document is the maintenance guide for humans and coding agents working on DeepReef.
+
+## Environment
+
+Required baseline:
 
 - Bun 1.3+
 - Node.js 18+
 - TypeScript 5.x
 
-安装依赖：
+Install dependencies:
 
 ```bash
 bun install
 ```
 
-本地启动：
+Run from source:
 
 ```bash
 bun run dev
 ```
 
-## 常用验证
+Build the npm CLI output:
 
 ```bash
-bun run typecheck
-bun test
 bun run build
-npm pack --dry-run
 ```
 
-按范围运行：
+The build emits `dist/index.js` with a Node shebang. The package binary is `deepreef`.
+
+## Root scripts
+
+| Script | Purpose |
+| --- | --- |
+| `bun run dev` | Start the CLI from TypeScript source. |
+| `bun run build` | Bundle `packages/cli/src/index.ts` to `dist/index.js`. |
+| `bun run smoke:cli` | Run `node ./dist/index.js --help`. |
+| `bun run test` | Run core/tools/tui/cli/security tests. |
+| `bun run test:all` | Run the main test suite plus memory package tests. |
+| `bun run test:memory` | Run memory package tests. |
+| `bun run typecheck` | Run TypeScript across the repo. |
+| `bun run pack:dry-run` | Preview npm package contents. |
+| `bun run benchmark:fusion` | Run benchmark matrix script. |
+
+Scoped tests:
 
 ```bash
 bun test packages/core
@@ -39,41 +56,9 @@ bun test packages/memory
 bun test packages/cli
 ```
 
-根脚本：
+## Default validation
 
-| 脚本 | 说明 |
-| --- | --- |
-| `bun run dev` | 从源码启动 CLI。 |
-| `bun run build` | 构建 `dist/index.js`。 |
-| `bun run smoke:cli` | 对构建后的 CLI 跑 help smoke。 |
-| `bun run test` | 跑 core/tools/tui/cli/security 测试。 |
-| `bun run test:all` | 跑全部 Bun 测试。 |
-| `bun run test:memory` | 跑 memory 测试。 |
-| `bun run typecheck` | TypeScript 全仓检查。 |
-| `bun run pack:dry-run` | npm 打包预演。 |
-
-## 测试现状
-
-当前仓库测试覆盖面较广，包括：
-
-- core engine、context、repair、tool execution、session、provider、workflow。
-- goal runtime/tools、mailbox、structured protocol、resolve-effective-tools。
-- TUI bridge、transcript store、workflow menu、commands、message rendering。
-- tools、MCP、memory、plugin/content-pack 相关能力。
-
-测试数量会随文件变化，以仓库实际为准。
-
-## 变更原则
-
-- 改 runtime 行为时补 core 测试。
-- 改 TUI 状态或渲染时补 TUI store/bridge/component 测试。
-- 改 workflow/goal/mailbox 时至少覆盖 coordinator 主路径和命令路径。
-- 改 provider/config 时覆盖 `packages/core/__tests__/config.test.ts`。
-- 改公开命令、配置、工具名时同步更新 docs。
-
-## 发布前检查
-
-发布或准备 PR 前建议至少执行：
+Before preparing a PR, run the smallest reliable validation set for the touched area. For broad changes, run:
 
 ```bash
 bun run typecheck
@@ -83,10 +68,84 @@ bun run smoke:cli
 npm pack --dry-run
 ```
 
-如果改了 memory：
+For memory changes:
 
 ```bash
 bun run test:memory
 ```
 
-如果改了包导出或 CLI 入口，检查 `package.json` 的 `bin`、`files`、`exports` 和构建产物。
+For package/export/CLI-entry changes, inspect `package.json` fields:
+
+- `bin`
+- `files`
+- `exports`, if added
+- build output under `dist/`
+
+## Testing strategy
+
+Current test coverage includes:
+
+- core engine, context, repair, tool execution, session, provider, workflow;
+- goal runtime/tools, mailbox, structured protocol, `resolve-effective-tools`;
+- TUI bridge, transcript store, workflow menu, commands, message rendering, i18n;
+- default tools, MCP, memory, plugin/content-pack;
+- CLI config commands and package smoke checks.
+
+Test counts change frequently. Do not encode exact pass counts in docs unless the doc is a release note or PR summary.
+
+## Change rules by area
+
+| Area changed | Expected follow-up |
+| --- | --- |
+| Core runtime behavior | Add or update core tests. |
+| Workflow / goal / mailbox | Cover coordinator path, structured parser, command path, and failure states where applicable. |
+| TUI state or rendering | Add/update TUI store, bridge, command, or component tests. |
+| Provider/config | Update config/provider tests and `docs/OPERATIONS.md`. |
+| CLI command or slash command | Update command tests and user-facing docs. |
+| Public config key, tool name, provider ID | Update docs and tests in the same PR. |
+| Security/permission behavior | Include negative tests; never rely only on happy-path tests. |
+
+## Coding-agent workflow
+
+A coding agent should use this order:
+
+1. Read `docs/README.md`.
+2. Read `docs/ARCHITECTURE.md` for the affected subsystem.
+3. Read the source-of-truth code path listed in `ARCHITECTURE.md`.
+4. Make the smallest scoped change.
+5. Run the narrowest relevant checks.
+6. State what was validated and what was not.
+
+Hard rules:
+
+- Do not edit root documentation when the task says docs-only under `docs/`.
+- Do not create a second implementation of an existing abstraction before checking current package boundaries.
+- Do not widen Supervisor tools across all workflow phases to fix a local failure.
+- Do not move runtime state into config.
+- Do not weaken permission checks to make tests pass.
+- Do not silently regenerate lockfiles unless dependency changes require it.
+
+## Documentation maintenance
+
+The docs set is intentionally small:
+
+- `README.md` — docs index and maintenance rules.
+- `ARCHITECTURE.md` — design, runtime map, status, invariants.
+- `OPERATIONS.md` — installation, commands, config, providers, logging, safety.
+- `DEVELOPMENT.md` — local development, tests, validation, coding-agent rules.
+- `ROADMAP.md` — active work and non-goals.
+- `CHANGELOG.md` — public change history.
+
+Do not reintroduce long daily `DONE` logs, historical TODO dumps, or archive directories unless there is a specific release-management reason. Git history and PR descriptions are the correct place for detailed historical implementation logs.
+
+## PR checklist
+
+Before opening a PR:
+
+- Scope only the intended files.
+- Ensure docs do not contain broken links to deleted files.
+- Verify commands and paths against current code.
+- Run relevant checks or clearly state why checks were not run.
+- Summarize user/developer impact, not just the file list.
+
+For docs-only PRs, typecheck/tests are optional unless docs include generated snippets or examples that must be verified against code. At minimum, review links, command names, and deleted-file references.
