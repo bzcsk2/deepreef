@@ -50,10 +50,10 @@
     "pack:dry-run": "npm pack --dry-run",
     "smoke:cli": "node ./dist/index.js --help",
     "test": "bun test packages/core packages/tools packages/tui packages/cli packages/security",
-    "test:all": "bun test",
-    "test:memory": "bun test packages/memory",
+    "test:all": "bun run test && cd packages/memory && bun run test",
+    "test:memory": "cd packages/memory && bun run test",
     "benchmark:fusion": "bun run packages/core/scripts/benchmark-matrix.ts",
-    "test:memory-native": "bun test packages/memory/test/deepreef-*.test.ts packages/cli/src/__tests__/memory-integration.test.ts",
+    "test:memory-native": "bun test packages/cli/src/__tests__/memory-integration.test.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json"
   },
   "devDependencies": {

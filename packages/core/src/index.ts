@@ -619,6 +619,9 @@ export {
   runAgentBenchmarkSuite,
   scoreBenchmarkRun,
   summarizeBenchmarkSuite,
+  runEval,
+  buildWorkerEvalPrompt,
+  buildSupervisorEvalPrompt,
 } from "./scoring/index.js"
 export type {
   AgentBenchmarkCase,
@@ -646,4 +649,11 @@ export type {
   AgentScoringMode,
   SupervisorRunAssessment,
   AgentScoreStoreOptions,
+  EvalRunOptions,
+  EvalRunProgress,
+  EvalRunResult,
+  WorkerExecutor,
+  SupervisorExecutor,
+  ModelSwitchFn,
+  ModelRestoreFn,
 } from "./scoring/index.js"

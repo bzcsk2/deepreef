@@ -97,6 +97,7 @@ export const zhCN: Strings = {
   helpAgents: '可用 Agent：',
   helpCurrent: '当前：',
   helpDeprecatedAgentNote: '注意：/agent build|plan 命令已弃用。\n请改用双角色模式 Worker/Supervisor。',
+  cmdEval: '多模型自动测评',
   cmdTheme: '列出或切换主题',
   cmdThinking: '设置推理模式',
   cmdWorkflow: '切换工作流模式 (alone | subagent | loop)',
@@ -110,6 +111,17 @@ export const zhCN: Strings = {
   cmdGoalBudget: '设置目标 Token 预算',
   cmdGoalNoBudget: '取消 Token 预算限制',
   // P0: App command feedback
+  evalStarted: (models, cases, runs) => `Eval 已启动\nmodels=${models} cases=${cases} totalRuns=${runs}`,
+  evalProgress: (index, total, model, caseId, score, grade) => {
+    if (score != null && grade) return `[${index}/${total}] ${model} / ${caseId} score=${score} grade=${grade}`
+    return `[${index}/${total}] ${model} / ${caseId}`
+  },
+  evalSkipped: (index, total, model, caseId, reason) => `[${index}/${total}] ${model} / ${caseId} 已跳过: ${reason}`,
+  evalComplete: (evalRunId) => `Eval 完成: ${evalRunId}`,
+  evalLeaderboardHeader: '排行榜',
+  evalReportPath: (path) => `报告: ${path}`,
+  evalNoModels: '未指定模型。使用 --models 指定模型列表，或省略以使用默认模型。',
+  evalDryRunHeader: 'Dry-run 预览:',
   failedLoadStatus: '加载状态失败',
   thinkingModeSet: (mode) => `推理模式已设为：${mode}`,
   thinkingModeCurrent: (mode) => `当前：${mode}`,

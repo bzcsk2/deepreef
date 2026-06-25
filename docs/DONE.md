@@ -37,6 +37,13 @@
 - Bridge、TranscriptStore、TranscriptReader、BridgeRuntime 已存在。
 - Workflow mode router 和 workflow 状态展示已存在。
 - Worker/Supervisor per-role 模型配置可持久化。
+- **P0 i18n（中英文切换）已完成：**
+  - 修复 `persist.ts` locale 加载（Zod safeParse）。
+  - 创建 `LocaleContext` + `useLocale/useT/useSetLocale` hooks（`i18n/context.tsx`）。
+  - 扩展 `Strings` 类型覆盖所有 P0 区域（status、workflow、agents、modals、help 等）。
+  - 迁移所有 15+ 组件和 `status/format.ts` 的硬编码 UI 字符串为 `t()` 调用。
+  - 新增 `i18n.test.ts`，更新 legacy test 签名；`bun test` 159/159 pass。
+  - 架构：模块级 `t()` 用于组件内，context 用于需要显式响应式订阅的场景；切换时 `setLocale` 既改模块变量也更新 React state 触发全局重渲染。
 
 ## Workflow / Goal / Mailbox
 

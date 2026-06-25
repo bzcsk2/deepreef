@@ -53,6 +53,7 @@ export const en: Strings = {
   updateKey: 'Update API key:',
   apiKeyMasked: (suffix) => `sk-****${suffix}`,
   // Slash commands
+  cmdEval: 'multi-model auto evaluation',
   cmdExit: 'exit',
   cmdHelp: 'show help',
   cmdModel: 'switch provider/model',
@@ -110,6 +111,17 @@ export const en: Strings = {
   cmdGoalBudget: 'set token budget for goal',
   cmdGoalNoBudget: 'unlimited token budget',
   // P0: App command feedback
+  evalStarted: (models, cases, runs) => `Eval started\nmodels=${models} cases=${cases} totalRuns=${runs}`,
+  evalProgress: (index, total, model, caseId, score, grade) => {
+    if (score != null && grade) return `[${index}/${total}] ${model} / ${caseId} score=${score} grade=${grade} verification=${grade}`
+    return `[${index}/${total}] ${model} / ${caseId}`
+  },
+  evalSkipped: (index, total, model, caseId, reason) => `[${index}/${total}] ${model} / ${caseId} skipped: ${reason}`,
+  evalComplete: (evalRunId) => `Eval complete: ${evalRunId}`,
+  evalLeaderboardHeader: 'Leaderboard',
+  evalReportPath: (path) => `Report: ${path}`,
+  evalNoModels: 'No models specified. Use --models to specify model list, or omit to use defaults.',
+  evalDryRunHeader: 'Dry-run preview:',
   failedLoadStatus: 'Failed to load status',
   thinkingModeSet: (mode) => `Thinking mode set to: ${mode}`,
   thinkingModeCurrent: (mode) => `Current: ${mode}`,

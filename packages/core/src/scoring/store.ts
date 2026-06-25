@@ -48,6 +48,54 @@ export class AgentScoreStore {
   }
 }
 
+export class EvalReportStore {
+  private basePath: string
+
+  constructor(basePath?: string) {
+    this.basePath = basePath ?? resolve(process.cwd(), ".deepreef", "evals")
+  }
+
+  listEvalRuns(): string[] {
+    if (!existsSync(this.basePath)) return []
+    return readdirSync(this.basePath)
+      .filter(name => name.startsWith("eval-"))
+      .sort()
+      .reverse()
+  }
+
+  loadMeta(evalRunId: string): Record<string, unknown> | null {
+    const path = resolve(this.basePath, evalRunId, "meta.json")
+    if (!existsSync(path)) return null
+    try {
+      return JSON.parse(readFileSync(path, "utf8"))
+    } catch {
+      return null
+    }
+  }
+
+  loadSummary(evalRunId: string): Record<string, unknown> | null {
+    const path = resolve(this.basePath, evalRunId, "summary.json")
+    if (!existsSync(path)) return null
+    try {
+      return JSON.parse(readFileSync(path, "utf8"))
+    } catch {
+      return null
+    }
+  }
+
+  loadLeaderboard(evalRunId: string): Record<string, unknown> | null {
+    const path = resolve(this.basePath, evalRunId, "leaderboard.json")
+    if (!existsSync(path)) return null
+    try {
+      return JSON.parse(readFileSync(path, "utf8"))
+    } catch {
+      return null
+    }
+  }
+}
+
 function safeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 120) || "unknown"
 }
+
+import { readdirSync } from "node:fs"

@@ -127,5 +127,6 @@ export function selectBenchmarkCases(tags: string[] = []): AgentBenchmarkCase[] 
     c.tags.some(tag => wanted.has(tag))
     || c.evaluationSignals.some(signal => wanted.has(signal))
     || wanted.has(c.source)
+    || (c.difficulty && wanted.has(c.difficulty))
   )
 }

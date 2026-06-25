@@ -29,6 +29,24 @@ export {
   summarizeBenchmarkSuite,
 } from "./benchmark-runner.js"
 
+export {
+  buildWorkerEvalPrompt,
+  buildSupervisorEvalPrompt,
+} from "./eval-prompts.js"
+
+export {
+  runEval,
+} from "./eval-runner.js"
+export type {
+  EvalRunOptions,
+  EvalRunProgress,
+  EvalRunResult,
+  WorkerExecutor,
+  SupervisorExecutor,
+  ModelSwitchFn,
+  ModelRestoreFn,
+} from "./eval-runner.js"
+
 export type {
   AgentBenchmarkCase,
   AgentBenchmarkDifficulty,
