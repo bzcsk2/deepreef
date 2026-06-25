@@ -1,43 +1,43 @@
-# Architecture
+# 架构
 
-Last consolidated: 2026-06-25.
+最后更新：2026-06-25。
 
-## Product intent
+## 产品意图
 
-DeepReef is a terminal-native AI loop agent runtime for supervised local, free, and low-cost coding models. Its core product idea is not “one strong model does everything”; it is a controlled loop where stronger or more reliable models plan, review, recover, and judge, while cheaper or local models perform verifiable execution work.
+DeepReef 是一个终端原生的 AI 循环代理运行时，专为受监督的本地、免费和低成本编码模型设计。其核心产品理念并非"一个强大模型包办一切"，而是一个受控循环：更强或更可靠的模型负责规划、审查、恢复和判断，而更便宜或本地的模型负责执行可验证的工作。
 
-The current mental model is:
+当前的思维模型如下：
 
 ```text
-Supervisor plans / reviews / corrects
-  -> Worker executes engineering work
-  -> Worker reports result and evidence
-  -> Supervisor decides continue / revise / complete / block / ask user
+Supervisor 规划 / 审查 / 纠正
+  -> Worker 执行工程工作
+  -> Worker 报告结果和证据
+  -> Supervisor 决定继续 / 修改 / 完成 / 阻塞 / 询问用户
 ```
 
-DeepReef is pre-1.0. Public APIs, config shape, package boundaries, and provider presets may still change.
+DeepReef 处于 pre-1.0 阶段。公共 API、配置结构、包边界和提供者预设仍可能发生变化。
 
-## Repository shape
+## 仓库结构
 
-DeepReef is a TypeScript/Bun monorepo published as `@deepreef/cli`. The executable command is `deepreef`.
+DeepReef 是一个 TypeScript/Bun 单体仓库，以 `@deepreef/cli` 形式发布。可执行命令为 `deepreef`。
 
-| Package | Path | Responsibility |
+| 包 | 路径 | 职责 |
 | --- | --- | --- |
-| `@deepreef/core` | `packages/core/` | Engine, provider config, context, sessions, workflow, goal, mailbox, permissions, harness, model profiles, structured protocols. |
-| `@deepreef/cli` | `packages/cli/` | CLI entry, TUI startup, pipe mode, tool registration, plugin/memory/MCP wiring, Supervisor/Worker wiring. |
-| `@deepreef/tui` | `packages/tui/` | Ink/React UI, bridge, timeline, slash commands, model picker, workflow/goal UX, diagnostics, settings. |
-| `@deepreef/tools` | `packages/tools/` | Default engineering tools: file, edit, shell, search, web, task, skill, workflow, notebook. |
-| `@deepreef/mcp` | `packages/mcp/` | MCP host/client, resource listing, tool list, and proxied tool invocation. |
-| `@deepreef/plugin` | `packages/plugin/` | Plugin runtime, content packs, hooks, rules, commands, skills, tools. |
-| `@deepreef/memory` | `packages/memory/` | AgentMemory runtime, memory tools, hooks, MCP server/proxy, evaluation/retrieval. |
-| `@deepreef/security` | `packages/security/` | Permission engine, hook manager, file snapshot protection. |
-| `@deepreef/ink` | `packages/ink/` | Terminal rendering primitives and theme infrastructure. |
-| `@deepreef/shell` | `packages/shell/` | Shell-state infrastructure. |
+| `@deepreef/core` | `packages/core/` | 引擎、提供者配置、上下文、会话、工作流、目标、邮箱、权限、测试框架、模型配置文件、结构化协议。 |
+| `@deepreef/cli` | `packages/cli/` | CLI 入口、TUI 启动、管道模式、工具注册、插件/内存/MCP 连接、Supervisor/Worker 连接。 |
+| `@deepreef/tui` | `packages/tui/` | Ink/React UI、桥接、时间线、斜杠命令、模型选择器、工作流/目标用户体验、诊断、设置。 |
+| `@deepreef/tools` | `packages/tools/` | 默认工程工具：文件、编辑、shell、搜索、web、任务、技能、工作流、笔记本。 |
+| `@deepreef/mcp` | `packages/mcp/` | MCP 主机/客户端、资源列表、工具列表、代理工具调用。 |
+| `@deepreef/plugin` | `packages/plugin/` | 插件运行时、内容包、钩子、规则、命令、技能、工具。 |
+| `@deepreef/memory` | `packages/memory/` | AgentMemory 运行时、内存工具、钩子、MCP 服务器/代理、评估/检索。 |
+| `@deepreef/security` | `packages/security/` | 权限引擎、钩子管理器、文件快照保护。 |
+| `@deepreef/ink` | `packages/ink/` | 终端渲染原语和主题基础设施。 |
+| `@deepreef/shell` | `packages/shell/` | Shell 状态基础设施。 |
 
-## Runtime map
+## 运行时映射
 
 ```text
-TUI / CLI / pipe mode
+TUI / CLI / 管道模式
         |
         v
 ReasonixEngine
@@ -51,44 +51,44 @@ AsyncGenerator<LoopEvent>
         +-- Plugin / MCP / Memory
         |
         v
-TUI bridge / transcript store / runtime status
+TUI 桥接 / 转录存储 / 运行时状态
 ```
 
-The core engine emits an event stream. CLI and TUI consumers project that stream into text output, timeline entries, status bars, permission prompts, question prompts, and workflow state.
+核心引擎发出事件流。CLI 和 TUI 消费者将该流投射为文本输出、时间线条目、状态栏、权限提示、问题提示和工作流状态。
 
-## Core engine boundaries
+## 核心引擎边界
 
-| Path | Role |
+| 路径 | 角色 |
 | --- | --- |
-| `packages/core/src/engine.ts` | `ReasonixEngine`: submit, resume, config updates, tool registration. |
-| `packages/core/src/loop.ts` | Main single-agent loop. |
-| `packages/core/src/client.ts` | OpenAI-compatible SSE client. |
-| `packages/core/src/config/` and `packages/core/src/config.ts` | Unified config manager plus provider/model presets. |
-| `packages/core/src/context/` | Immutable prefix, append log, scratch, repair, summary, token estimation. |
-| `packages/core/src/streaming-executor.ts` | Shared/exclusive streaming tool execution. |
-| `packages/core/src/workflow-coordinator/` | Supervisor/Worker state machine and structured protocol. |
-| `packages/core/src/goal/` | GoalStore, GoalRuntime, goal tools, steering prompt. |
-| `packages/core/src/agent-comm/` | Mailbox, AgentCommController, mailbox tools. |
-| `packages/core/src/dual-agent-runtime/` | Worker/Supervisor engine wrapper. |
-| `packages/core/src/resolve-effective-tools.ts` | Role/mode/workflow-phase tool filtering. |
+| `packages/core/src/engine.ts` | `ReasonixEngine`：提交、恢复、配置更新、工具注册。 |
+| `packages/core/src/loop.ts` | 主单代理循环。 |
+| `packages/core/src/client.ts` | 兼容 OpenAI 的 SSE 客户端。 |
+| `packages/core/src/config/` 和 `packages/core/src/config.ts` | 统一配置管理器及提供者/模型预设。 |
+| `packages/core/src/context/` | 不可变前缀、追加日志、草稿、修复、摘要、令牌估算。 |
+| `packages/core/src/streaming-executor.ts` | 共享/独占流式工具执行。 |
+| `packages/core/src/workflow-coordinator/` | Supervisor/Worker 状态机和结构化协议。 |
+| `packages/core/src/goal/` | GoalStore、GoalRuntime、目标工具、引导提示。 |
+| `packages/core/src/agent-comm/` | 邮箱、AgentCommController、邮箱工具。 |
+| `packages/core/src/dual-agent-runtime/` | Worker/Supervisor 引擎封装。 |
+| `packages/core/src/resolve-effective-tools.ts` | 按角色/模式/工作流阶段筛选工具。 |
 
-## CLI startup path
+## CLI 启动路径
 
-`packages/cli/src/index.ts` handles top-level command dispatch. `packages/cli/src/tui.ts` performs the interactive runtime wiring:
+`packages/cli/src/index.ts` 处理顶级命令分发。`packages/cli/src/tui.ts` 执行交互式运行时连接：
 
-1. Load configuration.
-2. Create `ReasonixEngine`.
-3. Load MCP, plugin/content-pack, and memory systems in the background.
-4. Register default tools, plugin tools, MCP proxy tools, and memory tools.
-5. In TTY mode, create the Supervisor engine, `DualAgentRuntime`, `GoalStore`, `Mailbox`, and `WorkflowCoordinator`.
-6. Register dynamic goal/mailbox governance tools so tool execution reads the current workflow/thread/controller instead of stale objects.
-7. Render the `@deepreef/tui` app.
+1. 加载配置。
+2. 创建 `ReasonixEngine`。
+3. 在后台加载 MCP、插件/内容包和内存系统。
+4. 注册默认工具、插件工具、MCP 代理工具和内存工具。
+5. 在 TTY 模式下，创建 Supervisor 引擎、`DualAgentRuntime`、`GoalStore`、`Mailbox` 和 `WorkflowCoordinator`。
+6. 注册动态目标/邮箱治理工具，使工具执行读取当前工作流/线程/控制器而非过期对象。
+7. 渲染 `@deepreef/tui` 应用。
 
-Non-TTY input uses pipe mode.
+非 TTY 输入使用管道模式。
 
-## TUI state path
+## TUI 状态路径
 
-The TUI entry points are:
+TUI 入口点包括：
 
 - `packages/tui/src/App.tsx`
 - `packages/tui/src/bridge.tsx`
@@ -97,11 +97,11 @@ The TUI entry points are:
 - `packages/tui/src/store/transcript-reader.ts`
 - `packages/tui/src/DeepiMessages.tsx`
 
-The UI still contains some legacy bridge state while newer store/runtime components carry transcript, diagnostics, and bounded queue responsibilities. Long-session performance work should stay focused on transcript storage, reader cache behavior, bridge runtime queue limits, and timeline render windows. Do not mix UI trimming with core engine context truncation unless the task explicitly touches both.
+UI 中仍包含部分旧桥接状态，而较新的存储/运行时组件负责转录、诊断和有界队列的职责。长会话的性能优化应聚焦于转录存储、读取器缓存行为、桥接运行时队列限制和时间线渲染窗口。不要将 UI 裁剪与核心引擎上下文截断混为一谈，除非任务明确涉及两者。
 
-## Workflow loop
+## 工作流循环
 
-`WorkflowCoordinator` drives the current Supervisor/Worker loop:
+`WorkflowCoordinator` 驱动当前的 Supervisor/Worker 循环：
 
 ```text
 idle
@@ -114,102 +114,102 @@ idle
   -> completed / blocked / failed
 ```
 
-Current behavior:
+当前行为：
 
-- Supervisor in `supervisor_analyse` produces a plan.
-- Worker in `worker_do` executes the plan.
-- Worker in `worker_report` reports result and evidence.
-- Supervisor in `supervisor_check` reviews the evidence and decides the next state.
-- `parseSupervisorDecision()` prefers Zod-validated structured JSON.
-- Legacy string fallback is still available but should be treated as lower confidence.
-- `approve` only completes when completion audit has evidence.
-- `blocked` requires repeated blocker evidence rather than a single unsupported claim.
-- Mailbox workflow exists behind the `useMailboxWorkflow` branch, but the default path still passes plan/report through coordinator state.
+- Supervisor 在 `supervisor_analyse` 阶段生成计划。
+- Worker 在 `worker_do` 阶段执行计划。
+- Worker 在 `worker_report` 阶段报告结果和证据。
+- Supervisor 在 `supervisor_check` 阶段审查证据并决定下一个状态。
+- `parseSupervisorDecision()` 优先使用 Zod 验证的结构化 JSON。
+- 旧版字符串回退方式仍然可用，但应视为较低置信度。
+- `approve` 仅在完成审计具有证据时才能通过。
+- `blocked` 需要重复的阻塞证据，而非单个未经支持的断言。
+- 邮箱工作流存在于 `useMailboxWorkflow` 分支之后，但默认路径仍通过协调器状态传递计划/报告。
 
-## Goal and mailbox
+## 目标与邮箱
 
-`GoalStore` persists the active loop goal under the session tree:
+`GoalStore` 将会话树下的活动循环目标持久化：
 
 ```text
 .deepreef/sessions/<sessionId>/goal.json
 ```
 
-Goal state values:
+目标状态值：
 
 ```text
 active | paused | blocked | usage_limited | budget_limited | complete
 ```
 
-Model-side `update_goal` is intentionally narrow: it can mark `complete` or `blocked`; pause, resume, budget limit, and clear operations are user/system controls. This prevents the model from silently rewriting user governance state.
+模型侧的 `update_goal` 有意保持窄范围：它只能标记为 `complete` 或 `blocked`；暂停、恢复、预算限制和清除操作属于用户/系统控制。这防止模型静默重写用户的治理状态。
 
-Mailbox support uses JSONL-style queue semantics and exposes `send_message`, `followup_task`, and `read_mailbox`. It is useful for future multi-step agent communication, but it is not the default workflow transport yet.
+邮箱支持使用 JSONL 风格的队列语义，并暴露 `send_message`、`followup_task` 和 `read_mailbox`。它对于未来的多步代理通信很有用，但还不是默认的工作流传输方式。
 
-## Tool and permission boundaries
+## 工具与权限边界
 
-`resolveEffectiveTools()` is the central tool-filtering boundary:
+`resolveEffectiveTools()` 是核心的工具筛选边界：
 
-- Worker loop receives engineering tools according to agent config and hard policy.
-- Supervisor loop receives phase-scoped tools; it should not freely self-explore or edit during review phases.
-- Supervisor alone/subagent paths use smaller allowlists.
-- Goal and mailbox tools are governance tools managed by the coordinator, not arbitrary Worker tools.
-- Writes still pass through permission and hook systems.
-- Tool policy `deny` rules in config are hard rejects and cannot be overridden by TUI permission prompts.
+- Worker 循环根据代理配置和硬策略接收工程工具。
+- Supervisor 循环接收按阶段限定的工具；在审查阶段不应自由自我探索或编辑。
+- Supervisor 单独/子代理路径使用较小的允许列表。
+- 目标和邮箱工具是由协调器管理的治理工具，而非任意 Worker 工具。
+- 写操作仍会经过权限和钩子系统。
+- 配置中的工具策略 `deny` 规则是硬性拒绝，不能通过 TUI 权限提示覆盖。
 
-## Provider and model layer
+## 提供者与模型层
 
-Provider presets live in `packages/core/src/config.ts`; unified config loading lives under `packages/core/src/config/`. Current provider families include `zen`, `deepseek`, `mimo`, `kilo`, `openai-compatible`, `nvidia`, `qwen`, `kimi`, `zai`, `stepfun`, and `openai`.
+提供者预设位于 `packages/core/src/config.ts`；统一配置加载位于 `packages/core/src/config/` 下。当前提供者系列包括 `zen`、`deepseek`、`mimo`、`kilo`、`openai-compatible`、`nvidia`、`qwen`、`kimi`、`zai`、`stepfun` 和 `openai`。
 
-The exact model matrix and recommended role assignments are maintained in [OPERATIONS.md](OPERATIONS.md#model-providers).
+确切的模型矩阵和推荐的角色分配维护在 [OPERATIONS.md](OPERATIONS.md#model-providers) 中。
 
-## Extension systems
+## 扩展系统
 
-- Plugin/content-pack: `packages/plugin/`
-- MCP: `packages/mcp/`
-- Skills: `packages/tools/src/skills/` plus plugin skill directories
-- AgentMemory: `packages/memory/`
+- 插件/内容包：`packages/plugin/`
+- MCP：`packages/mcp/`
+- 技能：`packages/tools/src/skills/` 以及插件技能目录
+- AgentMemory：`packages/memory/`
 
-These systems should fail soft during startup. A failed extension should not prevent the base CLI/TUI agent from running unless the user explicitly requested that extension as required.
+这些系统应在启动时软失败。失败的扩展不应阻止基础 CLI/TUI 代理运行，除非用户明确将该扩展标记为必需。
 
-## Current implementation status
+## 当前实现状态
 
-Implemented foundations:
+已实现的基础设施：
 
-- CLI, TUI, core runtime, tools, security, plugin, MCP, memory, workflow, goal, and mailbox foundations.
-- Unified TOML configuration control plane with user/project config paths and config CLI commands.
-- Supervisor/Worker structured decision parsing with audit gates.
-- TUI i18n foundation for Chinese/English switching.
-- Bounded long-session TUI storage/rendering work has a baseline implementation.
+- CLI、TUI、核心运行时、工具、安全、插件、MCP、内存、工作流、目标和邮箱基础设施。
+- 统一的 TOML 配置控制平面，包含用户/项目配置路径和配置 CLI 命令。
+- Supervisor/Worker 结构化决策解析与审计门控。
+- TUI i18n 基础，支持中文/英文切换。
+- 有界的长会话 TUI 存储/渲染工作已有基线实现。
 
-Still being hardened:
+仍在加固中：
 
-- Workflow reliability on real engineering tasks.
-- Goal continuation and budget governance tied to real usage accounting.
-- Provider capability profiles and local-model recommendations.
-- Cross-platform package/install validation.
-- Public API stability.
+- 工作流在真实工程任务上的可靠性。
+- 目标延续和预算治理与真实用量计费的关联。
+- 提供者能力画像和本地模型推荐。
+- 跨平台包/安装验证。
+- 公共 API 稳定性。
 
-## Source-of-truth paths
+## 真相来源路径
 
-| Topic | Source |
+| 主题 | 来源 |
 | --- | --- |
-| CLI entry | `packages/cli/src/index.ts`, `packages/cli/src/tui.ts` |
-| Engine | `packages/core/src/engine.ts`, `packages/core/src/loop.ts` |
-| Config | `packages/core/src/config/`, `packages/cli/src/commands/config.ts` |
-| Provider presets | `packages/core/src/config.ts` |
-| Workflow | `packages/core/src/workflow-coordinator/` |
-| Goal | `packages/core/src/goal/` |
-| Mailbox | `packages/core/src/agent-comm/` |
-| TUI app | `packages/tui/src/App.tsx` |
-| TUI store | `packages/tui/src/store/` |
-| Slash commands | `packages/tui/src/CommandRegistry.ts`, `packages/tui/src/commands.ts` |
-| Tool filtering | `packages/core/src/resolve-effective-tools.ts` |
-| Default tools | `packages/tools/src/` |
+| CLI 入口 | `packages/cli/src/index.ts`、`packages/cli/src/tui.ts` |
+| 引擎 | `packages/core/src/engine.ts`、`packages/core/src/loop.ts` |
+| 配置 | `packages/core/src/config/`、`packages/cli/src/commands/config.ts` |
+| 提供者预设 | `packages/core/src/config.ts` |
+| 工作流 | `packages/core/src/workflow-coordinator/` |
+| 目标 | `packages/core/src/goal/` |
+| 邮箱 | `packages/core/src/agent-comm/` |
+| TUI 应用 | `packages/tui/src/App.tsx` |
+| TUI 存储 | `packages/tui/src/store/` |
+| 斜杠命令 | `packages/tui/src/CommandRegistry.ts`、`packages/tui/src/commands.ts` |
+| 工具筛选 | `packages/core/src/resolve-effective-tools.ts` |
+| 默认工具 | `packages/tools/src/` |
 
-## Invariants for coding agents
+## 编码代理的不变规则
 
-- Do not collapse Supervisor and Worker into an undifferentiated agent unless the task is explicitly a product redesign.
-- Do not let Supervisor acquire broad write/search tool access in every workflow phase.
-- Do not treat model claims as completion without evidence when the workflow path expects audit.
-- Do not move runtime state such as sessions, goals, mailbox entries, token usage, or workflow phase into static project docs.
-- Do not make local extension failures fatal unless the user opted into that strict behavior.
-- Do not add new public commands, config keys, or provider IDs without updating `OPERATIONS.md` and tests.
+- 不要将 Supervisor 和 Worker 合并为无差别的代理，除非任务明确涉及产品重新设计。
+- 不要让 Supervisor 在每个工作流阶段都获得广泛的写/搜索工具访问权限。
+- 在工作流路径期望审计时，不要将模型的主张视为无需证据的完成。
+- 不要将会话、目标、邮箱条目、令牌用量或工作流阶段等运行时状态移入静态项目文档。
+- 不要让本地扩展失败成为致命错误，除非用户选择了那种严格行为。
+- 不要添加新的公共命令、配置键或提供者 ID 而未更新 `OPERATIONS.md` 和测试。

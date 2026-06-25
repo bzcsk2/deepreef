@@ -1,113 +1,113 @@
-# Roadmap
+# 路线图
 
-Last consolidated: 2026-06-25.
+最后更新：2026-06-25。
 
-DeepReef is pre-1.0. This roadmap describes the current maintenance direction, not a compatibility guarantee.
+DeepReef 处于 pre-1.0 阶段。本路线图描述当前的维护方向，不构成兼容性承诺。
 
-## Current direction
+## 当前方向
 
-DeepReef should become a reliable terminal-native coding loop for local, free, and low-cost models, with strong governance around evidence, permissions, configuration, and failure recovery.
+DeepReef 的目标是成为一个可靠的终端原生编码循环，面向本地、免费和低成本模型，具备围绕证据、权限、配置和故障恢复的强治理能力。
 
-The near-term priority is not adding more surface area. It is making the existing Supervisor/Worker loop predictable on real engineering tasks.
+近期优先级不是增加更多功能面，而是让现有 Supervisor/Worker 循环在实际工程任务上变得可预测。
 
-## Recently completed or baseline-ready
+## 近期已完成或基线就绪
 
-These areas have a usable foundation and should now be hardened instead of reimplemented:
+以下领域已有可用的基础，应当硬化而非重写：
 
-- Monorepo, CLI, TUI, package metadata, and npm package output as `@deepreef/cli`.
-- `ReasonixEngine`, OpenAI-compatible SSE client, context/session infrastructure, and streaming tool execution.
-- Default engineering tools plus permission, hook, stale-read, dangerous-command, and file-snapshot protections.
-- Supervisor/Worker `DualAgentRuntime`, `WorkflowCoordinator`, structured decision parsing, and audit gates.
-- `GoalStore`, `GoalRuntime` foundation, `/goal` command paths, and goal governance tools.
-- Mailbox and agent-communication foundation.
-- Plugin/content-pack, MCP, AgentMemory, and skills loading foundation.
-- TUI Chinese/English i18n foundation.
-- Unified TOML config system and `deepreef config path|print|validate|init|edit|doctor`.
-- Baseline long-session TUI bounding work: transcript limits, runtime queue limits, render window, and diagnostic stats.
+- 单仓库、CLI、TUI、包元数据和 npm 包输出（`@deepreef/cli`）。
+- `ReasonixEngine`、OpenAI 兼容 SSE 客户端、上下文/会话基础设施及流式工具执行。
+- 默认工程工具及权限、钩子、脏读、危险命令和文件快照保护。
+- Supervisor/Worker `DualAgentRuntime`、`WorkflowCoordinator`、结构化决策解析和审计门禁。
+- `GoalStore`、`GoalRuntime` 基础、`/goal` 命令路径和目标治理工具。
+- 信箱与 Agent 通信基础。
+- 插件/内容包、MCP、AgentMemory 和技能加载基础。
+- TUI 中英文国际化基础。
+- 统一 TOML 配置系统和 `deepreef config path|print|validate|init|edit|doctor`。
+- 基础长会话 TUI 边界工作：转录限制、运行时队列限制、渲染窗口和诊断统计。
 
-## v0.1.x — public CLI hardening
+## v0.1.x — 公开 CLI 硬化
 
-Goal: make the repository and npm package easy to evaluate, install, and contribute to.
+目标：让仓库和 npm 包易于评估、安装和贡献。
 
-Status: mostly complete; keep it stable while other work proceeds.
+状态：基本完成；在推进其他工作期间保持稳定。
 
-Remaining work:
+剩余工作：
 
-- Keep Chinese and English root README instructions consistent.
-- Keep package contents aligned with `package.json` `files`.
-- Keep CI/package dry-runs green.
-- Avoid adding new public commands without docs and tests.
+- 保持中英文根 README 说明一致。
+- 保持包内容与 `package.json` 的 `files` 字段一致。
+- 保持 CI/包 dry-run 绿色通过。
+- 避免在缺少文档和测试的情况下添加新的公开命令。
 
-## v0.2.x — workflow reliability
+## v0.2.x — 工作流可靠性
 
-Goal: make Supervisor/Worker mode predictable enough for routine engineering tasks.
+目标：让 Supervisor/Worker 模式在日常工程任务中可预测。
 
-Priority work:
+优先级工作：
 
-- Add workflow end-to-end fixtures for small real repositories.
-- Strengthen Worker report format and evidence bundles.
-- Harden `runSupervisorAnalyse()` structured plan validation and fallback behavior.
-- Decide whether `useMailboxWorkflow` becomes an explicit mode or stays out of the default path.
-- Add workflow resume, interrupted, `waiting_user`, blocked, and failure-recovery tests.
-- Clarify termination semantics across `maxRounds`, goal status, budget limits, and repeated blockers.
-- Produce a small reliability report from reproducible tasks instead of anecdotal demos.
+- 为小型真实仓库添加工作流端到端 fixture。
+- 强化 Worker 报告格式和证据包。
+- 硬化 `runSupervisorAnalyse()` 的结构化计划验证和降级行为。
+- 决定 `useMailboxWorkflow` 是成为显式模式还是保持在默认路径之外。
+- 添加工作流恢复、中断、`waiting_user`、阻塞和故障恢复测试。
+- 明确 `maxRounds`、目标状态、预算限制和重复阻塞的终止语义。
+- 基于可复现任务而非零散演示产出小规模可靠性报告。
 
-## v0.3.x — goal continuation and budget governance
+## v0.3.x — 目标延续与预算治理
 
-Goal: make “loop = goal-driven work” complete without enabling uncontrolled automation.
+目标：让"循环 = 目标驱动工作"变得完整，但不启用无控制的自动化。
 
-Priority work:
+优先级工作：
 
-- Fully wire `GoalRuntime` continuation gates into real usage and workflow state.
-- Connect usage/token/time accounting to actual engine usage.
-- Ensure `budget_limited` allows only safe wrap-up/reporting, not new substantive work.
-- Preserve repeated-blocker audit behavior.
-- Provide explicit user paths for resuming `blocked`, `paused`, `usage_limited`, and `budget_limited` goals.
-- Document safe autonomous operation patterns after the behavior is verified.
+- 将 `GoalRuntime` 延续门禁完整接入实际使用和工作流状态。
+- 将用量/令牌/时间统计与实际引擎使用关联。
+- 确保 `budget_limited` 仅允许安全收尾和报告，而非新的实质工作。
+- 保留重复阻塞者的审计行为。
+- 为恢复 `blocked`、`paused`、`usage_limited` 和 `budget_limited` 目标提供明确的用户路径。
+- 在行为验证后记录安全的自主操作模式。
 
-## v0.4.x — weak and local model optimization
+## v0.4.x — 弱模型与本地模型优化
 
-Goal: make low-cost and local models materially more useful.
+目标：让低成本和本地模型更有实际用处。
 
-Priority work:
+优先级工作：
 
-- Improve provider and model capability profiles.
-- Add common local OpenAI-compatible deployment examples.
-- Tune harness strictness and role recommendations for weak models.
-- Build a benchmark matrix for Worker reliability across model families.
-- Publish reproducible reliability reports.
+- 改进提供商和模型能力画像。
+- 添加常见的本地 OpenAI 兼容部署示例。
+- 针对弱模型调优 harness 严格度和角色建议。
+- 构建跨模型家族的 Worker 可靠性基准矩阵。
+- 发布可复现的可靠性报告。
 
-## v0.5.x — extension ecosystem
+## v0.5.x — 扩展生态
 
-Goal: make DeepReef easier to extend without modifying core runtime code.
+目标：让 DeepReef 更易于扩展而无需修改核心运行时代码。
 
-Priority work:
+优先级工作：
 
-- Document plugin/content-pack authoring.
-- Add MCP integration examples.
-- Add memory configuration examples.
-- Add skill packaging guidance.
-- Add example projects and sample workflows.
+- 记录插件/内容包编写指南。
+- 添加 MCP 集成示例。
+- 添加内存配置示例。
+- 提供技能打包指导。
+- 添加示例项目和样例工作流。
 
-## v0.6.x — UX and operational polish
+## v0.6.x — UX 与运维打磨
 
-Goal: improve day-to-day usability.
+目标：改善日常可用性。
 
-Priority work:
+优先级工作：
 
-- Improve Windows terminal behavior.
-- Polish model picker and provider configuration flows.
-- Improve workflow visualization and human-escalation UX.
-- Improve session restore and interrupted-work recovery.
-- Improve error messages and remediation hints.
-- Validate package install and smoke behavior across operating systems.
+- 改善 Windows 终端行为。
+- 打磨模型选择器和提供商配置流程。
+- 改善工作流可视化和人工升级 UX。
+- 改善会话恢复和中断工作恢复。
+- 改善错误消息和修复提示。
+- 跨操作系统验证包安装和冒烟行为。
 
-## Non-goals for now
+## 当前非目标
 
-- Replacing all strong-model usage.
-- Claiming complete isolation for arbitrary local commands.
-- Locking a stable public API before 1.0.
-- Supporting every provider as a first-party integration.
-- Optimizing for hosted multi-tenant operation before local development workflows are reliable.
-- Building an IDE/Web shell before the terminal loop is dependable.
-- Reintroducing long historical TODO/DONE documents as current documentation.
+- 替代所有强模型使用场景。
+- 声称对任意本地命令实现完全隔离。
+- 在 1.0 之前锁定稳定的公开 API。
+- 将每个提供商作为一等集成支持。
+- 在本地开发工作流可靠之前优化托管式多租户运行。
+- 在终端循环可靠之前构建 IDE/Web Shell。
+- 将冗长的历史 TODO/DONE 文档重新引入当前文档。

@@ -1,36 +1,36 @@
-# DeepReef docs
+# DeepReef 文档
 
-Last consolidated: 2026-06-25.
+最后整合日期：2026-06-25。
 
-This directory is the current documentation entry point for DeepReef maintainers and coding agents. Root-level README files remain the user-facing installation and project overview; `docs/` is for architecture, operations, development, roadmap, and change history.
+本目录是 DeepReef 维护者和编码代理的当前文档入口。根目录的 README 文件仍然是面向用户的安装和项目概览；`docs/` 目录用于存放架构、运维、开发、路线图和变更历史。
 
-## Reading order
+## 阅读顺序
 
-1. [ARCHITECTURE.md](ARCHITECTURE.md) — product intent, runtime structure, package boundaries, workflow semantics, current implementation status, and invariants.
-2. [OPERATIONS.md](OPERATIONS.md) — installation, CLI/TUI commands, configuration, model providers, logging, diagnostics, and safety notes.
-3. [DEVELOPMENT.md](DEVELOPMENT.md) — local setup, validation commands, testing strategy, release checks, and documentation rules.
-4. [ROADMAP.md](ROADMAP.md) — active roadmap, completed recent milestones, non-goals, and next work.
-5. [CHANGELOG.md](CHANGELOG.md) — user-visible and maintenance changes.
+1. [ARCHITECTURE.md](ARCHITECTURE.md) — 产品意图、运行时结构、包边界、工作流语义、当前实现状态及不变性约束。
+2. [OPERATIONS.md](OPERATIONS.md) — 安装、CLI/TUI 命令、配置、模型提供商、日志记录、诊断及安全注意事项。
+3. [DEVELOPMENT.md](DEVELOPMENT.md) — 本地环境搭建、验证命令、测试策略、发布检查和文档规则。
+4. [ROADMAP.md](ROADMAP.md) — 当前路线图、近期完成里程碑、非目标及下一步工作。
+5. [CHANGELOG.md](CHANGELOG.md) — 面向用户的变更和维护性变更。
 
-## What was consolidated
+## 整合内容
 
-The previous docs set mixed current facts, historical DONE logs, old TODO plans, provider notes, logging notes, and configuration notes across many files. The useful material is now merged into the smaller set above:
+之前的文档集将当前事实、历史 DONE 日志、旧的 TODO 计划、提供商说明、日志说明和配置说明分散在多个文件中。有用的材料现已合并到上述精简文档集中：
 
-| Previous content | New home |
+| 原有内容 | 新位置 |
 | --- | --- |
-| `PROJECT_DESIGN.zh.md`, `STATUS.md`, parts of `DONE.md` | `ARCHITECTURE.md` |
-| `OPERATIONS.md`, `configuration.md`, `MODEL_PROVIDERS.md`, `LOGGING.md` | `OPERATIONS.md` |
+| `PROJECT_DESIGN.zh.md`、`STATUS.md`、`DONE.md` 部分内容 | `ARCHITECTURE.md` |
+| `OPERATIONS.md`、`configuration.md`、`MODEL_PROVIDERS.md`、`LOGGING.md` | `OPERATIONS.md` |
 | `DEVELOPMENT.md` | `DEVELOPMENT.md` |
-| `TODO.md`, roadmap status notes | `ROADMAP.md` |
-| Public change notes | `CHANGELOG.md` |
+| `TODO.md`、路线图状态说明 | `ROADMAP.md` |
+| 公开变更记录 | `CHANGELOG.md` |
 
-Historical day-by-day implementation logs and old remediation plans are no longer treated as authoritative docs. Keep implementation history in Git commits and PRs instead of reintroducing long `DONE` or archive files.
+历史性的逐日实现日志和旧的重修计划不再被视为权威文档。将实现历史保留在 Git 提交和 PR 中，而不要重新引入冗长的 `DONE` 文件或归档文件。
 
-## Documentation rules
+## 文档规则
 
-- Do not duplicate the same fact across multiple docs unless one doc clearly links to the authoritative source.
-- Do not write planned behavior as completed behavior.
-- When code behavior changes, update the narrowest relevant doc and then check whether `ARCHITECTURE.md` or `OPERATIONS.md` also needs a one-line adjustment.
-- Keep commands, file paths, package names, model IDs, and environment variables exact.
-- Prefer short tables and executable commands over narrative status logs.
-- For coding-agent work, start from this file, then read `ARCHITECTURE.md`, `DEVELOPMENT.md`, and only the topic doc needed for the change.
+- 除非某篇文档明确链接到权威来源，否则不要在多个文档中重复相同的事实。
+- 不要将计划中的行为写成已完成的行为。
+- 当代码行为发生变更时，更新最相关的文档，然后检查 `ARCHITECTURE.md` 或 `OPERATIONS.md` 是否需要一行调整。
+- 保持命令、文件路径、包名、模型 ID 和环境变量的准确性。
+- 优先使用简短表格和可执行命令，而非叙述性的状态日志。
+- 对于编码代理的工作，从此文件开始，然后阅读 `ARCHITECTURE.md`、`DEVELOPMENT.md`，以及变更所涉及的主题文档。

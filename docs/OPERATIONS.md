@@ -1,24 +1,24 @@
 # Operations
 
-Last consolidated: 2026-06-25.
+最后整合日期：2026-06-25。
 
-This document is the operational reference for installing, running, configuring, diagnosing, and safely using DeepReef.
+本文档是安装、运行、配置、诊断和安全使用 DeepReef 的操作参考。
 
-## Installation and startup
+## 安装与启动
 
-Install the published CLI:
+安装已发布的 CLI：
 
 ```bash
 npm install -g @deepreef/cli
 ```
 
-or:
+或：
 
 ```bash
 bun install -g @deepreef/cli
 ```
 
-Run from source:
+从源码运行：
 
 ```bash
 git clone https://github.com/bzcsk2/DeepReef.git
@@ -27,35 +27,35 @@ bun install
 bun run dev
 ```
 
-Top-level CLI commands:
+顶级 CLI 命令：
 
 ```bash
-deepreef                         # start interactive TUI
-deepreef --help                  # show help
-deepreef --version               # show version
-deepreef config <subcommand>     # manage config
+deepreef                         # 启动交互式 TUI
+deepreef --help                  # 显示帮助
+deepreef --version               # 显示版本
+deepreef config <subcommand>     # 管理配置
 ```
 
-## TUI commands
+## TUI 命令
 
-Common slash commands:
+常用斜杠命令：
 
-| Command | Purpose |
+| 命令 | 用途 |
 | --- | --- |
-| `/help` | Show help. |
-| `/model` | Switch provider/model/base URL/API key for the current role. |
-| `/workflow` | Start or control the Supervisor/Worker loop. |
-| `/goal` | View or manage the active loop goal. |
-| `/sessions` | Browse and restore sessions. |
-| `/skill` | Browse and enable skills. |
-| `/status` | Show runtime status. |
-| `/context` | Adjust context policy. |
-| `/thinking` | Adjust thinking mode. |
-| `/harness` | Adjust weak-model execution constraints. |
-| `/lang` | Switch Chinese/English UI language. |
-| `/config` | Show or change configuration. |
+| `/help` | 显示帮助。 |
+| `/model` | 切换当前角色的提供商/模型/基础 URL/API 密钥。 |
+| `/workflow` | 启动或控制 Supervisor/Worker 循环。 |
+| `/goal` | 查看或管理活跃的循环目标。 |
+| `/sessions` | 浏览和恢复会话。 |
+| `/skill` | 浏览和启用技能。 |
+| `/status` | 显示运行时状态。 |
+| `/context` | 调整上下文策略。 |
+| `/thinking` | 调整思考模式。 |
+| `/harness` | 调整弱模型执行约束。 |
+| `/lang` | 切换中/英文界面语言。 |
+| `/config` | 显示或更改配置。 |
 
-Goal commands are only meaningful in loop/workflow mode:
+目标命令仅在循环/工作流模式下有意义：
 
 ```text
 /goal
@@ -68,17 +68,17 @@ Goal commands are only meaningful in loop/workflow mode:
 /goal no-budget
 ```
 
-Goal state is persisted with the session:
+目标状态与会话一起持久化：
 
 ```text
 .deepreef/sessions/<sessionId>/goal.json
 ```
 
-## Configuration
+## 配置
 
-DeepReef now has a unified TOML configuration system. Config is validated with Zod and loaded from defaults, user config, project config, and CLI/TUI overrides.
+DeepReef 现在拥有统一的 TOML 配置系统。配置通过 Zod 验证，并从默认值、用户配置、项目配置以及 CLI/TUI 覆盖中加载。
 
-Effective priority, from low to high:
+有效优先级（从低到高）：
 
 ```text
 built-in defaults
@@ -88,9 +88,9 @@ built-in defaults
   < TUI/session-level temporary overrides
 ```
 
-Runtime state is not static config. Sessions, active goal state, mailbox entries, token usage, and workflow phase remain runtime/session data.
+运行时状态不属于静态配置。会话、活跃目标状态、邮箱条目、令牌用量和工作流阶段仍然是运行时/会话数据。
 
-### Config CLI
+### 配置 CLI
 
 ```bash
 deepreef config path
@@ -106,13 +106,13 @@ deepreef config init --template safe-readonly
 deepreef config init --template autonomous-coding
 ```
 
-Use `--project` with `init` or `edit` to target the project config instead of the user config.
+使用 `--project` 配合 `init` 或 `edit` 可针对项目配置而非用户配置。
 
-### Config shape
+### 配置结构
 
-The canonical in-code schema uses camelCase keys. The parser also normalizes snake_case input, but new docs and examples should prefer camelCase.
+规范的代码内模式使用 camelCase 键。解析器也能规范化 snake_case 输入，但新的文档和示例应优先使用 camelCase。
 
-Minimal example:
+最小示例：
 
 ```toml
 version = 1
@@ -163,7 +163,7 @@ workflowJsonl = true
 redactSecrets = true
 ```
 
-Provider example:
+提供商示例：
 
 ```toml
 [providers.local]
@@ -187,43 +187,43 @@ contextStrategy = "full"
 contextTurns = 20
 ```
 
-### Config troubleshooting
+### 配置故障排查
 
 ```bash
-# Show config paths
+# 显示配置路径
 deepreef config path
 
-# Validate user/project/effective config
+# 验证用户/项目/有效配置
 deepreef config validate
 
-# Print effective config with secrets redacted
+# 打印有效配置（机密信息已脱敏）
 deepreef config print --redact
 
-# Inspect likely config problems
+# 检查可能的配置问题
 deepreef config doctor
 ```
 
-If config seems ineffective, check the target path, run `deepreef config validate`, reload from the TUI if applicable, and confirm a higher-priority project config is not overriding the user config.
+如果配置未生效，请检查目标路径，运行 `deepreef config validate`，在 TUI 中重新加载（如适用），并确认是否有优先级更高的项目配置覆盖了用户配置。
 
-## Model providers
+## 模型提供商
 
-DeepReef supports built-in provider families and arbitrary OpenAI-compatible endpoints. Use `/model` for interactive selection and role assignment.
+DeepReef 支持内置的提供商系列以及任意兼容 OpenAI 的端点。使用 `/model` 进行交互式选择和角色分配。
 
-| Family | Notes |
+| 系列 | 说明 |
 | --- | --- |
-| DeepSeek | `deepseek-v4-flash-free`, `deepseek-v4-flash`, `deepseek-v4-pro`; user API key supported. |
-| Mimo | `mimo-v2.5-free`, `mimo-v2.5-pro`, `mimo-v2.5`; user API key supported. |
-| Qwen | Qwen models through vLLM, Ollama, llama.cpp, or OpenAI-compatible endpoints. |
-| Gemma | Gemma models through vLLM, Ollama, llama.cpp, or OpenAI-compatible endpoints. |
-| Kimi | Kimi model presets; user API key supported. |
-| GLM/ZAI | GLM model presets; user API key supported. |
-| Minimax | Minimax model presets. |
-| Stepfun | `step-3.7-flash-free`, `step-3.7-flash`, `step-3.7-turbo`; user API key supported. |
-| NVIDIA | Nemotron/NIM presets; NIM API key supported. |
-| OpenAI | OpenAI-compatible presets such as `gpt-oss-120b`; user API key supported. |
-| Custom | Any OpenAI-compatible endpoint. |
+| DeepSeek | `deepseek-v4-flash-free`、`deepseek-v4-flash`、`deepseek-v4-pro`；支持用户 API 密钥。 |
+| Mimo | `mimo-v2.5-free`、`mimo-v2.5-pro`、`mimo-v2.5`；支持用户 API 密钥。 |
+| Qwen | 通过 vLLM、Ollama、llama.cpp 或兼容 OpenAI 的端点使用 Qwen 模型。 |
+| Gemma | 通过 vLLM、Ollama、llama.cpp 或兼容 OpenAI 的端点使用 Gemma 模型。 |
+| Kimi | Kimi 模型预设；支持用户 API 密钥。 |
+| GLM/ZAI | GLM 模型预设；支持用户 API 密钥。 |
+| Minimax | Minimax 模型预设。 |
+| Stepfun | `step-3.7-flash-free`、`step-3.7-flash`、`step-3.7-turbo`；支持用户 API 密钥。 |
+| NVIDIA | Nemotron/NIM 预设；支持 NIM API 密钥。 |
+| OpenAI | 兼容 OpenAI 的预设，如 `gpt-oss-120b`；支持用户 API 密钥。 |
+| Custom | 任意兼容 OpenAI 的端点。 |
 
-Thinking modes:
+思考模式：
 
 ```text
 /thinking off
@@ -231,16 +231,16 @@ Thinking modes:
 /thinking max
 ```
 
-Recommended split for DeepSeek-style usage:
+DeepSeek 风格用法的推荐分工：
 
-- Supervisor: stronger model, higher thinking, review-heavy role.
-- Worker: cheaper/free/local model, execution-heavy role, with stricter harness and evidence reporting.
+- Supervisor：较强模型，较高思考层级，偏重审查的角色。
+- Worker：较便宜/免费/本地模型，偏重执行的的角色，配备更严格的约束和证据报告。
 
-Provider/model IDs change faster than architecture. Treat `packages/core/src/config.ts` as the source of truth when updating this section.
+提供商/模型 ID 的变更速度快于架构。更新本节时，以 `packages/core/src/config.ts` 为准。
 
-## Logging and diagnostics
+## 日志与诊断
 
-The unified config has a `[logging]` section:
+统一配置中包含 `[logging]` 部分：
 
 ```toml
 [logging]
@@ -252,7 +252,7 @@ workflowJsonl = true
 redactSecrets = true
 ```
 
-Expected log layout:
+预期的日志布局：
 
 ```text
 .deepreef/logs/
@@ -261,24 +261,24 @@ Expected log layout:
   workflow-YYYY-MM-DD.jsonl
 ```
 
-JSONL records are intended for `jq`:
+JSONL 记录旨在配合 `jq` 使用：
 
 ```bash
-# Inspect warnings/errors
+# 检查警告/错误
 cat .deepreef/logs/*.jsonl | jq 'select(.level == "warn" or .level == "error")'
 
-# Inspect tool failures
+# 检查工具失败
 cat .deepreef/logs/*.jsonl | jq 'select(.event == "tool.execute.done" and .isError == true)'
 
-# Inspect API usage if present
+# 检查 API 用量（如存在）
 cat .deepreef/logs/*.jsonl | jq 'select(.event == "api.usage")'
 ```
 
-Sensitive fields such as API keys, authorization headers, tokens, cookies, passwords, and secrets should be redacted. Keep `redactSecrets = true` unless debugging a local-only throwaway environment.
+API 密钥、授权头、令牌、cookies、密码和机密等敏感字段应被脱敏。除非在仅本地的临时环境中调试，否则请保持 `redactSecrets = true`。
 
-## Tracing
+## 追踪
 
-Trace config exists under `[trace]`:
+追踪配置位于 `[trace]` 下：
 
 ```toml
 [trace]
@@ -289,26 +289,26 @@ includeToolResults = false
 includeModelOutputs = false
 ```
 
-If prompt or model-output capture is enabled, treat trace files as sensitive artifacts.
+如果启用了提示词或模型输出捕获，请将追踪文件视为敏感产物。
 
-## Safety boundary
+## 安全边界
 
-DeepReef is a local engineering agent. It can read and write files, run commands, access networks, and invoke extension tools. It is not a complete sandbox.
+DeepReef 是一个本地工程代理。它可以读写文件、运行命令、访问网络以及调用扩展工具。它不是一个完整的沙箱。
 
-Current safety mechanisms include:
+当前的安全机制包括：
 
-- deny-first permission engine,
-- write and shell permission checks,
-- dangerous command blocking,
-- stale-read edit protection,
-- file snapshots,
-- web request SSRF protections,
-- role/mode/workflow-phase tool filtering,
-- configurable hard-deny tool policy.
+- 基于拒绝列表的权限引擎，
+- 写入和 shell 权限检查，
+- 危险命令拦截，
+- 过期读取编辑保护，
+- 文件快照，
+- 网络请求 SSRF 防护，
+- 基于角色/模式/工作流阶段的工具过滤，
+- 可配置的硬拒绝工具策略。
 
-Operational rules:
+操作规则：
 
-- Do not commit API keys or `.deepreef/` runtime/session data.
-- Do not run autonomous coding mode in a repository whose changes you are unwilling to review.
-- Prefer `safe-readonly` config for audits, onboarding, and repo exploration.
-- Prefer project-level config for team/repo policy and user-level config for personal model/provider preferences.
+- 请勿提交 API 密钥或 `.deepreef/` 运行时/会话数据。
+- 请勿在你无法审查变更的仓库中运行自主编码模式。
+- 对于审计、新手上手和仓库探索，建议使用 `safe-readonly` 配置。
+- 对于团队/仓库策略，建议使用项目级配置；对于个人模型/提供商偏好，建议使用用户级配置。
