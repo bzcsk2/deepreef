@@ -1,10 +1,40 @@
 # Architecture
 
-最后整理：2026-06-24。
+Last consolidated: 2026-06-25.
 
-## 总体形态
+## Product intent
 
-DeepReef 是 TypeScript/Bun monorepo，采用核壳分离：
+DeepReef is a terminal-native AI loop agent runtime for supervised local, free, and low-cost coding models. Its core product idea is not “one strong model does everything”; it is a controlled loop where stronger or more reliable models plan, review, recover, and judge, while cheaper or local models perform verifiable execution work.
+
+The current mental model is:
+
+```text
+Supervisor plans / reviews / corrects
+  -> Worker executes engineering work
+  -> Worker reports result and evidence
+  -> Supervisor decides continue / revise / complete / block / ask user
+```
+
+DeepReef is pre-1.0. Public APIs, config shape, package boundaries, and provider presets may still change.
+
+## Repository shape
+
+DeepReef is a TypeScript/Bun monorepo published as `@deepreef/cli`. The executable command is `deepreef`.
+
+| Package | Path | Responsibility |
+| --- | --- | --- |
+| `@deepreef/core` | `packages/core/` | Engine, provider config, context, sessions, workflow, goal, mailbox, permissions, harness, model profiles, structured protocols. |
+| `@deepreef/cli` | `packages/cli/` | CLI entry, TUI startup, pipe mode, tool registration, plugin/memory/MCP wiring, Supervisor/Worker wiring. |
+| `@deepreef/tui` | `packages/tui/` | Ink/React UI, bridge, timeline, slash commands, model picker, workflow/goal UX, diagnostics, settings. |
+| `@deepreef/tools` | `packages/tools/` | Default engineering tools: file, edit, shell, search, web, task, skill, workflow, notebook. |
+| `@deepreef/mcp` | `packages/mcp/` | MCP host/client, resource listing, tool list, and proxied tool invocation. |
+| `@deepreef/plugin` | `packages/plugin/` | Plugin runtime, content packs, hooks, rules, commands, skills, tools. |
+| `@deepreef/memory` | `packages/memory/` | AgentMemory runtime, memory tools, hooks, MCP server/proxy, evaluation/retrieval. |
+| `@deepreef/security` | `packages/security/` | Permission engine, hook manager, file snapshot protection. |
+| `@deepreef/ink` | `packages/ink/` | Terminal rendering primitives and theme infrastructure. |
+| `@deepreef/shell` | `packages/shell/` | Shell-state infrastructure. |
+
+## Runtime map
 
 ```text
 TUI / CLI / pipe mode
@@ -19,43 +49,46 @@ AsyncGenerator<LoopEvent>
         +-- StreamingToolExecutor / Permission / Hooks
         +-- WorkflowCoordinator / DualAgentRuntime
         +-- Plugin / MCP / Memory
+        |
+        v
+TUI bridge / transcript store / runtime status
 ```
 
-核心引擎输出事件流，TUI 通过 bridge 和 store 把事件投影成 timeline、状态栏、权限提示、问题提示和 workflow 状态。
+The core engine emits an event stream. CLI and TUI consumers project that stream into text output, timeline entries, status bars, permission prompts, question prompts, and workflow state.
 
-## 核心包
+## Core engine boundaries
 
-| 路径 | 说明 |
+| Path | Role |
 | --- | --- |
-| `packages/core/src/engine.ts` | `ReasonixEngine`，对外提交、恢复、配置更新、工具注册。 |
-| `packages/core/src/loop.ts` | 主 agent loop。 |
-| `packages/core/src/client.ts` | OpenAI-compatible SSE client。 |
-| `packages/core/src/config.ts` | provider、last-config、role-config、model-targets。 |
-| `packages/core/src/context/` | immutable prefix、append log、scratch、repair、summary、token estimation。 |
-| `packages/core/src/streaming-executor.ts` | 工具执行器，区分 shared/exclusive。 |
-| `packages/core/src/workflow-coordinator/` | Supervisor/Worker 阶段状态机和结构化协议。 |
-| `packages/core/src/goal/` | GoalStore、GoalRuntime、goal tools、steering prompt。 |
-| `packages/core/src/agent-comm/` | Mailbox、AgentCommController、mailbox tools。 |
-| `packages/core/src/dual-agent-runtime/` | Worker/Supervisor 双引擎封装。 |
-| `packages/core/src/resolve-effective-tools.ts` | 根据 role、mode、workflow phase 过滤工具。 |
+| `packages/core/src/engine.ts` | `ReasonixEngine`: submit, resume, config updates, tool registration. |
+| `packages/core/src/loop.ts` | Main single-agent loop. |
+| `packages/core/src/client.ts` | OpenAI-compatible SSE client. |
+| `packages/core/src/config/` and `packages/core/src/config.ts` | Unified config manager plus provider/model presets. |
+| `packages/core/src/context/` | Immutable prefix, append log, scratch, repair, summary, token estimation. |
+| `packages/core/src/streaming-executor.ts` | Shared/exclusive streaming tool execution. |
+| `packages/core/src/workflow-coordinator/` | Supervisor/Worker state machine and structured protocol. |
+| `packages/core/src/goal/` | GoalStore, GoalRuntime, goal tools, steering prompt. |
+| `packages/core/src/agent-comm/` | Mailbox, AgentCommController, mailbox tools. |
+| `packages/core/src/dual-agent-runtime/` | Worker/Supervisor engine wrapper. |
+| `packages/core/src/resolve-effective-tools.ts` | Role/mode/workflow-phase tool filtering. |
 
-## CLI 启动链路
+## CLI startup path
 
-`packages/cli/src/tui.ts` 负责真实接线：
+`packages/cli/src/index.ts` handles top-level command dispatch. `packages/cli/src/tui.ts` performs the interactive runtime wiring:
 
-- 加载 `loadConfig()`。
-- 初始化 `ReasonixEngine`。
-- 后台加载 MCP、Plugin/content-pack、Memory。
-- 注册默认工具、plugin 工具、MCP 代理工具、memory tools。
-- TTY 下创建 Supervisor engine、`DualAgentRuntime`、`GoalStore`、`Mailbox`、`WorkflowCoordinator`。
-- 动态注册 goal/mailbox governance tools，工具执行时读取当前 workflow/thread/controller。
-- 渲染 `@deepreef/tui` App。
+1. Load configuration.
+2. Create `ReasonixEngine`.
+3. Load MCP, plugin/content-pack, and memory systems in the background.
+4. Register default tools, plugin tools, MCP proxy tools, and memory tools.
+5. In TTY mode, create the Supervisor engine, `DualAgentRuntime`, `GoalStore`, `Mailbox`, and `WorkflowCoordinator`.
+6. Register dynamic goal/mailbox governance tools so tool execution reads the current workflow/thread/controller instead of stale objects.
+7. Render the `@deepreef/tui` app.
 
-非 TTY 输入走 pipe mode。
+Non-TTY input uses pipe mode.
 
-## TUI 状态链路
+## TUI state path
 
-TUI 主要入口：
+The TUI entry points are:
 
 - `packages/tui/src/App.tsx`
 - `packages/tui/src/bridge.tsx`
@@ -64,11 +97,11 @@ TUI 主要入口：
 - `packages/tui/src/store/transcript-reader.ts`
 - `packages/tui/src/DeepiMessages.tsx`
 
-当前 TUI 同时保留 legacy bridge 状态和拆分后的 store/runtime 能力。长会话性能治理的核心落点是 transcript store、reader cache、bridge runtime 数组上限和 message rendering 窗口化。
+The UI still contains some legacy bridge state while newer store/runtime components carry transcript, diagnostics, and bounded queue responsibilities. Long-session performance work should stay focused on transcript storage, reader cache behavior, bridge runtime queue limits, and timeline render windows. Do not mix UI trimming with core engine context truncation unless the task explicitly touches both.
 
-## Workflow
+## Workflow loop
 
-`WorkflowCoordinator` 状态机：
+`WorkflowCoordinator` drives the current Supervisor/Worker loop:
 
 ```text
 idle
@@ -81,51 +114,102 @@ idle
   -> completed / blocked / failed
 ```
 
-当前真实主路径：
+Current behavior:
 
-- Supervisor 在 `supervisor_analyse` 产出 plan。
-- Worker 在 `worker_do` 执行 plan。
-- Worker 在 `worker_report` 汇报。
-- Supervisor 在 `supervisor_check` 审查并决定下一步。
-- `parseSupervisorDecision()` 优先解析 Zod 校验的结构化 JSON，失败时走 legacy string fallback，并发出 low-confidence event。
-- `approve` 需要结构化 completion audit 全部有证据才会真正完成。
-- `blocked` 需要同一 blocker 连续 3 轮审计才会真正阻塞。
+- Supervisor in `supervisor_analyse` produces a plan.
+- Worker in `worker_do` executes the plan.
+- Worker in `worker_report` reports result and evidence.
+- Supervisor in `supervisor_check` reviews the evidence and decides the next state.
+- `parseSupervisorDecision()` prefers Zod-validated structured JSON.
+- Legacy string fallback is still available but should be treated as lower confidence.
+- `approve` only completes when completion audit has evidence.
+- `blocked` requires repeated blocker evidence rather than a single unsupported claim.
+- Mailbox workflow exists behind the `useMailboxWorkflow` branch, but the default path still passes plan/report through coordinator state.
 
-Mailbox workflow 路径保留在 `useMailboxWorkflow` 分支，默认不是主路径。
+## Goal and mailbox
 
-## Tool 权限边界
+`GoalStore` persists the active loop goal under the session tree:
 
-`resolveEffectiveTools()` 当前策略：
+```text
+.deepreef/sessions/<sessionId>/goal.json
+```
 
-- Worker loop：工程工具按 agent 配置过滤；goal/mailbox 工具由 coordinator 管理，不直接给 Worker loop 随意调用。
-- Supervisor loop：按 workflow phase 限制工具，默认治理工具优先，避免 Supervisor 无限自我探索。
-- Supervisor alone/subagent：使用较小工具白名单。
+Goal state values:
 
-写操作仍经过权限和 hook 路径。
+```text
+active | paused | blocked | usage_limited | budget_limited | complete
+```
 
-## Provider 与模型
+Model-side `update_goal` is intentionally narrow: it can mark `complete` or `blocked`; pause, resume, budget limit, and clear operations are user/system controls. This prevents the model from silently rewriting user governance state.
 
-Provider 定义在 `packages/core/src/config.ts`：
+Mailbox support uses JSONL-style queue semantics and exposes `send_message`, `followup_task`, and `read_mailbox`. It is useful for future multi-step agent communication, but it is not the default workflow transport yet.
 
-- `zen`
-- `deepseek`
-- `mimo`
-- `kilo`
-- `openai-compatible`
-- `nvidia`
-- `qwen`
-- `kimi`
-- `zai`
-- `stepfun`
-- `openai`
+## Tool and permission boundaries
 
-配置优先级当前主要是环境变量、项目 `.deepreef/*` 窄配置和内置默认值；完整 TOML 配置系统仍是待办。
+`resolveEffectiveTools()` is the central tool-filtering boundary:
 
-## 扩展系统
+- Worker loop receives engineering tools according to agent config and hard policy.
+- Supervisor loop receives phase-scoped tools; it should not freely self-explore or edit during review phases.
+- Supervisor alone/subagent paths use smaller allowlists.
+- Goal and mailbox tools are governance tools managed by the coordinator, not arbitrary Worker tools.
+- Writes still pass through permission and hook systems.
+- Tool policy `deny` rules in config are hard rejects and cannot be overridden by TUI permission prompts.
 
-- Plugin/content-pack：`packages/plugin/`
-- MCP：`packages/mcp/`
-- Skills：`packages/tools/src/skills/` 和 plugin skill dirs
-- AgentMemory：`packages/memory/`
+## Provider and model layer
 
-这些系统在 CLI 启动时后台加载；失败时应保持基础 agent 可用。
+Provider presets live in `packages/core/src/config.ts`; unified config loading lives under `packages/core/src/config/`. Current provider families include `zen`, `deepseek`, `mimo`, `kilo`, `openai-compatible`, `nvidia`, `qwen`, `kimi`, `zai`, `stepfun`, and `openai`.
+
+The exact model matrix and recommended role assignments are maintained in [OPERATIONS.md](OPERATIONS.md#model-providers).
+
+## Extension systems
+
+- Plugin/content-pack: `packages/plugin/`
+- MCP: `packages/mcp/`
+- Skills: `packages/tools/src/skills/` plus plugin skill directories
+- AgentMemory: `packages/memory/`
+
+These systems should fail soft during startup. A failed extension should not prevent the base CLI/TUI agent from running unless the user explicitly requested that extension as required.
+
+## Current implementation status
+
+Implemented foundations:
+
+- CLI, TUI, core runtime, tools, security, plugin, MCP, memory, workflow, goal, and mailbox foundations.
+- Unified TOML configuration control plane with user/project config paths and config CLI commands.
+- Supervisor/Worker structured decision parsing with audit gates.
+- TUI i18n foundation for Chinese/English switching.
+- Bounded long-session TUI storage/rendering work has a baseline implementation.
+
+Still being hardened:
+
+- Workflow reliability on real engineering tasks.
+- Goal continuation and budget governance tied to real usage accounting.
+- Provider capability profiles and local-model recommendations.
+- Cross-platform package/install validation.
+- Public API stability.
+
+## Source-of-truth paths
+
+| Topic | Source |
+| --- | --- |
+| CLI entry | `packages/cli/src/index.ts`, `packages/cli/src/tui.ts` |
+| Engine | `packages/core/src/engine.ts`, `packages/core/src/loop.ts` |
+| Config | `packages/core/src/config/`, `packages/cli/src/commands/config.ts` |
+| Provider presets | `packages/core/src/config.ts` |
+| Workflow | `packages/core/src/workflow-coordinator/` |
+| Goal | `packages/core/src/goal/` |
+| Mailbox | `packages/core/src/agent-comm/` |
+| TUI app | `packages/tui/src/App.tsx` |
+| TUI store | `packages/tui/src/store/` |
+| Slash commands | `packages/tui/src/CommandRegistry.ts`, `packages/tui/src/commands.ts` |
+| Tool filtering | `packages/core/src/resolve-effective-tools.ts` |
+| Default tools | `packages/tools/src/` |
+
+## Invariants for coding agents
+
+- Do not collapse Supervisor and Worker into an undifferentiated agent unless the task is explicitly a product redesign.
+- Do not let Supervisor acquire broad write/search tool access in every workflow phase.
+- Do not treat model claims as completion without evidence when the workflow path expects audit.
+- Do not move runtime state such as sessions, goals, mailbox entries, token usage, or workflow phase into static project docs.
+- Do not make local extension failures fatal unless the user opted into that strict behavior.
+- Do not add new public commands, config keys, or provider IDs without updating `OPERATIONS.md` and tests.
