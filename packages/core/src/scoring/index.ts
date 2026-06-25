@@ -13,6 +13,7 @@ export {
 
 export {
   AgentScoreStore,
+  EvalReportStore,
 } from "./store.js"
 export type { AgentScoreStoreOptions } from "./store.js"
 

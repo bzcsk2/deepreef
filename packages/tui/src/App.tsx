@@ -4,7 +4,7 @@ import type { ScrollBoxHandle } from '@deepreef/ink';
 import { writeSync } from 'node:fs';
 import type { ReasonixEngine } from '@deepreef/core';
 import type { ChatMessage, DeepreefConfig } from '@deepreef/core';
-import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile, selectBenchmarkCases, FREE_MODEL_TARGETS } from '@deepreef/core';
+import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile, selectBenchmarkCases, FREE_MODEL_TARGETS, resolveApiKey, loadRoleConfig } from '@deepreef/core';
 import { resolveHarnessStrictness, readProjectHarnessConfig, writeProjectHarnessConfig } from '@deepreef/core';
 import { createBridge, timelineFromMessages, type BridgeState } from './bridge.js';
 import type { DualAgentRuntime } from '@deepreef/core/dual-agent-runtime/dual-runtime.js';
@@ -360,9 +360,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
 
   // per-role 模型配置：worker / supervisor 各持一份 provider/model。
   // activeModel/activeProvider 改为从 roleConfig[activeRole] 派生（见 activeRole 定义之后）。
-  const [roleConfig, setRoleConfig] = useState<Record<'worker' | 'supervisor', { provider: string; model: string }>>({
-    worker: { provider: config.provider ?? 'zen', model: config.model },
-    supervisor: { provider: config.provider ?? 'zen', model: config.model },
+  const [roleConfig, setRoleConfig] = useState<Record<'worker' | 'supervisor', { provider: string; model: string; baseUrl: string }>>(() => {
+    const persistedW = loadRoleConfig('worker')
+    const persistedS = loadRoleConfig('supervisor')
+    return {
+      worker: persistedW ? { provider: persistedW.provider, model: persistedW.model, baseUrl: persistedW.baseUrl ?? '' } : { provider: config.provider ?? 'zen', model: config.model, baseUrl: config.baseUrl ?? '' },
+      supervisor: persistedS ? { provider: persistedS.provider, model: persistedS.model, baseUrl: persistedS.baseUrl ?? '' } : { provider: config.provider ?? 'zen', model: config.model, baseUrl: config.baseUrl ?? '' },
+    }
   });
   const [inputText, setInputText] = useState('');                                // 用户输入框当前文本
   const [showAutocomplete, setShowAutocomplete] = useState(false);               // 是否显示命令自动补全面板
@@ -688,16 +692,18 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       }
 
       setTUIState('loading')
+      const supervisorTarget = `${roleConfig.supervisor.provider}/${roleConfig.supervisor.model}`
+      const { value: workerApiKey } = resolveApiKey(roleConfig.worker.provider)
       const workerConfig = {
         provider: roleConfig.worker.provider,
         model: roleConfig.worker.model,
-        baseUrl: '',
-        apiKey: '',
+        baseUrl: roleConfig.worker.baseUrl || config.baseUrl || '',
+        apiKey: workerApiKey ?? '',
       }
       appendMessage({ role: 'assistant' as const, content: t().evalStarted(models.length, finalCases.length, totalRuns) })
 
       bridgeRef.current.runEval(
-        { models, cases: finalCases, limit: effectiveLimit, dryRun: false },
+        { models, cases: finalCases, limit: effectiveLimit, dryRun: false, supervisorModelTarget: supervisorTarget },
         workerConfig,
         (progress) => {
           if (progress.status === 'running' && progress.caseId !== 'setup') {
@@ -1101,7 +1107,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       contextWindow,
     });
     // 只更新当前 role 的配置状态（另一 role 不受影响）
-    setRoleConfig(prev => ({ ...prev, [activeRole]: { provider: sel.provider, model: sel.model } }));
+    setRoleConfig(prev => ({ ...prev, [activeRole]: { provider: sel.provider, model: sel.model, baseUrl: sel.baseUrl } }));
     // per-role 持久化（role-config.json）；同时写 last-config.json 作为全局 fallback
     saveRoleConfig(activeRole, { provider: sel.provider, model: sel.model, baseUrl: sel.baseUrl });
     saveLastConfig({ provider: sel.provider, model: sel.model, baseUrl: sel.baseUrl });

@@ -5,7 +5,7 @@ import type { DualAgentRuntime } from '@deepreef/core/dual-agent-runtime/dual-ru
 import type { WorkflowCoordinator } from '@deepreef/core/workflow-coordinator/coordinator.js';
 import type { WorkflowEvent } from '@deepreef/core/workflow-coordinator/types.js';
 import type { EvalRunOptions, EvalRunProgress, EvalRunResult } from '@deepreef/core';
-import { PROVIDERS, resolveApiKey, getApiKeyEnvVar, runEval as runCoreEval } from '@deepreef/core';
+import { PROVIDERS, resolveApiKey, getApiKeyEnvVar, resolveModelTarget, loadConfig, runEval as runCoreEval } from '@deepreef/core';
 import { setTUIState } from './App.js';
 import { DeltaBatcher, resolveDeltaFlushMs } from './delta-batcher.js';
 import { t } from './i18n/index.js';
@@ -922,6 +922,9 @@ export function createBridge(
       }
       return { permissionPrompt: null, questionPrompt: null };
     });
+    // Abort running eval if any
+    evalAbortController?.abort();
+    evalAbortController = null;
     // WF-FIX-10: Interrupt both roles when DualAgentRuntime is active
     if (dualRuntime) {
       dualRuntime.getWorker().getEngine().respondPermission(false);
@@ -1380,17 +1383,30 @@ export function createBridge(
     workflowCoordinator?.addUserInstruction(instruction);
   };
 
+  let evalAbortController: AbortController | null = null
+
   const runEval = async (
     options: EvalRunOptions,
     currentWorkerConfig: { provider: string; model: string; baseUrl: string; apiKey: string },
     onProgress?: (progress: EvalRunProgress) => void,
   ): Promise<EvalRunResult> => {
-    const submitAndCollect = async (text: string, signal?: AbortSignal): Promise<{ text: string; durationMs: number }> => {
+    const abortController = new AbortController()
+    evalAbortController = abortController
+
+    // Resolve engines: Worker and Supervisor may be separate when dualRuntime is active
+    const workerEngine = dualRuntime ? dualRuntime.getWorker().getEngine() : engine
+    const supervisorEngine = dualRuntime ? dualRuntime.getSupervisor().getEngine() : engine
+
+    const submitAndCollect = async (
+      targetEngine: ReasonixEngine,
+      text: string,
+      signal?: AbortSignal,
+    ): Promise<{ text: string; durationMs: number }> => {
       const startTime = Date.now()
       let result = ''
-      for await (const event of engine.submit(text)) {
+      for await (const event of targetEngine.submit(text)) {
         if (signal?.aborted) {
-          engine.interrupt()
+          targetEngine.interrupt()
           break
         }
         if (event.role === 'assistant_final' && event.content) {
@@ -1401,67 +1417,87 @@ export function createBridge(
       return { text: result, durationMs: Date.now() - startTime }
     }
 
+    const checkApiKey = (modelTarget: string): string | null => {
+      // Try alias resolution first (includes .deepreef/model-targets.json custom aliases)
+      const cfg = loadConfig()
+      const resolved = resolveModelTarget(modelTarget, cfg, cfg.modelTargets)
+      if (resolved) {
+        if (resolved.keyless || !PROVIDERS[resolved.provider]?.requiresKey) return null
+        const { value: apiKey } = resolveApiKey(resolved.provider)
+        if (!apiKey) return `missing API key for ${resolved.provider} (set ${getApiKeyEnvVar(resolved.provider)})`
+        return null
+      }
+      const parts = modelTarget.split('/')
+      const provider = parts[0]
+      const providerInfo = PROVIDERS[provider]
+      if (!providerInfo) return `unknown provider: ${provider}`
+      if (providerInfo.requiresKey) {
+        const { value: apiKey } = resolveApiKey(provider)
+        if (!apiKey) return `missing API key for ${provider} (set ${getApiKeyEnvVar(provider)})`
+      }
+      return null
+    }
+
     const switchModel = async (modelTarget: string): Promise<void> => {
+      // Try alias resolution first (includes .deepreef/model-targets.json custom aliases)
+      const cfg = loadConfig()
+      const resolved = resolveModelTarget(modelTarget, cfg, cfg.modelTargets)
+      if (resolved) {
+        workerEngine.updateConfig({
+          provider: resolved.provider,
+          model: resolved.model,
+          apiKey: resolved.apiKey ?? '',
+          baseUrl: resolved.baseUrl,
+          contextWindow: resolved.contextWindow,
+        })
+        await new Promise(r => setTimeout(r, 100))
+        return
+      }
       const parts = modelTarget.split('/')
       const provider = parts[0]
       const model = parts.slice(1).join('/')
       const providerInfo = PROVIDERS[provider]
       if (!providerInfo) throw new Error(`unknown provider: ${provider}`)
       const { value: apiKey } = resolveApiKey(provider)
-      if (providerInfo.requiresKey && !apiKey) {
-        throw new Error(`missing API key for ${provider} (set ${getApiKeyEnvVar(provider)})`)
-      }
       const baseUrl = providerInfo?.baseUrl ?? ''
       const contextWindow = providerInfo?.contextWindow
-      engine.updateConfig({ provider, model, apiKey, baseUrl, contextWindow })
+      workerEngine.updateConfig({ provider, model, apiKey, baseUrl, contextWindow })
       await new Promise(r => setTimeout(r, 100))
     }
 
     const restoreModel = async (): Promise<void> => {
       const { value: apiKey } = resolveApiKey(currentWorkerConfig.provider)
       const baseUrl = currentWorkerConfig.baseUrl || (PROVIDERS[currentWorkerConfig.provider]?.baseUrl ?? '')
-      engine.updateConfig({
+      const contextWindow = PROVIDERS[currentWorkerConfig.provider]?.contextWindow
+      workerEngine.updateConfig({
         provider: currentWorkerConfig.provider,
         model: currentWorkerConfig.model,
         apiKey,
         baseUrl,
+        contextWindow,
       })
     }
 
     const executeWorker = async (params: { prompt: string; signal?: AbortSignal }) => {
-      const { text: raw, durationMs } = await submitAndCollect(params.prompt, params.signal)
+      const { text: raw, durationMs } = await submitAndCollect(workerEngine, params.prompt, params.signal)
       return { text: raw, toolCalls: 0, toolFailures: 0, durationMs }
     }
 
     const executeSupervisor = async (params: { prompt: string; signal?: AbortSignal }) => {
-      // save current (worker) config so we can restore after supervisor evaluation
-      const savedProvider = engine.getProvider()
-      const savedModel = engine.getModel()
-      // switch to original (supervisor) config for evaluation
-      const { value: sk } = resolveApiKey(currentWorkerConfig.provider)
-      engine.updateConfig({
-        provider: currentWorkerConfig.provider,
-        model: currentWorkerConfig.model,
-        apiKey: sk,
-        baseUrl: currentWorkerConfig.baseUrl || (PROVIDERS[currentWorkerConfig.provider]?.baseUrl ?? ''),
-      })
-      const result = await submitAndCollect(params.prompt, params.signal)
-      // restore worker config so next case runs on the same switched model
-      if (savedProvider && savedModel) {
-        const { value: wk } = resolveApiKey(savedProvider)
-        engine.updateConfig({
-          provider: savedProvider,
-          model: savedModel,
-          apiKey: wk,
-          baseUrl: PROVIDERS[savedProvider]?.baseUrl ?? '',
-        })
-      }
-      return { text: result.text, durationMs: result.durationMs }
+      const { text, durationMs } = await submitAndCollect(supervisorEngine, params.prompt, params.signal)
+      return { text, durationMs }
     }
 
     return runCoreEval(
       options,
-      { switchModel, restoreModel, executeWorker, executeSupervisor },
+      {
+        switchModel,
+        restoreModel,
+        executeWorker,
+        executeSupervisor,
+        checkApiKey,
+        abortSignal: abortController.signal,
+      },
       onProgress,
     )
   }

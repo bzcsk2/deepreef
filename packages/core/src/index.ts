@@ -612,6 +612,7 @@ export {
   evaluateAgentRunScore,
   buildRuntimeAdjustment,
   AgentScoreStore,
+  EvalReportStore,
   AGENT_BENCHMARK_CASES,
   DEFAULT_AGENT_BENCHMARK_SUITE,
   selectBenchmarkCases,

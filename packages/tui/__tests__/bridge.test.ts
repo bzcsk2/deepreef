@@ -1,6 +1,7 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest';
 import type { LoopEvent } from '@deepreef/core';
 import type { ReasonixEngine } from '@deepreef/core';
+import * as CoreModule from '@deepreef/core';
 import { createBridge, type BridgeState, type TimelineItem } from '../src/bridge.js';
 
 /** 测试内关闭 delta 合并，避免异步 flush 导致断言竞态。 */
@@ -558,6 +559,74 @@ describe('TUI bridge turn state', () => {
     expect(engine.permissionResponses).toEqual([false]);
     expect(engine.interrupted).toBe(1);
   });
+
+  it('P1-7: runEval uses dualRuntime engines for Worker and Supervisor', async () => {
+    const workerSubmitted: string[] = []
+    const supervisorSubmitted: string[] = []
+    const workerEngine = {
+      submit(text: string) { workerSubmitted.push(text); return (async function* () { yield { role: 'done' as const } })() },
+      updateConfig: vi.fn(),
+      interrupt: vi.fn(),
+    }
+    const supervisorEngine = {
+      submit(text: string) { supervisorSubmitted.push(text); return (async function* () { yield { role: 'done' as const } })() },
+      interrupt: vi.fn(),
+    }
+    const dualRuntime = {
+      getWorker: () => ({ getEngine: () => workerEngine }),
+      getSupervisor: () => ({ getEngine: () => supervisorEngine }),
+      interruptRole: vi.fn(),
+      respondPermission: vi.fn(),
+    }
+
+    const capturedApi: any[] = []
+    const spy = vi.spyOn(CoreModule, 'runEval').mockImplementation(async (_opts: any, api: any) => {
+      capturedApi.push(api)
+      return { evalRunId: 'test', reportDir: '/tmp', leaderboard: [], runs: [] } as any
+    })
+
+    const harness = stateHarness()
+    const bridge = createBridge(
+      {} as ReasonixEngine,
+      harness.setState,
+      undefined, undefined, undefined,
+      dualRuntime as any,
+    )
+
+    await bridge.runEval(
+      { models: ['zen/deepseek-v4-flash-free'], cases: [{ id: 'test', prompt: 'test', taskType: 'single-file-fix', source: 'benchmark', title: 'Test', difficulty: 'easy' }], limit: 1, dryRun: false },
+      { provider: 'zen', model: 'deepseek-v4-flash-free', baseUrl: '', apiKey: '' },
+    )
+
+    expect(capturedApi).toHaveLength(1)
+    const api = capturedApi[0]
+
+    // executeWorker must route to workerEngine
+    await api.executeWorker({ prompt: 'worker-prompt' })
+    expect(workerSubmitted).toContain('worker-prompt')
+    expect(supervisorSubmitted).not.toContain('worker-prompt')
+
+    // executeSupervisor must route to supervisorEngine
+    await api.executeSupervisor({ prompt: 'supervisor-prompt' })
+    expect(supervisorSubmitted).toContain('supervisor-prompt')
+
+    // switchModel/checkApiKey pass cfg.modelTargets to resolveModelTarget for custom aliases
+    const rtSpy = vi.spyOn(CoreModule, 'resolveModelTarget')
+    try {
+      await api.switchModel('zen/deepseek-v4-flash-free')
+      expect(rtSpy.mock.calls[0][0]).toBe('zen/deepseek-v4-flash-free')
+      expect(rtSpy.mock.calls[0]).toHaveLength(3)
+
+      rtSpy.mockClear()
+      api.checkApiKey('zen/deepseek-v4-flash-free')
+      expect(rtSpy.mock.calls[0][0]).toBe('zen/deepseek-v4-flash-free')
+      expect(rtSpy.mock.calls[0]).toHaveLength(3)
+    } finally {
+      rtSpy.mockRestore()
+    }
+
+    spy.mockRestore()
+  })
 
   it('P3-6: original serial queue regression — messageQueue still works', async () => {
     let releaseFirst!: () => void;
