@@ -56,6 +56,7 @@ function stubStrings(overrides?: Partial<Strings>): Strings {
     pressYToConfirm: '',
     updateKey: '',
     apiKeyMasked: () => '',
+    cmdEval: 'multi-model eval',
     cmdExit: 'exit',
     cmdHelp: 'show help',
     cmdModel: 'switch provider/model',
@@ -91,6 +92,7 @@ function stubStrings(overrides?: Partial<Strings>): Strings {
     helpAgents: 'Agents:',
     helpCurrent: 'Current:',
     helpDeprecatedAgentNote: 'Note: /agent build|plan commands are deprecated.',
+    cmdEval: '',
     cmdTheme: '',
     cmdThinking: '',
     cmdWorkflow: '',
@@ -103,6 +105,14 @@ function stubStrings(overrides?: Partial<Strings>): Strings {
     cmdGoalClear: '',
     cmdGoalBudget: '',
     cmdGoalNoBudget: '',
+    evalStarted: () => '',
+    evalProgress: () => '',
+    evalSkipped: () => '',
+    evalComplete: () => '',
+    evalLeaderboardHeader: '',
+    evalReportPath: () => '',
+    evalNoModels: '',
+    evalDryRunHeader: '',
     failedLoadStatus: '',
     thinkingModeSet: () => '',
     thinkingModeCurrent: () => '',
@@ -349,6 +359,33 @@ describe("CL-52: slash command routing helpers", () => {
     expect(help).toContain("/context")
     expect(help).toContain("Agents:")
     expect(help).toContain("Current:")
+  })
+
+  it("parses /eval commands", () => {
+    expect(parseSlashCommand("/eval")).toEqual({ name: "eval" })
+    expect(parseSlashCommand("/eval --models zen/mimo-v2.5-free,kilo/step-3.7-flash-free")).toEqual({
+      name: "eval",
+      models: ["zen/mimo-v2.5-free", "kilo/step-3.7-flash-free"],
+    })
+    expect(parseSlashCommand("/eval --cases smoke")).toEqual({
+      name: "eval",
+      cases: ["smoke"],
+    })
+    expect(parseSlashCommand("/eval --limit 3")).toEqual({
+      name: "eval",
+      limit: 3,
+    })
+    expect(parseSlashCommand("/eval --dry-run")).toEqual({
+      name: "eval",
+      dryRun: true,
+    })
+    expect(parseSlashCommand("/eval --models a,b --cases smoke --limit 2 --dry-run")).toEqual({
+      name: "eval",
+      models: ["a", "b"],
+      cases: ["smoke"],
+      limit: 2,
+      dryRun: true,
+    })
   })
 
   it("buildHelpText includes new commands", () => {

@@ -4,7 +4,7 @@ import type { ScrollBoxHandle } from '@deepreef/ink';
 import { writeSync } from 'node:fs';
 import type { ReasonixEngine } from '@deepreef/core';
 import type { ChatMessage, DeepreefConfig } from '@deepreef/core';
-import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile } from '@deepreef/core';
+import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile, selectBenchmarkCases, FREE_MODEL_TARGETS } from '@deepreef/core';
 import { resolveHarnessStrictness, readProjectHarnessConfig, writeProjectHarnessConfig } from '@deepreef/core';
 import { createBridge, timelineFromMessages, type BridgeState } from './bridge.js';
 import type { DualAgentRuntime } from '@deepreef/core/dual-agent-runtime/dual-runtime.js';
@@ -654,6 +654,82 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     if (command?.name === 'workflow') {
       setShowWorkflowMenu(true);
       return;
+    }
+    // /eval 命令 — 多模型自动测评
+    if (command?.name === 'eval') {
+      const defaultModels = (() => {
+        const workerTarget = `${roleConfig.worker.provider}/${roleConfig.worker.model}`
+        const freeTargets = FREE_MODEL_TARGETS.map(t => `${t.provider}/${t.model}`)
+        return [workerTarget, ...freeTargets.filter(t => t !== workerTarget)]
+      })()
+      const models = command.models ?? defaultModels
+      const caseTags = command.cases ?? ['smoke', 'easy']
+      const limit = command.limit ?? 3
+      const dryRun = command.dryRun ?? false
+      const selectedCases: import('@deepreef/core').AgentBenchmarkCase[] = selectBenchmarkCases(caseTags)
+      const effectiveLimit = dryRun ? (limit > 0 ? limit : selectedCases.length) : (limit > 0 ? limit : selectedCases.length)
+      const finalCases = selectedCases.slice(0, effectiveLimit)
+      const totalRuns = models.length * finalCases.length
+
+      if (dryRun) {
+        const lines = [
+          t().evalDryRunHeader,
+          `  models: ${models.join(', ')}`,
+          `  cases: ${finalCases.map(c => c.id).join(', ')}`,
+          `  totalRuns: ${totalRuns}`,
+        ]
+        appendMessage({ role: 'assistant' as const, content: lines.join('\n') })
+        return
+      }
+
+      if (totalRuns === 0) {
+        appendMessage({ role: 'assistant' as const, content: t().evalNoModels })
+        return
+      }
+
+      setTUIState('loading')
+      const workerConfig = {
+        provider: roleConfig.worker.provider,
+        model: roleConfig.worker.model,
+        baseUrl: '',
+        apiKey: '',
+      }
+      appendMessage({ role: 'assistant' as const, content: t().evalStarted(models.length, finalCases.length, totalRuns) })
+
+      bridgeRef.current.runEval(
+        { models, cases: finalCases, limit: effectiveLimit, dryRun: false },
+        workerConfig,
+        (progress) => {
+          if (progress.status === 'running' && progress.caseId !== 'setup') {
+            const msg = t().evalProgress(progress.index, progress.total, progress.workerModelTarget, progress.caseId)
+            appendMessage({ role: 'assistant' as const, content: msg })
+          } else if (progress.status === 'skipped') {
+            const msg = t().evalSkipped(progress.index, progress.total, progress.workerModelTarget, progress.caseId, progress.reason ?? '')
+            appendMessage({ role: 'assistant' as const, content: msg })
+          } else if ((progress.status === 'passed' || progress.status === 'failed') && progress.score) {
+            const msg = t().evalProgress(progress.index, progress.total, progress.workerModelTarget, progress.caseId, progress.score.overallScore, progress.score.grade)
+            appendMessage({ role: 'assistant' as const, content: msg })
+          }
+        },
+      ).then((result) => {
+        const leaderboardLines = result.leaderboard.map((entry, i) =>
+          `  ${i + 1}. ${entry.workerModelTarget} score=${entry.averageScore.toFixed(1)} verification=${(entry.verificationPassRate * 100).toFixed(0)}% runs=${entry.runs}`,
+        )
+        const msg = [
+          t().evalComplete(result.evalRunId),
+          '',
+          t().evalLeaderboardHeader,
+          ...leaderboardLines,
+          '',
+          t().evalReportPath(result.reportDir),
+        ].join('\n')
+        appendMessage({ role: 'assistant' as const, content: msg })
+      }).catch((err: unknown) => {
+        appendMessage({ role: 'assistant' as const, content: `Eval error: ${err instanceof Error ? err.message : String(err)}` })
+      }).finally(() => {
+        setTUIState('idle')
+      })
+      return
     }
     // DA-R6: /talk 命令 — 切换输入目标角色
     if (command?.name === 'talk') {

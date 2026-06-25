@@ -23,6 +23,7 @@ export type SlashCommand =
   | { name: "talk"; role?: "worker" | "supervisor" }
   | { name: "goal"; subcommand?: "status" | "edit" | "pause" | "resume" | "clear" | "budget" | "no-budget"; arg?: string; objective?: string }
   | { name: "config"; subcommand?: "open" | "reload" | "set"; path?: string; value?: string }
+  | { name: "eval"; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean }
 
 const THINKING_MODES = ["off", "high", "max"]
 
@@ -76,6 +77,37 @@ export function parseSlashCommand(text: string): SlashCommand | null {
     const role = parts[1] as "worker" | "supervisor" | undefined
     if (role && role !== "worker" && role !== "supervisor") return null
     return { name: "talk", role }
+  }
+
+  if (trimmed.startsWith("/eval")) {
+    const parts = trimmed.split(/\s+/).slice(1)
+    const result: { name: "eval"; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean } = { name: "eval" }
+    let i = 0
+    while (i < parts.length) {
+      const flag = parts[i]
+      if (flag === "--dry-run") {
+        result.dryRun = true
+        i++
+      } else if (flag === "--models" || flag === "--cases") {
+        const val = parts[i + 1]
+        if (val && !val.startsWith("--")) {
+          const list = val.split(",").map(s => s.trim()).filter(Boolean)
+          if (flag === "--models") result.models = list
+          else result.cases = list
+          i += 2
+        } else {
+          i++
+        }
+      } else if (flag === "--limit") {
+        const val = parts[i + 1]
+        const num = val ? parseInt(val, 10) : NaN
+        if (!isNaN(num) && num > 0) result.limit = num
+        i += 2
+      } else {
+        i++
+      }
+    }
+    return result
   }
 
   if (trimmed.startsWith("/goal")) {
@@ -156,6 +188,7 @@ export function buildHelpText(activeAgent: string, cmdStrings: Strings): string 
     cmdStrings.helpTitle,
     `  /exit, /bye  — ${cmdStrings.cmdExit}`,
     `  /help        — ${cmdStrings.cmdHelp}`,
+    `  /eval        — ${cmdStrings.cmdEval}`,
     `  /model       — ${cmdStrings.cmdModel}`,
     `  /sessions    — ${cmdStrings.cmdSessions}`,
     `  /agent       — ${cmdStrings.cmdAgent}`,

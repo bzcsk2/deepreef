@@ -57,6 +57,7 @@ export interface Strings {
   updateKey: string;
   apiKeyMasked: (suffix: string) => string;
   // Slash commands
+  cmdEval: string;
   cmdExit: string;
   cmdHelp: string;
   cmdModel: string;
@@ -114,6 +115,14 @@ export interface Strings {
   cmdGoalBudget: string;
   cmdGoalNoBudget: string;
   // P0: App command feedback
+  evalStarted: (models: number, cases: number, runs: number) => string;
+  evalProgress: (index: number, total: number, model: string, caseId: string, score?: number, grade?: string) => string;
+  evalSkipped: (index: number, total: number, model: string, caseId: string, reason: string) => string;
+  evalComplete: (evalRunId: string) => string;
+  evalLeaderboardHeader: string;
+  evalReportPath: (path: string) => string;
+  evalNoModels: string;
+  evalDryRunHeader: string;
   failedLoadStatus: string;
   thinkingModeSet: (mode: string) => string;
   thinkingModeCurrent: (mode: string) => string;
