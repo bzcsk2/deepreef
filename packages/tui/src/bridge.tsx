@@ -163,6 +163,12 @@ export function createBridge(
   workflowCoordinator?: WorkflowCoordinator,
 ): {
   submit: (text: string, isQueueResubmit?: boolean, role?: AgentRole, mode?: WorkflowMode) => Promise<void>;
+  submitAndCollect: (
+    text: string,
+    role?: AgentRole,
+    mode?: WorkflowMode,
+    options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean },
+  ) => Promise<string>;
   cancel: () => void;
   respondPermission: (reply: PermissionReply, message?: string) => void;
   respondQuestion: (requestId: string, answers: string[][]) => void;
@@ -323,37 +329,44 @@ export function createBridge(
     }
   };
 
-  const submit = async (text: string, isQueueResubmit = false, role?: AgentRole, mode: WorkflowMode = 'alone') => {
+  const submitInternal = async (
+    text: string,
+    isQueueResubmit = false,
+    role?: AgentRole,
+    mode: WorkflowMode = 'alone',
+    options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean; collectFinalText?: boolean },
+  ): Promise<string> => {
     if (running) {
       const result = engine.enqueueInstruction(text);
-      if (result.status === 'ignored') return;
+      if (result.status === 'ignored') return '';
       // P0-2: Observe on first successful acceptance (queued/full/queued-ok)
-      if (!isQueueResubmit) {
+      if (!isQueueResubmit && options?.observeInput !== false) {
         onUserInput?.(text);
       }
       if (result.status === 'queued') {
         commitBridge(() => ({ pendingInstructionCount: result.queueLength }));
-        return;
+        return '';
       }
       if (result.status === 'full') {
         commitBridge(prev => ({
           pendingInstructionCount: result.queueLength,
           messageQueue: appendBoundedQueue(prev.messageQueue, text),
         }));
-        return;
+        return '';
       }
       commitBridge(prev => ({ messageQueue: appendBoundedQueue(prev.messageQueue, text) }));
-      return;
+      return '';
     }
 
     // P0-2: Observe fresh user input (not queue re-submissions)
-    if (!isQueueResubmit) {
+    if (!isQueueResubmit && options?.observeInput !== false) {
       onUserInput?.(text);
     }
 
     running = true;
     const requestId = ++activeRequest;
     const submitRole: AgentRole | undefined = role;
+    const displayedText = options?.displayText ?? text;
     let activeOutputRole: AgentRole | undefined = submitRole;
     let roundNumber = 0;
     let roundId = '';
@@ -561,7 +574,7 @@ export function createBridge(
       const userItem: TimelineItem = {
         id: `user-${requestId}-${crypto.randomUUID()}`,
         kind: 'message',
-        message: { role: 'user', content: text },
+        message: { role: 'user', content: displayedText },
         role: submitRole,
       };
 
@@ -569,7 +582,7 @@ export function createBridge(
         if (transcriptStore.getEntryCount() === 0 && prev.timeline.length > 0) {
           hydrateStoreFromTimeline(prev.timeline);
         }
-        transcriptStore.appendUser(userItem.id, text);
+        transcriptStore.appendUser(userItem.id, displayedText);
         bridgeRuntime?.applyPatch({
           isLoading: true,
           error: null,
@@ -595,14 +608,26 @@ export function createBridge(
       };
     });
 
+    let abortHandler: (() => void) | undefined;
     try {
       await beforeSubmit?.();
       // WF-FIX-10: Route through DualAgentRuntime when available
+      abortHandler = () => {
+        if (dualRuntime && submitRole) {
+          dualRuntime.interruptRole(submitRole);
+        } else {
+          engine.interrupt();
+        }
+      };
+      options?.signal?.addEventListener('abort', abortHandler);
       const eventStream = dualRuntime && submitRole
         ? dualRuntime.sendDirect({ role: submitRole, input: text, mode })
         : engine.submit(text, undefined, submitRole, mode);
       for await (const event of eventStream) {
         if (requestId !== activeRequest) continue;
+        if (options?.signal?.aborted) {
+          break;
+        }
         const eventRole = event.metadata?.agentRole === 'worker' || event.metadata?.agentRole === 'supervisor'
           ? event.metadata.agentRole as AgentRole
           : submitRole;
@@ -896,6 +921,9 @@ export function createBridge(
         commitBridge(() => ({ error: msg }));
       }
     } finally {
+      if (abortHandler) {
+        options?.signal?.removeEventListener('abort', abortHandler);
+      }
       if (requestId === activeRequest) {
         streamBatcher.flushNow();
         finalizeRound();
@@ -909,6 +937,20 @@ export function createBridge(
       running = false;
       processQueue();
     }
+    return assistantText.trim();
+  };
+
+  const submit = async (text: string, isQueueResubmit = false, role?: AgentRole, mode: WorkflowMode = 'alone') => {
+    await submitInternal(text, isQueueResubmit, role, mode);
+  };
+
+  const submitAndCollect = async (
+    text: string,
+    role?: AgentRole,
+    mode: WorkflowMode = 'alone',
+    options?: { displayText?: string; signal?: AbortSignal; observeInput?: boolean },
+  ): Promise<string> => {
+    return submitInternal(text, false, role, mode, { ...options, collectFinalText: true });
   };
 
   const cancel = () => {
@@ -1504,6 +1546,7 @@ export function createBridge(
 
   return {
     submit,
+    submitAndCollect,
     cancel,
     respondPermission,
     respondQuestion,

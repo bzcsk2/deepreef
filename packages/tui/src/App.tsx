@@ -4,7 +4,7 @@ import type { ScrollBoxHandle } from '@deepreef/ink';
 import { writeSync } from 'node:fs';
 import type { ReasonixEngine, LoopEvent } from '@deepreef/core';
 import type { ChatMessage, DeepreefConfig } from '@deepreef/core';
-import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile, selectBenchmarkCases, FREE_MODEL_TARGETS, resolveApiKey, loadRoleConfig } from '@deepreef/core';
+import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile, selectBenchmarkCases, FREE_MODEL_TARGETS, resolveApiKey, loadRoleConfig, getCategory, getSuite, runFixedEval, saveEvalReport } from '@deepreef/core';
 import { resolveHarnessStrictness, readProjectHarnessConfig, writeProjectHarnessConfig } from '@deepreef/core';
 import { createBridge, timelineFromMessages, type BridgeState } from './bridge.js';
 import type { DualAgentRuntime } from '@deepreef/core/dual-agent-runtime/dual-runtime.js';
@@ -384,8 +384,6 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const [showSearch, setShowSearch] = useState(false);                           // 是否显示搜索覆盖层（Ctrl+F 触发）
   const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
   const [showEvalWizard, setShowEvalWizard] = useState(false);
-  const [wizardCategory, setWizardCategory] = useState<string | undefined>();
-  const [wizardSuite, setWizardSuite] = useState<string | undefined>();
   // ADV-HAR-01: Harness 三档严格度状态
   const initialStrictness = useMemo(() => {
     const projectConfig = readProjectHarnessConfig();
@@ -466,41 +464,84 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
 
   // Fixed eval: 跟踪 evalAbortRef 供 /eval-cancel 使用
   const evalAbortRef = useRef<AbortController | null>(null);
-
-  // Worker/Supervisor 执行器：区分 worker/supervisor engine
-  const submitAndCollect = useCallback(async (
-    targetEngine: ReasonixEngine,
-    prompt: string,
-    signal?: AbortSignal,
-  ): Promise<string> => {
-    let result = '';
-    try {
-      for await (const event of targetEngine.submit(prompt)) {
-        if (signal?.aborted) {
-          targetEngine.interrupt();
-          break;
-        }
-        if (event.role === 'assistant_final' && event.content) {
-          result = event.content;
-        }
-        if (event.role === 'done') break;
-      }
-    } catch {
-      // engine.submit 被 interrupt 打断时可能抛异常
+  const startFixedEval = useCallback(async (categoryId: string, suiteId: string) => {
+    const category = getCategory(categoryId as any);
+    const suite = getSuite(categoryId as any, suiteId as any);
+    if (!category || !suite) {
+      appendMessage({ role: 'assistant' as const, content: `Invalid eval target: ${categoryId}/${suiteId}` });
+      return;
     }
-    return result.trim();
-  }, []);
+    if (evalAbortRef.current) {
+      appendMessage({ role: 'assistant' as const, content: 'An eval is already running. Use /eval-cancel to stop it.' });
+      return;
+    }
 
-  const executeWorkerCb = useCallback(async (prompt: string): Promise<string> => {
-    const eng = engineRef.current;
-    return submitAndCollect(eng, prompt, evalAbortRef.current?.signal);
-  }, [submitAndCollect]);
+    const abortController = new AbortController();
+    evalAbortRef.current = abortController;
+    appendMessage({
+      role: 'assistant' as const,
+      content: `Starting eval: ${category.id}/${suite.id} (${suite.cases.length} cases)`,
+    });
 
-  const executeSupervisorCb = useCallback(async (prompt: string): Promise<string> => {
-    const dr = dualRuntimeRef.current;
-    const eng = dr ? dr.getSupervisor().getEngine() : engineRef.current;
-    return submitAndCollect(eng, prompt, evalAbortRef.current?.signal);
-  }, [submitAndCollect]);
+    try {
+      const report = await runFixedEval({
+        categoryId: category.id,
+        suiteId: suite.id,
+        abortSignal: abortController.signal,
+        executeWorker: async (prompt: string) => {
+          return bridgeRef.current.submitAndCollect(prompt, 'worker', 'alone', {
+            displayText: `[eval/worker] ${category.id}/${suite.id}`,
+            signal: abortController.signal,
+            observeInput: false,
+          });
+        },
+        executeSupervisor: async (prompt: string) => {
+          return bridgeRef.current.submitAndCollect(prompt, 'supervisor', 'alone', {
+            displayText: `[eval/supervisor] ${category.id}/${suite.id}`,
+            signal: abortController.signal,
+            observeInput: false,
+          });
+        },
+        onProgress: (event) => {
+          if (event.type === 'case-start') {
+            appendMessage({
+              role: 'assistant' as const,
+              content: `[${(event.completedCases ?? 0) + 1}/${event.totalCases ?? '?'}] Running ${event.caseId} — ${event.title ?? ''}`,
+            });
+            return;
+          }
+          if (event.type === 'case-end') {
+            if (event.result) {
+              appendMessage({
+                role: 'assistant' as const,
+                content: `${event.result.caseId}: ${event.result.verdict.toUpperCase()} score=${event.result.score?.finalScore.toFixed(1) ?? 'N/A'}`,
+              });
+            } else if (event.error) {
+              appendMessage({
+                role: 'assistant' as const,
+                content: `${event.caseId}: ERROR ${event.error}`,
+              });
+            }
+          }
+        },
+      });
+      const { reportDir } = await saveEvalReport(report);
+      appendMessage({
+        role: 'assistant' as const,
+        content: `Eval complete: passed=${report.suiteSummary.passed} failed=${report.suiteSummary.failed} score=${report.overallScore.toFixed(2)}\nReport: ${reportDir}`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      appendMessage({
+        role: 'assistant' as const,
+        content: msg.includes('aborted') ? 'Eval cancelled.' : `Eval error: ${msg}`,
+      });
+    } finally {
+      if (evalAbortRef.current === abortController) {
+        evalAbortRef.current = null;
+      }
+    }
+  }, [appendMessage]);
 
   // DA-R6: 检查是否有覆盖层阻止 Tab 切换
   const isOverlayActive = showAutocomplete
@@ -790,15 +831,14 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     }
     // /eval-start — 固定评测模式：运行指定 category/suite
     if (command?.name === 'eval-start') {
-      setWizardCategory(command.category)
-      setWizardSuite(command.suite)
-      setShowEvalWizard(true)
+      void startFixedEval(command.category, command.suite)
       return
     }
     // /eval-cancel — 取消固定评测
     if (command?.name === 'eval-cancel') {
       if (evalAbortRef.current) {
         evalAbortRef.current.abort()
+        bridgeRef.current.cancel()
         evalAbortRef.current = null
         appendMessage({ role: 'assistant' as const, content: 'Eval cancelled.' })
       } else {
@@ -1353,17 +1393,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   if (showEvalWizard) {
     return (
       <EvalWizard
-        onAppendMessage={(content) => appendMessage({ role: 'assistant' as const, content })}
         onDone={() => {
           setShowEvalWizard(false);
-          setWizardCategory(undefined);
-          setWizardSuite(undefined);
         }}
-        executeWorker={executeWorkerCb}
-        executeSupervisor={executeSupervisorCb}
-        initialCategoryId={wizardCategory}
-        initialSuiteId={wizardSuite}
-        registerAbortController={(ac) => { evalAbortRef.current = ac; }}
+        onStart={(categoryId, suiteId) => {
+          void startFixedEval(categoryId, suiteId);
+        }}
       />
     );
   }
