@@ -43,6 +43,16 @@ export async function saveEvalReport(
   );
   await writeFile(summaryJsonPath, summaryJson, "utf-8");
 
+  const sandboxMeta = {
+    providerId: report.meta.providerId,
+    environmentId: report.meta.environmentId,
+    officialScore: report.meta.officialScore,
+    fallbackReason: report.meta.fallbackReason,
+  };
+
+  const envMetaPath = join(evalDir, "sandbox-meta.json");
+  await writeFile(envMetaPath, JSON.stringify(sandboxMeta, null, 2), "utf-8");
+
   const summaryMd = generateMarkdownReport(report);
   await writeFile(summaryMdPath, summaryMd, "utf-8");
 
@@ -86,11 +96,17 @@ function generateMarkdownReport(report: EvalRunReport): string {
   const { meta, suiteSummary, overallScore } = report;
   const lines: string[] = [];
 
-  lines.push(`# DeepReef Eval Report`);
+  lines.push(`# LoopRig Eval Report`);
   lines.push(``);
   lines.push(`- **Run ID**: \`${meta.runId}\``);
   lines.push(`- **Category**: ${meta.categoryId}`);
   lines.push(`- **Suite**: ${meta.suiteId}`);
+  lines.push(`- **Environment**: ${meta.environmentId}`);
+  lines.push(`- **Provider**: ${meta.providerId}`);
+  lines.push(`- **Official Score**: ${meta.officialScore}`);
+  if (meta.fallbackReason) {
+    lines.push(`- **Provider Note**: ${meta.fallbackReason}`);
+  }
   lines.push(`- **Model**: ${meta.model}`);
   lines.push(`- **Status**: ${meta.status}`);
   lines.push(`- **Started**: ${meta.startedAt}`);

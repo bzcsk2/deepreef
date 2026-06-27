@@ -1,8 +1,18 @@
-import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { EvalCaseManifest, VerifierResult, FileAssertion } from "./types";
+import type { SandboxProvider, SandboxCommand } from "../sandbox/types";
+
+let _sandboxProvider: SandboxProvider | null = null;
+
+export function setSandboxProvider(provider: SandboxProvider | null): void {
+  _sandboxProvider = provider;
+}
+
+export function getSandboxProvider(): SandboxProvider | null {
+  return _sandboxProvider;
+}
 
 export async function runVerifier(
   manifest: EvalCaseManifest,
@@ -43,8 +53,65 @@ async function runCommandVerifier(
     };
   }
 
+  const provider = _sandboxProvider;
+  if (provider) {
+    return runCommandViaProvider(provider, command, manifest, workspaceDir);
+  }
+
+  return runCommandDirect(command, manifest, workspaceDir);
+}
+
+async function runCommandViaProvider(
+  provider: SandboxProvider,
+  command: string,
+  manifest: EvalCaseManifest,
+  workspaceDir: string,
+): Promise<VerifierResult> {
+  const timeout = manifest.verifier.timeoutMs ?? 60_000;
+  const sandboxCmd: SandboxCommand = {
+    command,
+    cwd: workspaceDir,
+    timeoutMs: timeout,
+    allowNetwork: false,
+    readRoots: [workspaceDir],
+    writeRoots: [workspaceDir],
+  };
+
+  const result = await provider.run(sandboxCmd);
+
+  const fileResults = await runFileAssertions(
+    manifest.verifier.fileAssertions ?? [],
+    workspaceDir,
+  );
+
+  const passed = result.exitCode === 0 && fileResults.passed;
+  const details: string[] = [];
+  if (result.exitCode === 0) {
+    details.push("Command executed successfully via sandbox provider");
+  } else {
+    details.push(`Command failed with exit code ${result.exitCode}`);
+    if (result.timedOut) details.push("Command timed out");
+  }
+  details.push(...fileResults.details);
+
+  return {
+    passed,
+    verdict: passed ? "pass" : result.timedOut ? "error" : "fail",
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+    details,
+  };
+}
+
+async function runCommandDirect(
+  command: string,
+  manifest: EvalCaseManifest,
+  workspaceDir: string,
+): Promise<VerifierResult> {
   const timeout = manifest.verifier.timeoutMs ?? 60_000;
   try {
+    const { execSync } = await import("node:child_process");
     const output = execSync(command, {
       cwd: workspaceDir,
       encoding: "utf-8",
@@ -61,7 +128,6 @@ async function runCommandVerifier(
       workspaceDir,
     );
     details.push(...fileResults.details);
-
     const passed = fileResults.passed;
 
     return {
@@ -78,7 +144,7 @@ async function runCommandVerifier(
     const stdout = error.stdout ?? "";
     const exitCode = error.status ?? 1;
 
-    const isTimeout = error.killed || error.signal === 'SIGTERM';
+    const isTimeout = error.killed || error.signal === "SIGTERM";
     if (isTimeout) {
       return {
         passed: false,
@@ -90,9 +156,7 @@ async function runCommandVerifier(
       };
     }
 
-    const details: string[] = [
-      `Command failed with exit code ${exitCode}`,
-    ];
+    const details: string[] = [`Command failed with exit code ${exitCode}`];
     if (stderr) {
       details.push(`stderr: ${stderr.slice(0, 500)}`);
     }
@@ -141,7 +205,40 @@ async function runScriptVerifier(
     };
   }
 
+  const provider = _sandboxProvider;
+  if (provider) {
+    const timeout = manifest.verifier.timeoutMs ?? 60_000;
+    const result = await provider.run({
+      command: `bun run ${scriptPath}`,
+      cwd: workspaceDir,
+      timeoutMs: timeout,
+      allowNetwork: false,
+      readRoots: [workspaceDir],
+      writeRoots: [workspaceDir],
+    });
+
+    if (result.exitCode === 0) {
+      return {
+        passed: true,
+        verdict: "pass",
+        stdout: result.stdout,
+        stderr: "",
+        exitCode: 0,
+        details: ["Script executed successfully via sandbox provider"],
+      };
+    }
+    return {
+      passed: false,
+      verdict: result.timedOut ? "error" : "fail",
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      details: [`Script failed: exit ${result.exitCode}`],
+    };
+  }
+
   try {
+    const { execSync } = await import("node:child_process");
     const output = execSync(`bun run ${scriptPath}`, {
       cwd: workspaceDir,
       encoding: "utf-8",
@@ -210,9 +307,7 @@ async function runFileAssertions(
       const stat = await readFile(fullPath, "utf-8");
       for (const content of assertion.mustContain) {
         if (!stat.includes(content)) {
-          details.push(
-            `FAIL: File ${assertion.path} must contain "${content}"`,
-          );
+          details.push(`FAIL: File ${assertion.path} must contain "${content}"`);
           return { passed: false, details };
         }
         details.push(`PASS: File ${assertion.path} contains "${content}"`);
@@ -223,14 +318,10 @@ async function runFileAssertions(
       const stat = await readFile(fullPath, "utf-8");
       for (const content of assertion.mustNotContain) {
         if (stat.includes(content)) {
-          details.push(
-            `FAIL: File ${assertion.path} must not contain "${content}"`,
-          );
+          details.push(`FAIL: File ${assertion.path} must not contain "${content}"`);
           return { passed: false, details };
         }
-        details.push(
-          `PASS: File ${assertion.path} does not contain "${content}"`,
-        );
+        details.push(`PASS: File ${assertion.path} does not contain "${content}"`);
       }
     }
   }

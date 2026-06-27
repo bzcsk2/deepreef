@@ -2,11 +2,23 @@ import { mkdir, cp, rm, writeFile, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import type { EvalCaseManifest } from "./types";
+import type { SandboxProvider } from "../sandbox/types";
 
 export interface WorkspaceInfo {
   workspaceDir: string;
   caseDir: string;
   initialisedAt: string;
+  sandboxProvider?: SandboxProvider;
+}
+
+let _sandboxProvider: SandboxProvider | null = null;
+
+export function setEvalSandboxProvider(provider: SandboxProvider | null): void {
+  _sandboxProvider = provider;
+}
+
+export function getEvalSandboxProvider(): SandboxProvider | null {
+  return _sandboxProvider;
 }
 
 function getDeepReefRoot(): string {
@@ -23,6 +35,10 @@ function getFixtureDir(): string {
     "..",
   );
   return join(pkgDir, "eval", "fixtures");
+}
+
+function getCaseWorkspaceDir(caseDir: string): string {
+  return join(caseDir, "workspace");
 }
 
 export async function createCaseWorkspace(
@@ -57,8 +73,13 @@ export async function createCaseWorkspace(
     workspaceDir,
     caseDir,
     initialisedAt: new Date().toISOString(),
+    sandboxProvider: _sandboxProvider ?? undefined,
   };
 }
+
+export { getCaseWorkspaceDir };
+export { getFixtureDir };
+export { getDeepReefRoot, getEvalsDir };
 
 export async function writeCaseArtifact(
   caseDir: string,
@@ -82,8 +103,4 @@ export async function cleanupCaseWorkspace(caseDir: string): Promise<void> {
   if (existsSync(workspaceDir)) {
     await rm(workspaceDir, { recursive: true, force: true });
   }
-}
-
-export function getCaseWorkspaceDir(caseDir: string): string {
-  return join(caseDir, "workspace");
 }

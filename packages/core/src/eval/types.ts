@@ -1,3 +1,5 @@
+import type { EvalEnvironmentId, SandboxProviderId } from "../sandbox/types";
+
 export type EvalCategoryId =
   | "coding-basics"
   | "tool-use"
@@ -7,6 +9,7 @@ export type EvalCategoryId =
   | "weak-model";
 
 export type EvalSuiteId = "smoke" | "standard" | "stress";
+export type { EvalEnvironmentId, SandboxProviderId };
 
 export interface EvalCaseRef {
   id: string;
@@ -126,8 +129,13 @@ export interface EvalRunMeta {
   finishedAt: string;
   categoryId: EvalCategoryId;
   suiteId: EvalSuiteId;
+  environmentId: EvalEnvironmentId;
+  testSetId: string;
   model: string;
   status: "running" | "completed" | "cancelled" | "failed";
+  providerId: SandboxProviderId;
+  officialScore: boolean;
+  fallbackReason?: string;
 }
 
 export interface EvalRunReport {
@@ -151,6 +159,8 @@ export type EvalProgressCallback = (event: EvalProgressEvent) => void;
 export interface FixedEvalOptions {
   categoryId: EvalCategoryId;
   suiteId: EvalSuiteId;
+  environmentId?: EvalEnvironmentId;
+  testSetId?: string;
   models?: string[];
   abortSignal?: AbortSignal;
   onProgress?: EvalProgressCallback;
@@ -161,4 +171,5 @@ export interface FixedEvalOptions {
   restoreModel?: () => Promise<void>;
   executeWorker?: (prompt: string) => Promise<string>;
   executeSupervisor?: (prompt: string) => Promise<string>;
+  sandboxProvider?: import("../sandbox/types").SandboxProvider;
 }

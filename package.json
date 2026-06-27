@@ -5,10 +5,11 @@
   "type": "module",
   "license": "MIT",
   "bin": {
-    "deepreef": "./dist/index.js"
+    "looprig": "./dist/index.js"
   },
   "files": [
     "dist",
+    "resources",
     "README.md",
     "README.zh.md",
     "LICENSE",
@@ -22,11 +23,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bzcsk2/DeepReef.git"
+    "url": "git+https://github.com/bzcsk2/looprig.git"
   },
-  "homepage": "https://github.com/bzcsk2/DeepReef#readme",
+  "homepage": "https://github.com/bzcsk2/looprig#readme",
   "bugs": {
-    "url": "https://github.com/bzcsk2/DeepReef/issues"
+    "url": "https://github.com/bzcsk2/looprig/issues"
   },
   "keywords": [
     "ai-agent",
@@ -54,6 +55,8 @@
     "test:memory": "cd packages/memory && bun run test",
     "benchmark:fusion": "bun run packages/core/scripts/benchmark-matrix.ts",
     "test:memory-native": "bun test packages/cli/src/__tests__/memory-integration.test.ts",
+    "postinstall": "bun run scripts/download-bwrap.ts 2>/dev/null || true",
+    "download-bwrap": "bun run scripts/download-bwrap.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json"
   },
   "devDependencies": {

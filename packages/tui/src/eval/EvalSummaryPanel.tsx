@@ -10,13 +10,18 @@ interface Props {
 }
 
 export function EvalSummaryPanel({ report, onClose }: Props): React.ReactElement {
-  const { suiteSummary, overallScore } = report;
+  const { suiteSummary, overallScore, meta } = report;
+  const officialLabel = meta.officialScore ? 'OFFICIAL' : 'DIAGNOSTIC';
+  const officialColor = meta.officialScore ? TONE.ok : TONE.warn;
 
   return (
-    <ModalShell title="Eval Complete" subtitle="Run summary" onCancel={onClose}>
+    <ModalShell title="Eval Complete" subtitle={`${meta.environmentId}/${meta.providerId} · ${officialLabel}`} onCancel={onClose}>
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
           <Text bold>Results</Text>
+          <Text>  Environment: {meta.environmentId} / Provider: {meta.providerId}</Text>
+          <Text>  Score type: <Text color={officialColor}>{officialLabel}</Text></Text>
+          {meta.fallbackReason && <Text dimColor>  Note: {meta.fallbackReason}</Text>}
           <Text>  Total: {suiteSummary.totalCases}</Text>
           <Text>  Passed: <Text color={TONE.ok}>{suiteSummary.passed}</Text></Text>
           <Text>  Failed: <Text color={TONE.err}>{suiteSummary.failed}</Text></Text>
@@ -49,7 +54,7 @@ export function EvalSummaryPanel({ report, onClose }: Props): React.ReactElement
 
         <Box marginTop={1}>
           <Text dimColor>
-            Report saved at: .deepreef/evals/{report.meta.runId}/
+            Report saved at: .deepreef/evals/{meta.runId}/
           </Text>
         </Box>
 

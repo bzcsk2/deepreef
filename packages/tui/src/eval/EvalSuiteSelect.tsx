@@ -33,7 +33,7 @@ export function EvalSuiteSelect({ category, onSelect, onCancel }: Props): React.
 
   return (
     <ModalShell
-      title={`Suites — ${category.title}`}
+      title={`Test Sets — ${category.title}`}
       subtitle={category.description}
       onCancel={onCancel}
     >

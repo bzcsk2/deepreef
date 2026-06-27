@@ -702,4 +702,25 @@ export type {
   FixedEvalOptions,
   VerifierType,
   FileAssertion,
+  EvalEnvironmentId,
+  SandboxProviderId,
 } from "./eval/index.js"
+export {
+  initDefaultProviders,
+  detectBestProvider,
+  getProvider,
+  listProviders,
+  diagnoseEnvironment,
+  execInSandbox,
+  SoftWorkspaceProvider,
+  BwrapProvider,
+  resolveBundledBwrap,
+  getBwrapDiagnostics,
+  clearProviders,
+} from "./sandbox/index.js"
+export type {
+  SandboxCapabilities,
+  SandboxCommand,
+  SandboxResult,
+  SandboxProvider,
+} from "./sandbox/index.js"

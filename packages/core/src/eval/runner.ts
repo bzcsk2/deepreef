@@ -15,11 +15,20 @@ import type {
   EvalRunMeta,
   EvalRunReport,
   EvalProgressEvent,
+  EvalEnvironmentId,
+  SandboxProviderId,
 } from "./types";
 import { listCaseRefs, getSuite, getCategories } from "./registry";
 import { getManifest } from "./loader";
-import { createCaseWorkspace, writeCaseArtifact, getCaseWorkspaceDir } from "./workspace";
-import { runVerifier } from "./verifier";
+import { createCaseWorkspace, writeCaseArtifact, getCaseWorkspaceDir, setEvalSandboxProvider, getEvalSandboxProvider } from "./workspace";
+import { runVerifier, setSandboxProvider as setVerifierSandboxProvider } from "./verifier";
+import { initDefaultProviders, detectBestProvider } from "../sandbox/provider-registry";
+
+// Expose workspace and sandbox for external tools to use during eval
+let _currentCaseWorkspace: string | null = null;
+export function getCurrentCaseWorkspace(): string | null {
+  return _currentCaseWorkspace;
+}
 
 function getDeepReefRoot(): string {
   return process.env.DEEPRREF_ROOT ?? ".deepreef";
@@ -134,6 +143,31 @@ function getPatchDiff(workspaceDir: string): string {
   }
 }
 
+async function resolveSandboxProvider(
+  options: FixedEvalOptions,
+): Promise<{ provider: import("../sandbox/types").SandboxProvider; environmentId: EvalEnvironmentId; providerId: SandboxProviderId; officialScore: boolean; fallbackReason?: string }> {
+  if (options.sandboxProvider) {
+    return {
+      provider: options.sandboxProvider,
+      environmentId: options.environmentId ?? "sandbox",
+      providerId: options.sandboxProvider.id,
+      officialScore: options.environmentId === "sandbox",
+    };
+  }
+
+  const environmentId = options.environmentId ?? "sandbox";
+  initDefaultProviders();
+  const { provider, capabilities } = await detectBestProvider(environmentId);
+
+  return {
+    provider,
+    environmentId,
+    providerId: provider.id,
+    officialScore: capabilities.official,
+    fallbackReason: capabilities.reason,
+  };
+}
+
 async function runSingleCase(
   manifest: EvalCaseManifest,
   workspaceDir: string,
@@ -150,7 +184,15 @@ async function runSingleCase(
   try {
     if (options.executeWorker) {
       const workerPrompt = buildWorkerPrompt(manifest, workspaceDir);
-      workerOutput = await options.executeWorker(workerPrompt);
+      const prevCwd = process.cwd();
+      process.chdir(workspaceDir);
+      _currentCaseWorkspace = workspaceDir;
+      try {
+        workerOutput = await options.executeWorker(workerPrompt);
+      } finally {
+        _currentCaseWorkspace = null;
+        process.chdir(prevCwd);
+      }
       await writeCaseArtifact(caseDir, "worker-output.md", workerOutput);
     }
 
@@ -224,6 +266,8 @@ function buildWorkerPrompt(
 ): string {
   return `You are working on an evaluation task in an isolated workspace at ${workspaceDir}.
 
+All file operations and shell commands must operate within this workspace. Do not access files outside this directory.
+
 ## Task
 ${manifest.taskPrompt}
 
@@ -276,6 +320,11 @@ export async function runFixedEval(
     throw new Error("Eval aborted before start");
   }
 
+  const { provider, environmentId, providerId, officialScore, fallbackReason } = await resolveSandboxProvider(options);
+
+  setVerifierSandboxProvider(provider);
+  setEvalSandboxProvider(provider);
+
   const runId = randomUUID().slice(0, 8);
   const evalDir = join(getEvalsDir(), runId);
   await mkdir(evalDir, { recursive: true });
@@ -290,7 +339,7 @@ export async function runFixedEval(
     traceLines.push(JSON.stringify({ t: Date.now(), event, ...data }));
   }
 
-  recordTrace("eval-start", { categoryId, suiteId, runId });
+  recordTrace("eval-start", { categoryId, suiteId, environmentId, providerId, officialScore, runId });
 
   await writeFile(
     join(evalDir, "registry.json"),
@@ -424,8 +473,13 @@ export async function runFixedEval(
     finishedAt,
     categoryId,
     suiteId,
+    environmentId,
+    testSetId: options.testSetId ?? suiteId,
     model: options.models?.[0] ?? "default",
     status: options.abortSignal?.aborted ? "cancelled" : "completed",
+    providerId,
+    officialScore,
+    fallbackReason,
   };
 
   const overallScore = averageScore;
@@ -435,6 +489,9 @@ export async function runFixedEval(
     totalCases: caseRefs.length,
     completedCases: results.length,
   });
+
+  setVerifierSandboxProvider(null);
+  setEvalSandboxProvider(null);
 
   return {
     meta,

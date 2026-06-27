@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from '@deepreef/ink';
-import type { EvalCategoryId, EvalSuiteId, EvalProgressEvent } from '@deepreef/core';
+import type { EvalCategoryId, EvalSuiteId, EvalProgressEvent, EvalEnvironmentId } from '@deepreef/core';
 import { ModalShell } from '../ModalShell.js';
 import { FG, TONE } from '../reasonix/tokens.js';
 import { Spinner } from '../Spinner.js';
@@ -8,11 +8,12 @@ import { Spinner } from '../Spinner.js';
 interface Props {
   categoryId: EvalCategoryId;
   suiteId: EvalSuiteId;
+  environmentId?: EvalEnvironmentId;
   latestEvent: EvalProgressEvent | null;
   onCancel: () => void;
 }
 
-export function EvalRunPanel({ categoryId, suiteId, latestEvent, onCancel }: Props): React.ReactElement {
+export function EvalRunPanel({ categoryId, suiteId, environmentId, latestEvent, onCancel }: Props): React.ReactElement {
   const progressText = latestEvent
     ? `[${latestEvent.completedCases ?? 0}/${latestEvent.totalCases ?? '?'}]`
     : '[0/?]';
@@ -20,7 +21,7 @@ export function EvalRunPanel({ categoryId, suiteId, latestEvent, onCancel }: Pro
   return (
     <ModalShell
       title={`Running Eval — ${categoryId}/${suiteId}`}
-      subtitle={progressText}
+      subtitle={`env=${environmentId ?? 'sandbox'} ${progressText}`}
       onCancel={onCancel}
     >
       <Box flexDirection="column" gap={1}>

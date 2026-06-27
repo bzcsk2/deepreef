@@ -530,6 +530,9 @@ describe("report generation", () => {
         suiteId: "smoke" as const,
         model: "test-model",
         status: "completed" as const,
+        environmentId: "sandbox" as const,
+        providerId: "test-provider",
+        officialScore: true,
       },
       suiteSummary: {
         suiteId: "smoke" as const,
@@ -601,7 +604,10 @@ describe("report generation", () => {
 
     const { summaryMd, summaryJson } = await saveEvalReport(report);
 
-    expect(summaryMd).toContain("# DeepReef Eval Report");
+    expect(summaryMd).toContain("# LoopRig Eval Report");
+    expect(summaryMd).toContain("sandbox");
+    expect(summaryMd).toContain("test-provider");
+    expect(summaryMd).toContain("true");
     expect(summaryMd).toContain("test-run-1");
     expect(summaryMd).toContain("coding-basics");
     expect(summaryMd).toContain("Case 1");

@@ -12,7 +12,7 @@
     }
   },
   "bin": {
-    "deepreef": "src/index.ts"
+    "looprig": "src/index.ts"
   },
   "scripts": {
     "dev": "bun run src/index.ts",

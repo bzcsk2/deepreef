@@ -1,55 +1,111 @@
-import React, { useState, useCallback } from 'react';
-import type { EvalCategory, EvalSuite } from '@deepreef/core';
-import { getCategories } from '@deepreef/core';
+import React, { useState, useCallback, useEffect } from 'react';
+import type { EvalCategory, EvalSuite, EvalEnvironmentId } from '@deepreef/core';
+import { getCategories, getCategory, getSuite } from '@deepreef/core';
 import { EvalCategorySelect } from './EvalCategorySelect.js';
 import { EvalSuiteSelect } from './EvalSuiteSelect.js';
+import { EvalEnvironmentSelect } from './EvalEnvironmentSelect.js';
 
-type EvalWizardStep = 'category' | 'suite';
+type EvalWizardStep = 'category' | 'environment' | 'suite';
 
 interface Props {
   onDone: () => void;
-  onStart: (categoryId: string, suiteId: string) => void;
+  onStart: (categoryId: string, suiteId: string, environmentId: EvalEnvironmentId) => void;
+  initialCategoryId?: string;
+  initialSuiteId?: string;
+  initialEnvironmentId?: string;
 }
 
-export function EvalWizard({ onDone, onStart }: Props): React.ReactElement {
-  const [step, setStep] = useState<EvalWizardStep>('category');
-  const [selectedCategory, setSelectedCategory] = useState<EvalCategory | null>(null);
-  const categories = getCategories();
+export function EvalWizard({ onDone, onStart, initialCategoryId, initialSuiteId, initialEnvironmentId }: Props): React.ReactElement | null {
+  const [step, setStep] = useState<EvalWizardStep>(() => {
+    if (initialCategoryId && initialSuiteId) {
+      const cat = getCategory(initialCategoryId as any);
+      const suite = getSuite(initialCategoryId as any, initialSuiteId as any);
+      if (cat && suite) return 'suite';
+    }
+    if (initialCategoryId) {
+      const cat = getCategory(initialCategoryId as any);
+      if (cat) return 'environment';
+    }
+    return 'category';
+  });
+  const [selectedCategory, setSelectedCategory] = useState<EvalCategory | null>(() =>
+    initialCategoryId ? getCategory(initialCategoryId as any) ?? null : null,
+  );
+  const [selectedEnvironment, setSelectedEnvironment] = useState<EvalEnvironmentId>(() =>
+    (initialEnvironmentId as EvalEnvironmentId) ?? 'sandbox',
+  );
+  useEffect(() => {
+    if (initialCategoryId && initialSuiteId) {
+      const cat = getCategory(initialCategoryId as any);
+      const suite = getSuite(initialCategoryId as any, initialSuiteId as any);
+      if (cat && suite) {
+        onStart(cat.id, suite.id, selectedEnvironment);
+        onDone();
+      }
+    }
+  }, [initialCategoryId, initialSuiteId, onDone, onStart, selectedEnvironment]);
 
-  const handleCategorySelect = useCallback((category: EvalCategory) => {
-    setSelectedCategory(category);
-    setStep('suite');
+  const handleCategorySelect = useCallback((cat: EvalCategory) => {
+    setSelectedCategory(cat);
+    setStep('environment');
   }, []);
 
-  const handleSuiteSelect = useCallback((suite: EvalSuite) => {
-    if (!selectedCategory) {
+  const handleEnvironmentSelect = useCallback((envId: EvalEnvironmentId) => {
+    setSelectedEnvironment(envId);
+    const suites = selectedCategory?.suites ?? [];
+    if (selectedCategory && suites.length === 1) {
+      const onlySuite = suites[0]!;
+      onStart(selectedCategory.id, onlySuite.id, envId);
       onDone();
       return;
     }
-    onStart(selectedCategory.id, suite.id);
-    onDone();
+    setStep('suite');
   }, [onDone, onStart, selectedCategory]);
 
-  const handleCancelSuite = useCallback(() => {
-    setSelectedCategory(null);
+  const handleSuiteSelect = useCallback((suite: EvalSuite) => {
+    const cat = selectedCategory;
+    if (!cat) return;
+    onStart(cat.id, suite.id, selectedEnvironment);
+    onDone();
+  }, [onDone, onStart, selectedCategory, selectedEnvironment]);
+
+  const handleCancelCategory = useCallback(() => {
+    onDone();
+  }, [onDone]);
+
+  const handleCancelEnvironment = useCallback(() => {
     setStep('category');
   }, []);
 
-  if (step === 'suite' && selectedCategory) {
-    return (
-      <EvalSuiteSelect
-        category={selectedCategory}
-        onSelect={handleSuiteSelect}
-        onCancel={handleCancelSuite}
-      />
-    );
-  }
+  const handleCancelSuite = useCallback(() => {
+    setStep('environment');
+  }, []);
 
-  return (
-    <EvalCategorySelect
-      categories={categories}
-      onSelect={handleCategorySelect}
-      onCancel={onDone}
-    />
-  );
+  const categories = getCategories();
+
+  switch (step) {
+    case 'category':
+      return (
+        <EvalCategorySelect
+          categories={categories}
+          onSelect={handleCategorySelect}
+          onCancel={handleCancelCategory}
+        />
+      );
+    case 'environment':
+      return (
+        <EvalEnvironmentSelect
+          onSelect={handleEnvironmentSelect}
+          onCancel={handleCancelEnvironment}
+        />
+      );
+    case 'suite':
+      return (
+        <EvalSuiteSelect
+          category={selectedCategory!}
+          onSelect={handleSuiteSelect}
+          onCancel={handleCancelSuite}
+        />
+      );
+  }
 }

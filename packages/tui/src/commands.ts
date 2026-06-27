@@ -24,7 +24,7 @@ export type SlashCommand =
   | { name: "goal"; subcommand?: "status" | "edit" | "pause" | "resume" | "clear" | "budget" | "no-budget"; arg?: string; objective?: string }
   | { name: "config"; subcommand?: "open" | "reload" | "set"; path?: string; value?: string }
   | { name: "eval"; legacy?: boolean; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean }
-  | { name: "eval-start"; category: string; suite: string }
+  | { name: "eval-start"; category: string; suite: string; env?: string }
   | { name: "eval-cancel" }
 
 const THINKING_MODES = ["off", "high", "max"]
@@ -84,7 +84,9 @@ export function parseSlashCommand(text: string): SlashCommand | null {
   if (trimmed.startsWith("/eval-start")) {
     const parts = trimmed.split(/\s+/).slice(1)
     if (parts.length >= 2) {
-      return { name: "eval-start", category: parts[0], suite: parts[1] }
+      const envIndex = parts.indexOf('--env')
+      const env = envIndex >= 0 && envIndex + 1 < parts.length ? parts[envIndex + 1] : undefined
+      return { name: "eval-start", category: parts[0], suite: parts[1], env }
     }
     return { name: "eval" }
   }

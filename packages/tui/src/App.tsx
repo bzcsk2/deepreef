@@ -464,7 +464,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
 
   // Fixed eval: 跟踪 evalAbortRef 供 /eval-cancel 使用
   const evalAbortRef = useRef<AbortController | null>(null);
-  const startFixedEval = useCallback(async (categoryId: string, suiteId: string) => {
+  const startFixedEval = useCallback(async (categoryId: string, suiteId: string, environmentId?: string) => {
     const category = getCategory(categoryId as any);
     const suite = getSuite(categoryId as any, suiteId as any);
     if (!category || !suite) {
@@ -480,24 +480,25 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     evalAbortRef.current = abortController;
     appendMessage({
       role: 'assistant' as const,
-      content: `Starting eval: ${category.id}/${suite.id} (${suite.cases.length} cases)`,
+      content: `Starting eval: ${category.title} · ${suite.title} · env=${environmentId ?? 'sandbox'} (${suite.cases.length} cases)`,
     });
 
     try {
       const report = await runFixedEval({
         categoryId: category.id,
         suiteId: suite.id,
+        environmentId: (environmentId ?? 'sandbox') as any,
         abortSignal: abortController.signal,
         executeWorker: async (prompt: string) => {
           return bridgeRef.current.submitAndCollect(prompt, 'worker', 'alone', {
-            displayText: `[eval/worker] ${category.id}/${suite.id}`,
+            displayText: `[eval/worker] ${category.title} · ${suite.title}`,
             signal: abortController.signal,
             observeInput: false,
           });
         },
         executeSupervisor: async (prompt: string) => {
           return bridgeRef.current.submitAndCollect(prompt, 'supervisor', 'alone', {
-            displayText: `[eval/supervisor] ${category.id}/${suite.id}`,
+            displayText: `[eval/supervisor] ${category.title} · ${suite.title}`,
             signal: abortController.signal,
             observeInput: false,
           });
@@ -831,7 +832,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     }
     // /eval-start — 固定评测模式：运行指定 category/suite
     if (command?.name === 'eval-start') {
-      void startFixedEval(command.category, command.suite)
+      void startFixedEval(command.category, command.suite, command.env)
       return
     }
     // /eval-cancel — 取消固定评测
@@ -1396,8 +1397,9 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         onDone={() => {
           setShowEvalWizard(false);
         }}
-        onStart={(categoryId, suiteId) => {
-          void startFixedEval(categoryId, suiteId);
+        onStart={(categoryId: string, suiteId: string, environmentId) => {
+          setShowEvalWizard(false);
+          void startFixedEval(categoryId, suiteId, environmentId);
         }}
       />
     );

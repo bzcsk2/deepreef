@@ -8,6 +8,7 @@ import { shouldBlockSalvagedTruncatedWrite, buildSalvagedTruncatedWriteBlockMess
 import { ReadTracker, extractFilePath, isWriteTool, isReadTool } from "./read-before-write.js"
 import type { SubagentRunOptions, SubagentRunResult } from "./subagent/types.js"
 import type { QuestionInfo, QuestionAnswer } from "./question/types.js"
+import { getCurrentCaseWorkspace } from "./eval/runner.js"
 
 export class StreamingToolExecutor {
   private tools: Map<string, AgentTool>
@@ -330,7 +331,7 @@ export class StreamingToolExecutor {
 
   private createToolContext(signal: AbortSignal, stack: string[], reportProgress?: (update: ToolProgressUpdate) => void): ToolContext {
     return {
-      cwd: this.cwd,
+      cwd: getCurrentCaseWorkspace() ?? this.cwd,
       sessionId: this.sessionId,
       signal,
       reportProgress,
