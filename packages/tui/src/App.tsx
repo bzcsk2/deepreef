@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { Box, AlternateScreen, instances, SHOW_CURSOR, EXIT_ALT_SCREEN, useInput } from '@deepreef/ink';
 import type { ScrollBoxHandle } from '@deepreef/ink';
 import { writeSync } from 'node:fs';
-import type { ReasonixEngine } from '@deepreef/core';
+import type { ReasonixEngine, LoopEvent } from '@deepreef/core';
 import type { ChatMessage, DeepreefConfig } from '@deepreef/core';
 import { PROVIDERS, AGENTS, defaultAgentRegistry, getModelContextWindow, saveLastConfig, saveRoleConfig, loadAgentProfiles, saveAgentProfiles, updateAgentProfile, selectBenchmarkCases, FREE_MODEL_TARGETS, resolveApiKey, loadRoleConfig } from '@deepreef/core';
 import { resolveHarnessStrictness, readProjectHarnessConfig, writeProjectHarnessConfig } from '@deepreef/core';
@@ -46,6 +46,7 @@ import { LoadingIndicator } from './components/shared/LoadingIndicator.js';
 import { AgentGroupDisplay } from './components/agents/AgentGroupDisplay.js';
 import { WorkerActivityPanel } from './components/workers/WorkerActivityPanel.js';
 import { DialogManager } from './components/dialogs/DialogManager.js';
+import { EvalWizard } from './eval/EvalWizard.js';
 // DA-R6: 双角色组件
 import { WorkflowStatusBar } from './components/workflow/index.js';
 import type { WorkflowPhase, WorkflowState } from './components/workflow/index.js';
@@ -290,6 +291,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   bridgeRef.current = bridge;
   const contextTotal = engine.getContextWindow?.() ?? config.contextWindow ?? 128_000;
   const engineRef = useRef(engine);
+  const dualRuntimeRef = useRef(dualRuntime);
+  dualRuntimeRef.current = dualRuntime;
   const mountedRef = useRef(true);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const appendMessage = useCallback((message: ChatMessage) => {
@@ -379,6 +382,10 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const [showContextModal, setShowContextModal] = useState(false);               // 是否显示上下文策略管理弹窗覆盖层
   const [showHarnessMenu, setShowHarnessMenu] = useState(false);                 // 是否显示 Harness 严格度选择菜单
   const [showSearch, setShowSearch] = useState(false);                           // 是否显示搜索覆盖层（Ctrl+F 触发）
+  const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
+  const [showEvalWizard, setShowEvalWizard] = useState(false);
+  const [wizardCategory, setWizardCategory] = useState<string | undefined>();
+  const [wizardSuite, setWizardSuite] = useState<string | undefined>();
   // ADV-HAR-01: Harness 三档严格度状态
   const initialStrictness = useMemo(() => {
     const projectConfig = readProjectHarnessConfig();
@@ -399,7 +406,9 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     || showSkillModal
     || showContextModal
     || showHarnessMenu
-    || showAutocomplete;
+    || showWorkflowMenu
+    || showAutocomplete
+    || showEvalWizard;
   useMessageScroll(scrollRef, !modalBlocksScroll);
   // per-role agent 身份：worker / supervisor 各持一份绑定。activeAgent 由 activeRole 派生（见下）。
   const [agentByRole, setAgentByRole] = useState<Record<'worker' | 'supervisor', string>>({
@@ -447,7 +456,6 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   workflowLifecycleRef.current = workflowLifecycle;
   // SFR-70: 跟踪并发 Workflow，防止重复启动
   const workflowRunningRef = useRef(false);
-  const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
   const restoreScrollAfterWorkflowMenuRef = useRef(false);
 
   useEffect(() => {
@@ -455,6 +463,44 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     restoreScrollAfterWorkflowMenuRef.current = false;
     restoreMessageScrollAfterOverlay(scrollRef);
   }, [showWorkflowMenu]);
+
+  // Fixed eval: 跟踪 evalAbortRef 供 /eval-cancel 使用
+  const evalAbortRef = useRef<AbortController | null>(null);
+
+  // Worker/Supervisor 执行器：区分 worker/supervisor engine
+  const submitAndCollect = useCallback(async (
+    targetEngine: ReasonixEngine,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<string> => {
+    let result = '';
+    try {
+      for await (const event of targetEngine.submit(prompt)) {
+        if (signal?.aborted) {
+          targetEngine.interrupt();
+          break;
+        }
+        if (event.role === 'assistant_final' && event.content) {
+          result = event.content;
+        }
+        if (event.role === 'done') break;
+      }
+    } catch {
+      // engine.submit 被 interrupt 打断时可能抛异常
+    }
+    return result.trim();
+  }, []);
+
+  const executeWorkerCb = useCallback(async (prompt: string): Promise<string> => {
+    const eng = engineRef.current;
+    return submitAndCollect(eng, prompt, evalAbortRef.current?.signal);
+  }, [submitAndCollect]);
+
+  const executeSupervisorCb = useCallback(async (prompt: string): Promise<string> => {
+    const dr = dualRuntimeRef.current;
+    const eng = dr ? dr.getSupervisor().getEngine() : engineRef.current;
+    return submitAndCollect(eng, prompt, evalAbortRef.current?.signal);
+  }, [submitAndCollect]);
 
   // DA-R6: 检查是否有覆盖层阻止 Tab 切换
   const isOverlayActive = showAutocomplete
@@ -659,8 +705,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       setShowWorkflowMenu(true);
       return;
     }
-    // /eval 命令 — 多模型自动测评
+    // /eval 命令 — 固定评测向导（无 flags）或旧版多模型自动测评（--legacy / --models）
     if (command?.name === 'eval') {
+      if (!command.legacy && !command.models && !command.cases) {
+        setShowEvalWizard(true)
+        return
+      }
+
       const defaultModels = (() => {
         const workerTarget = `${roleConfig.worker.provider}/${roleConfig.worker.model}`
         const freeTargets = FREE_MODEL_TARGETS.map(t => `${t.provider}/${t.model}`)
@@ -735,6 +786,24 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       }).finally(() => {
         setTUIState('idle')
       })
+      return
+    }
+    // /eval-start — 固定评测模式：运行指定 category/suite
+    if (command?.name === 'eval-start') {
+      setWizardCategory(command.category)
+      setWizardSuite(command.suite)
+      setShowEvalWizard(true)
+      return
+    }
+    // /eval-cancel — 取消固定评测
+    if (command?.name === 'eval-cancel') {
+      if (evalAbortRef.current) {
+        evalAbortRef.current.abort()
+        evalAbortRef.current = null
+        appendMessage({ role: 'assistant' as const, content: 'Eval cancelled.' })
+      } else {
+        appendMessage({ role: 'assistant' as const, content: 'No eval is currently running.' })
+      }
       return
     }
     // DA-R6: /talk 命令 — 切换输入目标角色
@@ -1276,6 +1345,25 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         }}
         onCancel={() => setShowHarnessMenu(false)}
         footer={t().harnessFooter}
+      />
+    );
+  }
+
+  // ---- 覆盖层：Eval 评测向导（当 showEvalWizard 为 true 时显示） ----
+  if (showEvalWizard) {
+    return (
+      <EvalWizard
+        onAppendMessage={(content) => appendMessage({ role: 'assistant' as const, content })}
+        onDone={() => {
+          setShowEvalWizard(false);
+          setWizardCategory(undefined);
+          setWizardSuite(undefined);
+        }}
+        executeWorker={executeWorkerCb}
+        executeSupervisor={executeSupervisorCb}
+        initialCategoryId={wizardCategory}
+        initialSuiteId={wizardSuite}
+        registerAbortController={(ac) => { evalAbortRef.current = ac; }}
       />
     );
   }

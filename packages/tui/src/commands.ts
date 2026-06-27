@@ -23,7 +23,9 @@ export type SlashCommand =
   | { name: "talk"; role?: "worker" | "supervisor" }
   | { name: "goal"; subcommand?: "status" | "edit" | "pause" | "resume" | "clear" | "budget" | "no-budget"; arg?: string; objective?: string }
   | { name: "config"; subcommand?: "open" | "reload" | "set"; path?: string; value?: string }
-  | { name: "eval"; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean }
+  | { name: "eval"; legacy?: boolean; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean }
+  | { name: "eval-start"; category: string; suite: string }
+  | { name: "eval-cancel" }
 
 const THINKING_MODES = ["off", "high", "max"]
 
@@ -79,14 +81,33 @@ export function parseSlashCommand(text: string): SlashCommand | null {
     return { name: "talk", role }
   }
 
+  if (trimmed.startsWith("/eval-start")) {
+    const parts = trimmed.split(/\s+/).slice(1)
+    if (parts.length >= 2) {
+      return { name: "eval-start", category: parts[0], suite: parts[1] }
+    }
+    return { name: "eval" }
+  }
+
+  if (trimmed === "/eval-cancel") {
+    return { name: "eval-cancel" }
+  }
+
   if (trimmed.startsWith("/eval")) {
     const parts = trimmed.split(/\s+/).slice(1)
-    const result: { name: "eval"; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean } = { name: "eval" }
+    const result: { name: "eval"; legacy?: boolean; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean } = { name: "eval" }
+    if (parts.length === 0) return result
     let i = 0
+    let hasFlags = false
     while (i < parts.length) {
       const flag = parts[i]
-      if (flag === "--dry-run") {
+      if (flag === "--legacy") {
+        result.legacy = true
+        hasFlags = true
+        i++
+      } else if (flag === "--dry-run") {
         result.dryRun = true
+        hasFlags = true
         i++
       } else if (flag === "--models" || flag === "--cases") {
         const val = parts[i + 1]
@@ -95,17 +116,20 @@ export function parseSlashCommand(text: string): SlashCommand | null {
           if (flag === "--models") result.models = list
           else result.cases = list
           i += 2
-        } else {
-          i++
-        }
+        } else { i++ }
+        hasFlags = true
       } else if (flag === "--limit") {
         const val = parts[i + 1]
         const num = val ? parseInt(val, 10) : NaN
         if (!isNaN(num) && num > 0) result.limit = num
         i += 2
+        hasFlags = true
       } else {
         i++
       }
+    }
+    if (!hasFlags) {
+      return { name: "eval" }
     }
     return result
   }

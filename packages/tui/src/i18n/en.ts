@@ -333,4 +333,14 @@ export const en: Strings = {
   configError: (msg) => `Config error: ${msg}`,
   configCurrent: (path) => `Current config file: ${path}`,
   configAll: (content) => `Current configuration:\n${content}`,
+  // Fixed eval wizard
+  evalWizardHeader: 'DeepReef Fixed Evaluation Mode',
+  evalWizardUsage: 'Usage: /eval-start <category> <suite> to run an evaluation suite',
+  evalWizardCategoryList: (list) => `Available categories:\n${list}`,
+  evalWizardCategoryInfo: (id, title, desc, caseCount) => `  ${id}: ${title} — ${desc} (${caseCount} cases)`,
+  evalWizardSuiteInfo: (suite, desc, mins, caseCount) => `Suite ${suite}: ${desc} (est. ${mins}, ${caseCount} cases)`,
+  evalWizardRunning: (caseId, title, index, total) => `[${index}/${total}] Running: ${caseId} — ${title}`,
+  evalWizardResult: (caseId, verdict, score) => `  ${caseId}: ${verdict} (score: ${score.toFixed(1)})`,
+  evalWizardSuiteComplete: (passed, failed, score, reportPath) =>
+    `Eval complete! Passed: ${passed}, Failed: ${failed}, Overall Score: ${score.toFixed(2)}\nReport: ${reportPath}`,
 };

@@ -333,4 +333,14 @@ export const zhCN: Strings = {
   configError: (msg) => `配置错误：${msg}`,
   configCurrent: (path) => `当前配置文件：${path}`,
   configAll: (content) => `当前配置：\n${content}`,
+  // Fixed eval wizard
+  evalWizardHeader: 'DeepReef 固定评测模式',
+  evalWizardUsage: '用法：/eval-start <category> <suite> 来开始一个评测套件',
+  evalWizardCategoryList: (list) => `可用的评测类别：\n${list}`,
+  evalWizardCategoryInfo: (id, title, desc, caseCount) => `  ${id}: ${title} — ${desc} (${caseCount} 个 case)`,
+  evalWizardSuiteInfo: (suite, desc, mins, caseCount) => `套件 ${suite}: ${desc} (预估 ${mins}, ${caseCount} 个 case)`,
+  evalWizardRunning: (caseId, title, index, total) => `[${index}/${total}] 运行中: ${caseId} — ${title}`,
+  evalWizardResult: (caseId, verdict, score) => `  ${caseId}: ${verdict} (得分: ${score.toFixed(1)})`,
+  evalWizardSuiteComplete: (passed, failed, score, reportPath) =>
+    `评测完成！通过: ${passed}, 失败: ${failed}, 总体得分: ${score.toFixed(2)}\n报告: ${reportPath}`,
 };

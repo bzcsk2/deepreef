@@ -1,0 +1,5 @@
+{
+  "name": "sa-readonly-no-diff",
+  "private": true,
+  "type": "module"
+}

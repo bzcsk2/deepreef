@@ -1,0 +1,11 @@
+{
+  "name": "cb-fix-ts-type",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "typescript": "^5.0.0"
+  }
+}

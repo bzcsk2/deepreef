@@ -1,0 +1,8 @@
+{
+  "name": "tu-retry-on-fail",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test"
+  }
+}

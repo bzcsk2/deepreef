@@ -36,5 +36,5 @@
     }
   },
   "include": ["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx", "types/**/*.d.ts"],
-  "exclude": ["node_modules", "dist", "**/__tests__/**", "packages/tools/src/skills/**"]
+  "exclude": ["node_modules", "dist", "**/__tests__/**", "packages/tools/src/skills/**", "packages/core/src/eval/fixtures/**"]
 }

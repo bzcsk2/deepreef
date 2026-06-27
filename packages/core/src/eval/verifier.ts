@@ -1,0 +1,240 @@
+import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { EvalCaseManifest, VerifierResult, FileAssertion } from "./types";
+
+export async function runVerifier(
+  manifest: EvalCaseManifest,
+  workspaceDir: string,
+): Promise<VerifierResult> {
+  switch (manifest.verifier.type) {
+    case "command":
+      return runCommandVerifier(manifest, workspaceDir);
+    case "file-assert":
+      return runFileAssertVerifier(manifest, workspaceDir);
+    case "script":
+      return runScriptVerifier(manifest, workspaceDir);
+    default:
+      return {
+        passed: false,
+        verdict: "error",
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        details: [`Unknown verifier type: ${(manifest.verifier as { type: string }).type}`],
+      };
+  }
+}
+
+async function runCommandVerifier(
+  manifest: EvalCaseManifest,
+  workspaceDir: string,
+): Promise<VerifierResult> {
+  const command = manifest.verifier.command;
+  if (!command) {
+    return {
+      passed: false,
+      verdict: "error",
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      details: ["No command specified for command verifier"],
+    };
+  }
+
+  const timeout = manifest.verifier.timeoutMs ?? 60_000;
+  try {
+    const output = execSync(command, {
+      cwd: workspaceDir,
+      encoding: "utf-8",
+      maxBuffer: 10 * 1024 * 1024,
+      timeout,
+      stdio: "pipe",
+    });
+
+    const stdout = output?.toString() ?? "";
+    const details: string[] = ["Command executed successfully"];
+
+    const fileResults = await runFileAssertions(
+      manifest.verifier.fileAssertions ?? [],
+      workspaceDir,
+    );
+    details.push(...fileResults.details);
+
+    const passed = fileResults.passed;
+
+    return {
+      passed,
+      verdict: passed ? "pass" : "fail",
+      stdout,
+      stderr: "",
+      exitCode: 0,
+      details,
+    };
+  } catch (err: unknown) {
+    const error = err as Error & { stdout?: string; stderr?: string; status?: number; killed?: boolean; signal?: string };
+    const stderr = error.stderr ?? "";
+    const stdout = error.stdout ?? "";
+    const exitCode = error.status ?? 1;
+
+    const isTimeout = error.killed || error.signal === 'SIGTERM';
+    if (isTimeout) {
+      return {
+        passed: false,
+        verdict: "error",
+        stdout,
+        stderr,
+        exitCode,
+        details: [`Command timed out after ${timeout}ms`],
+      };
+    }
+
+    const details: string[] = [
+      `Command failed with exit code ${exitCode}`,
+    ];
+    if (stderr) {
+      details.push(`stderr: ${stderr.slice(0, 500)}`);
+    }
+
+    return {
+      passed: false,
+      verdict: "fail",
+      stdout,
+      stderr,
+      exitCode,
+      details,
+    };
+  }
+}
+
+async function runFileAssertVerifier(
+  manifest: EvalCaseManifest,
+  workspaceDir: string,
+): Promise<VerifierResult> {
+  const assertions = manifest.verifier.fileAssertions ?? [];
+  const result = await runFileAssertions(assertions, workspaceDir);
+
+  return {
+    passed: result.passed,
+    verdict: result.passed ? "pass" : "fail",
+    stdout: "",
+    stderr: "",
+    exitCode: result.passed ? 0 : 1,
+    details: result.details,
+  };
+}
+
+async function runScriptVerifier(
+  manifest: EvalCaseManifest,
+  workspaceDir: string,
+): Promise<VerifierResult> {
+  const scriptPath = manifest.verifier.scriptPath;
+  if (!scriptPath) {
+    return {
+      passed: false,
+      verdict: "error",
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      details: ["No scriptPath specified for script verifier"],
+    };
+  }
+
+  try {
+    const output = execSync(`bun run ${scriptPath}`, {
+      cwd: workspaceDir,
+      encoding: "utf-8",
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 60_000,
+      stdio: "pipe",
+    });
+
+    return {
+      passed: true,
+      verdict: "pass",
+      stdout: output?.toString() ?? "",
+      stderr: "",
+      exitCode: 0,
+      details: ["Script executed successfully"],
+    };
+  } catch (err: unknown) {
+    const error = err as Error & { stdout?: string; stderr?: string; status?: number };
+    const msg = (error as Error).message;
+    const isSetupError =
+      msg.includes("ENOENT") ||
+      msg.includes("not found") ||
+      msg.includes("not recognized") ||
+      msg.includes("Cannot find");
+    return {
+      passed: false,
+      verdict: isSetupError ? "error" : "fail",
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? "",
+      exitCode: error.status ?? 1,
+      details: [`Script failed: ${msg}`],
+    };
+  }
+}
+
+interface FileAssertionResult {
+  passed: boolean;
+  details: string[];
+}
+
+async function runFileAssertions(
+  assertions: FileAssertion[],
+  workspaceDir: string,
+): Promise<FileAssertionResult> {
+  const details: string[] = [];
+
+  for (const assertion of assertions) {
+    const fullPath = join(workspaceDir, assertion.path);
+    const exists = existsSync(fullPath);
+
+    if (assertion.mustExist === true && !exists) {
+      details.push(`FAIL: File ${assertion.path} must exist but not found`);
+      return { passed: false, details };
+    }
+    if (assertion.mustExist === false && exists) {
+      details.push(`FAIL: File ${assertion.path} must not exist but found`);
+      return { passed: false, details };
+    }
+
+    if (!exists) {
+      details.push(`SKIP: File ${assertion.path} does not exist, skipping content checks`);
+      continue;
+    }
+
+    if (assertion.mustContain && assertion.mustContain.length > 0) {
+      const stat = await readFile(fullPath, "utf-8");
+      for (const content of assertion.mustContain) {
+        if (!stat.includes(content)) {
+          details.push(
+            `FAIL: File ${assertion.path} must contain "${content}"`,
+          );
+          return { passed: false, details };
+        }
+        details.push(`PASS: File ${assertion.path} contains "${content}"`);
+      }
+    }
+
+    if (assertion.mustNotContain && assertion.mustNotContain.length > 0) {
+      const stat = await readFile(fullPath, "utf-8");
+      for (const content of assertion.mustNotContain) {
+        if (stat.includes(content)) {
+          details.push(
+            `FAIL: File ${assertion.path} must not contain "${content}"`,
+          );
+          return { passed: false, details };
+        }
+        details.push(
+          `PASS: File ${assertion.path} does not contain "${content}"`,
+        );
+      }
+    }
+  }
+
+  details.push("All file assertions passed");
+  return { passed: true, details };
+}

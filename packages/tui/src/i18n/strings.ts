@@ -329,4 +329,13 @@ export interface Strings {
   configError: (msg: string) => string;
   configCurrent: (path: string) => string;
   configAll: (content: string) => string;
+  // Fixed eval wizard
+  evalWizardHeader: string;
+  evalWizardUsage: string;
+  evalWizardCategoryList: (list: string) => string;
+  evalWizardCategoryInfo: (id: string, title: string, desc: string, caseCount: number) => string;
+  evalWizardSuiteInfo: (suite: string, desc: string, mins: string, caseCount: number) => string;
+  evalWizardRunning: (caseId: string, title: string, index: number, total: number) => string;
+  evalWizardResult: (caseId: string, verdict: string, score: number) => string;
+  evalWizardSuiteComplete: (passed: number, failed: number, score: number, reportPath: string) => string;
 }
