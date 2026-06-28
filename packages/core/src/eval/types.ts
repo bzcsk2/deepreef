@@ -1,4 +1,4 @@
-import type { EvalEnvironmentId, SandboxProviderId } from "../sandbox/types";
+import type { EvalEnvironmentId, SandboxProviderId, PreflightResult } from "../sandbox/types";
 
 export type EvalCategoryId =
   | "coding-basics"
@@ -9,7 +9,7 @@ export type EvalCategoryId =
   | "weak-model";
 
 export type EvalSuiteId = "smoke" | "standard" | "stress";
-export type { EvalEnvironmentId, SandboxProviderId };
+export type { EvalEnvironmentId, SandboxProviderId, PreflightResult, PreflightCheck } from "../sandbox/types";
 
 export interface EvalCaseRef {
   id: string;
@@ -23,6 +23,7 @@ export interface EvalSuite {
   title: string;
   description: string;
   estimatedMinutes: string;
+  environmentId?: EvalEnvironmentId;
   cases: EvalCaseRef[];
 }
 
@@ -110,7 +111,7 @@ export interface CaseResult {
   category: EvalCategoryId;
   suite: EvalSuiteId;
   manifest: EvalCaseManifest;
-  verdict: "pass" | "fail" | "error" | "skipped";
+  verdict: "pass" | "fail" | "error" | "skipped" | "infra_error";
   verifierResult: VerifierResult | null;
   objectiveSignals: ObjectiveSignals | null;
   supervisorAssessment: Record<string, number> | null;
@@ -130,6 +131,7 @@ export interface SuiteSummary {
   passed: number;
   failed: number;
   errored: number;
+  infraErrorCount: number;
   skipped: number;
   averageScore: number;
   results: CaseResult[];
@@ -144,10 +146,11 @@ export interface EvalRunMeta {
   environmentId: EvalEnvironmentId;
   testSetId: string;
   model: string;
-  status: "running" | "completed" | "cancelled" | "failed";
+  status: "running" | "completed" | "cancelled" | "failed" | "infra_error";
   providerId: SandboxProviderId;
   officialScore: boolean;
   fallbackReason?: string;
+  preflight?: PreflightResult;
 }
 
 export interface EvalRunReport {
@@ -156,14 +159,17 @@ export interface EvalRunReport {
   overallScore: number;
 }
 
+export type ProgressEventType = "case-start" | "case-end" | "suite-end" | "error" | "infra-error" | "preflight";
+
 export interface EvalProgressEvent {
-  type: "case-start" | "case-end" | "suite-end" | "error";
+  type: ProgressEventType;
   caseId?: string;
   title?: string;
   result?: CaseResult;
   error?: string;
   totalCases?: number;
   completedCases?: number;
+  preflight?: PreflightResult;
 }
 
 export type EvalProgressCallback = (event: EvalProgressEvent) => void;

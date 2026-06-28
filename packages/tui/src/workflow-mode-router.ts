@@ -5,7 +5,7 @@
  * 输出唯一明确的动作，不再在 React 回调中散落模式判断。
  */
 
-export type WorkflowMode = 'alone' | 'subagent' | 'loop'
+export type WorkflowMode = 'alone' | 'subagent' | 'loop' | 'eval'
 export type AgentRole = 'worker' | 'supervisor'
 
 export type WorkflowLifecycle =
@@ -59,6 +59,9 @@ export function routeWorkflowInput(opts: RouteWorkflowInputOpts): WorkflowRouteA
 
     case 'subagent':
       return { type: 'supervisor_task', mode: 'subagent' }
+
+    case 'eval':
+      return { type: 'direct', role: 'worker', mode: 'alone' }
 
     case 'loop': {
       switch (lifecycle.status) {

@@ -40,6 +40,19 @@ export async function detectBestProvider(
     }
   }
 
+  if (environmentId === "container") {
+    const containerOrder: SandboxProviderId[] = ["docker", "podman"];
+    for (const id of containerOrder) {
+      const p = providers.get(id);
+      if (!p) continue;
+      const caps = await p.canRun();
+      if (caps.available) {
+        return { provider: p, capabilities: caps };
+      }
+    }
+    throw new Error(`No container provider available (docker/podman) for environment: container`);
+  }
+
   const fallback = providers.get("soft-workspace");
   if (fallback) {
     const caps = await fallback.canRun();

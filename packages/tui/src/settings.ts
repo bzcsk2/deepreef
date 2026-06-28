@@ -8,8 +8,8 @@ export interface PersistedSkill {
   content: string;
 }
 
-/** 工作流模式：alone（单 agent）/ subagent（supervisor 自主调度）/ loop（固定双角色编排） */
-export type WorkflowMode = 'alone' | 'subagent' | 'loop';
+/** 工作流模式：alone（单 agent）/ subagent（supervisor 自主调度）/ loop（固定双角色编排）/ eval（评测模式） */
+export type WorkflowMode = 'alone' | 'subagent' | 'loop' | 'eval';
 
 export interface TuiSettings {
   agent?: string;
@@ -61,7 +61,7 @@ function normalizeSettings(settings: Partial<TuiSettings>): TuiSettings {
     ...(typeof settings.thinkingMode === 'string' && settings.thinkingMode ? { thinkingMode: settings.thinkingMode } : {}),
     ...(Array.isArray(settings.activeSkills) ? { activeSkills: settings.activeSkills.filter(isPersistedSkill).map(s => ({ name: s.name, description: s.description, content: s.content })) } : {}),
     ...(typeof settings.theme === 'string' && settings.theme ? { theme: settings.theme } : {}),
-    ...(settings.workflowMode === 'alone' || settings.workflowMode === 'subagent' || settings.workflowMode === 'loop' ? { workflowMode: settings.workflowMode } : {}),
+    ...(settings.workflowMode === 'alone' || settings.workflowMode === 'subagent' || settings.workflowMode === 'loop' || settings.workflowMode === 'eval' ? { workflowMode: settings.workflowMode } : {}),
   }
 }
 

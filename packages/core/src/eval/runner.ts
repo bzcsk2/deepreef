@@ -17,14 +17,14 @@ import type {
   EvalProgressEvent,
   EvalEnvironmentId,
   SandboxProviderId,
+  PreflightResult,
 } from "./types";
-import { listCaseRefs, getSuite, getCategories } from "./registry";
+import { getSuite, getCategories } from "./registry";
 import { getManifest } from "./loader";
 import { createCaseWorkspace, writeCaseArtifact, getCaseWorkspaceDir, setEvalSandboxProvider, getEvalSandboxProvider } from "./workspace";
 import { runVerifier, setSandboxProvider as setVerifierSandboxProvider } from "./verifier";
 import { initDefaultProviders, detectBestProvider } from "../sandbox/provider-registry";
 
-// Expose workspace and sandbox for external tools to use during eval
 let _currentCaseWorkspace: string | null = null;
 export function getCurrentCaseWorkspace(): string | null {
   return _currentCaseWorkspace;
@@ -166,6 +166,18 @@ async function resolveSandboxProvider(
     officialScore: capabilities.official,
     fallbackReason: capabilities.reason,
   };
+}
+
+async function runPreflight(
+  provider: import("../sandbox/types").SandboxProvider,
+  environmentId: EvalEnvironmentId,
+): Promise<PreflightResult | null> {
+  if (!provider.runPreflight) return null;
+  try {
+    return await provider.runPreflight(environmentId);
+  } catch {
+    return null;
+  }
 }
 
 async function runSingleCase(
@@ -320,7 +332,7 @@ export async function runFixedEval(
     throw new Error("Eval aborted before start");
   }
 
-  const { provider, environmentId, providerId, officialScore, fallbackReason } = await resolveSandboxProvider(options);
+  const { provider, environmentId: resolvedEnvId, providerId, officialScore, fallbackReason } = await resolveSandboxProvider(options);
 
   setVerifierSandboxProvider(provider);
   setEvalSandboxProvider(provider);
@@ -329,9 +341,13 @@ export async function runFixedEval(
   const evalDir = join(getEvalsDir(), runId);
   await mkdir(evalDir, { recursive: true });
 
-  const { categoryId, suiteId, onProgress } = options;
-  const caseRefs = listCaseRefs(categoryId, suiteId);
-  const suite = getSuite(categoryId, suiteId);
+  const { categoryId, suiteId, environmentId: optEnv, onProgress } = options;
+  const environmentId = optEnv ?? "sandbox";
+  const suite = getSuite(categoryId, suiteId, environmentId);
+  if (!suite) {
+    throw new Error(`Suite not found: category=${categoryId} suite=${suiteId} environment=${environmentId}`);
+  }
+  const caseRefs = suite.cases;
 
   const traceLines: string[] = [];
 
@@ -339,7 +355,7 @@ export async function runFixedEval(
     traceLines.push(JSON.stringify({ t: Date.now(), event, ...data }));
   }
 
-  recordTrace("eval-start", { categoryId, suiteId, environmentId, providerId, officialScore, runId });
+  recordTrace("eval-start", { categoryId, suiteId, environmentId, providerId, runId });
 
   await writeFile(
     join(evalDir, "registry.json"),
@@ -347,10 +363,24 @@ export async function runFixedEval(
     "utf-8",
   );
 
+  // === PREFLIGHT ===
+  const preflight = await runPreflight(provider, environmentId);
+  if (preflight) {
+    await writeFile(join(evalDir, "preflight.json"), JSON.stringify(preflight, null, 2), "utf-8");
+    recordTrace("preflight", { allFound: preflight.allFound, checks: preflight.checks.map(c => `${c.name}:${c.found}`) });
+    onProgress?.({
+      type: "preflight",
+      preflight,
+      totalCases: caseRefs.length,
+      completedCases: 0,
+    });
+  }
+
   const results: CaseResult[] = [];
   let passed = 0;
   let failed = 0;
   let errored = 0;
+  let infraErrorCount = 0;
   let skipped = 0;
 
   const startedAt = new Date().toISOString();
@@ -358,6 +388,13 @@ export async function runFixedEval(
   for (const caseRef of caseRefs) {
     if (options.abortSignal?.aborted) {
       recordTrace("eval-abort", { reason: "signal" });
+      await writeFile(join(evalDir, "shutdown-reason.json"), JSON.stringify({
+        reason: "user_cancel",
+        mode: "eval",
+        runId,
+        caseId: null,
+        timestamp: new Date().toISOString(),
+      }, null, 2), "utf-8");
       throw new Error("Eval aborted");
     }
 
@@ -379,6 +416,41 @@ export async function runFixedEval(
         error: `Manifest not found: ${caseRef.manifestId}`,
         totalCases: caseRefs.length,
         completedCases: results.length + 1,
+      });
+      continue;
+    }
+
+    // If preflight failed, skip to infra_error
+    if (preflight && !preflight.allFound) {
+      infraErrorCount++;
+      recordTrace("case-infra-error", { caseId: manifest.id, reason: "preflight-failed" });
+      const infraResult: CaseResult = {
+        caseId: manifest.id,
+        title: manifest.title,
+        category: manifest.category,
+        suite: manifest.suite,
+        manifest,
+        verdict: "infra_error",
+        verifierResult: null,
+        objectiveSignals: null,
+        supervisorAssessment: null,
+        score: null,
+        workerOutput: "",
+        supervisorOutput: "",
+        patchDiff: "",
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        error: "Infrastructure error: preflight checks failed — missing tools in sandbox environment",
+      };
+      results.push(infraResult);
+      onProgress?.({
+        type: "infra-error",
+        caseId: caseRef.id,
+        title: manifest.title,
+        result: infraResult,
+        totalCases: caseRefs.length,
+        completedCases: results.length,
+        error: "Infrastructure error: preflight checks failed",
       });
       continue;
     }
@@ -413,6 +485,7 @@ export async function runFixedEval(
       if (result.verdict === "pass") passed++;
       else if (result.verdict === "fail") failed++;
       else if (result.verdict === "error") errored++;
+      else if (result.verdict === "infra_error") infraErrorCount++;
       else skipped++;
 
       recordTrace("case-end", {
@@ -462,10 +535,17 @@ export async function runFixedEval(
     passed,
     failed,
     errored,
+    infraErrorCount,
     skipped,
     averageScore: Math.round(averageScore * 100) / 100,
     results,
   };
+
+  const status = infraErrorCount > 0
+    ? "infra_error"
+    : options.abortSignal?.aborted
+      ? "cancelled"
+      : "completed";
 
   const meta: EvalRunMeta = {
     runId,
@@ -476,10 +556,11 @@ export async function runFixedEval(
     environmentId,
     testSetId: options.testSetId ?? suiteId,
     model: options.models?.[0] ?? "default",
-    status: options.abortSignal?.aborted ? "cancelled" : "completed",
+    status,
     providerId,
-    officialScore,
-    fallbackReason,
+    officialScore: infraErrorCount > 0 ? false : officialScore,
+    fallbackReason: infraErrorCount > 0 ? "Infrastructure error: preflight checks failed" : fallbackReason,
+    preflight: preflight ?? undefined,
   };
 
   const overallScore = averageScore;
@@ -489,6 +570,35 @@ export async function runFixedEval(
     totalCases: caseRefs.length,
     completedCases: results.length,
   });
+
+  // Write provider environment snapshot
+  await writeFile(join(evalDir, "provider-env.json"), JSON.stringify({
+    providerId,
+    environmentId,
+    officialScore: officialScore && infraErrorCount === 0,
+    hostNode: process.execPath,
+    hostCwd: process.cwd(),
+    hostPlatform: process.platform,
+    hostArch: process.arch,
+    hostEnv: {
+      PATH: process.env.PATH?.slice(0, 500),
+      HOME: process.env.HOME,
+      SHELL: process.env.SHELL,
+      USER: process.env.USER,
+      NODE_ENV: process.env.NODE_ENV,
+    },
+    timestamp: new Date().toISOString(),
+  }, null, 2), "utf-8");
+
+  // Write shutdown metadata
+  await writeFile(join(evalDir, "shutdown-reason.json"), JSON.stringify({
+    reason: status,
+    mode: "eval",
+    runId,
+    status,
+    infraErrorCount,
+    timestamp: new Date().toISOString(),
+  }, null, 2), "utf-8");
 
   setVerifierSandboxProvider(null);
   setEvalSandboxProvider(null);

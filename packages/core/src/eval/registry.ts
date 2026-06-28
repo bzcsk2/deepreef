@@ -1,4 +1,4 @@
-import type { EvalCategory, EvalCategoryId, EvalSuite, EvalSuiteId, EvalCaseRef } from "./types";
+import type { EvalCategory, EvalCategoryId, EvalSuite, EvalSuiteId, EvalCaseRef, EvalEnvironmentId } from "./types";
 import { getRealCategories } from "./generated/registry";
 
 const smokeCases: Record<string, EvalCaseRef[]> = {
@@ -66,9 +66,10 @@ const smokeCases: Record<string, EvalCaseRef[]> = {
 
 const coreSuite: EvalSuite = {
   id: "smoke",
-  title: "Core Test Set",
-  description: "当前固定基础测试集，覆盖该评测大项的核心能力验证",
+  title: "Official Sandbox Smoke Tests",
+  description: "在当前环境的隔离沙箱中运行的基础官方测试集（synthetic fixtures）",
   estimatedMinutes: "10-15",
+  environmentId: "sandbox",
   cases: [],
 };
 
@@ -134,9 +135,16 @@ function mergeCategories(): EvalCategory[] {
     const realCat = realMap.get(nativeCat.id);
     if (!realCat) return nativeCat;
 
+    const realSuites = realCat.suites.map(s => ({
+      ...s,
+      environmentId: "localenv" as const,
+      title: `${s.title} (Local Environment — Diagnostic)`,
+      description: `${s.description} 若需要在本地环境中运行真实评测 case，选择此套件。注意：localenv 结果不计入官方评分。`,
+    }));
+
     return {
       ...nativeCat,
-      suites: [...nativeCat.suites, ...realCat.suites],
+      suites: [...nativeCat.suites, ...realSuites],
       title: realCat.title,
       description: realCat.description,
     };
@@ -167,10 +175,15 @@ export function getCategory(id: EvalCategoryId): EvalCategory | undefined {
 export function getSuite(
   categoryId: EvalCategoryId,
   suiteId: EvalSuiteId,
+  environmentId?: EvalEnvironmentId,
 ): EvalSuite | undefined {
   const category = CATEGORY_MAP.get(categoryId);
   if (!category) return undefined;
-  return category.suites.find((s) => s.id === suiteId);
+  return category.suites.find((s) => {
+    if (s.id !== suiteId) return false;
+    if (environmentId && s.environmentId && s.environmentId !== environmentId) return false;
+    return true;
+  });
 }
 
 export function getCaseRef(
@@ -208,6 +221,16 @@ export function getAvailableSuiteIds(): EvalSuiteId[] {
     }
   }
   return Array.from(ids);
+}
+
+export function getFilteredSuites(
+  categoryId: EvalCategoryId,
+  environmentId?: EvalEnvironmentId,
+): EvalSuite[] {
+  const category = getCategory(categoryId);
+  if (!category) return [];
+  if (!environmentId) return category.suites;
+  return category.suites.filter(s => !s.environmentId || s.environmentId === environmentId);
 }
 
 export function getCaseCount(

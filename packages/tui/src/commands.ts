@@ -20,12 +20,15 @@ export type SlashCommand =
   | { name: "harness"; subcommand?: "status" | "strict" | "normal" | "loose" | "project"; arg?: string }
   | { name: "theme"; themeName?: string }
   | { name: "workflow" }
+  | { name: "alone" }
+  | { name: "subagent" }
+  | { name: "loop" }
   | { name: "talk"; role?: "worker" | "supervisor" }
-  | { name: "goal"; subcommand?: "status" | "edit" | "pause" | "resume" | "clear" | "budget" | "no-budget"; arg?: string; objective?: string }
-  | { name: "config"; subcommand?: "open" | "reload" | "set"; path?: string; value?: string }
   | { name: "eval"; legacy?: boolean; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean }
   | { name: "eval-start"; category: string; suite: string; env?: string }
   | { name: "eval-cancel" }
+  | { name: "goal"; subcommand?: "status" | "edit" | "pause" | "resume" | "clear" | "budget" | "no-budget"; arg?: string; objective?: string }
+  | { name: "config"; subcommand?: "open" | "reload" | "set"; path?: string; value?: string }
 
 const THINKING_MODES = ["off", "high", "max"]
 
@@ -136,6 +139,11 @@ export function parseSlashCommand(text: string): SlashCommand | null {
     return result
   }
 
+  // First-class mode switch aliases
+  if (trimmed === "/alone") return { name: "alone" }
+  if (trimmed === "/subagent") return { name: "subagent" }
+  if (trimmed === "/loop") return { name: "loop" }
+
   if (trimmed.startsWith("/goal")) {
     const parts = trimmed.split(/\s+/)
     if (parts.length === 1) return { name: "goal" }
@@ -214,7 +222,12 @@ export function buildHelpText(activeAgent: string, cmdStrings: Strings): string 
     cmdStrings.helpTitle,
     `  /exit, /bye  — ${cmdStrings.cmdExit}`,
     `  /help        — ${cmdStrings.cmdHelp}`,
+    `  /alone       — Switch to single-agent mode (default)`,
+    `  /subagent    — Switch to subagent (supervisor dispatch) mode`,
+    `  /loop        — Switch to dual-agent loop (worker/supervisor) mode`,
     `  /eval        — ${cmdStrings.cmdEval}`,
+    `  /eval-start  — Run fixed eval: /eval-start <category> <suite> [--env <env>]`,
+    `  /eval-cancel — Cancel the currently running eval`,
     `  /model       — ${cmdStrings.cmdModel}`,
     `  /sessions    — ${cmdStrings.cmdSessions}`,
     `  /agent       — ${cmdStrings.cmdAgent}`,

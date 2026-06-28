@@ -1,10 +1,11 @@
-export type EvalEnvironmentId = "sandbox" | "localenv" | "container";
+export type EvalEnvironmentId = "sandbox" | "localenv" | "container" | "diagnostic";
 
 export type SandboxProviderId =
   | "soft-workspace"
   | "bwrap"
   | "seatbelt"
-  | "docker";
+  | "docker"
+  | "podman";
 
 export interface SandboxCapabilities {
   available: boolean;
@@ -31,8 +32,27 @@ export interface SandboxResult {
   timedOut: boolean;
 }
 
+export interface PreflightCheck {
+  name: string;
+  found: boolean;
+  path?: string;
+  version?: string;
+}
+
+export interface PreflightResult {
+  providerId: SandboxProviderId;
+  environmentId: EvalEnvironmentId;
+  path: string;
+  checks: PreflightCheck[];
+  allFound: boolean;
+  startedAt: string;
+  finishedAt: string;
+  error?: string;
+}
+
 export interface SandboxProvider {
   id: SandboxProviderId;
   canRun(): Promise<SandboxCapabilities>;
   run(input: SandboxCommand): Promise<SandboxResult>;
+  runPreflight?(environmentId: EvalEnvironmentId): Promise<PreflightResult>;
 }

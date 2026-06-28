@@ -132,10 +132,9 @@ describe("provider-registry", () => {
     expect(capabilities.official).toBe(false);
   });
 
-  it("detectBestProvider('container') falls back to soft-workspace when registered", async () => {
+  it("detectBestProvider('container') throws when no container provider registered", async () => {
     registerProvider(new SoftWorkspaceProvider());
-    const { provider } = await detectBestProvider("container");
-    expect(provider.id).toBe("soft-workspace");
+    await expect(detectBestProvider("container")).rejects.toThrow("No container provider available");
   });
 
   it("detectBestProvider throws when no providers registered", async () => {

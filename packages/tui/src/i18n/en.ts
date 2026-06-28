@@ -63,6 +63,11 @@ export const en: Strings = {
   cmdLang: 'switch language',
   cmdStatus: 'show runtime status',
   cmdContext: 'configure context trim/compact',
+  cmdAlone: 'Switch to single-agent mode',
+  cmdSubagent: 'Switch to subagent (supervisor dispatch) mode',
+  cmdLoop: 'Switch to dual-agent loop mode',
+  cmdEvalStart: 'Run fixed eval: /eval-start <category> <suite> [--env <env>]',
+  cmdEvalCancel: 'Cancel running eval',
   // App
   pressCtrlC: 'Press Ctrl+C again to exit',
   shuttingDown: 'Shutting down...',

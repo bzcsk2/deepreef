@@ -42,13 +42,41 @@ export function EvalRunPanel({ categoryId, suiteId, environmentId, latestEvent, 
           <Box marginTop={1}>
             <Text>
               {latestEvent.result.caseId}:{' '}
-              <Text color={latestEvent.result.verdict === 'pass' ? TONE.ok : TONE.err} bold>
-                {latestEvent.result.verdict}
+              <Text
+                color={latestEvent.result.verdict === 'pass' ? TONE.ok : latestEvent.result.verdict === 'infra_error' ? TONE.warn : TONE.err}
+                bold
+              >
+                {latestEvent.result.verdict === 'infra_error' ? 'INFRA_ERROR' : latestEvent.result.verdict.toUpperCase()}
               </Text>
               <Text color={FG.faint}>
                 {' '}score: {latestEvent.result.score?.finalScore.toFixed(1) ?? 'N/A'}
               </Text>
             </Text>
+          </Box>
+        )}
+
+        {latestEvent && latestEvent.type === 'infra-error' && (
+          <Box marginTop={1}>
+            <Text color={TONE.warn}>
+              ⚠ INFRASTRUCTURE ERROR: {latestEvent.error ?? 'Environment check failed'}
+            </Text>
+          </Box>
+        )}
+
+        {latestEvent && latestEvent.type === 'preflight' && latestEvent.preflight && (
+          <Box marginTop={1} flexDirection="column">
+            <Text color={TONE.warn}>
+              Preflight checks: {latestEvent.preflight.allFound ? 'All tools found' : 'Some tools missing'}
+            </Text>
+            {!latestEvent.preflight.allFound && (
+              <Box flexDirection="column" marginLeft={2}>
+                {latestEvent.preflight.checks.filter(c => !c.found).map(c => (
+                  <Text key={c.name} color={TONE.err}>
+                    ✗ {c.name} not found
+                  </Text>
+                ))}
+              </Box>
+            )}
           </Box>
         )}
 

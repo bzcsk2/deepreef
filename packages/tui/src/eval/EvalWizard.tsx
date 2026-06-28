@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import type { EvalCategory, EvalSuite, EvalEnvironmentId } from '@deepreef/core';
-import { getCategories, getCategory, getSuite } from '@deepreef/core';
+import type { EvalCategory, EvalSuite, EvalEnvironmentId, EvalCategoryId } from '@deepreef/core';
+import { getCategories, getCategory, getSuite, getFilteredSuites } from '@deepreef/core/eval/registry.js';
 import { EvalCategorySelect } from './EvalCategorySelect.js';
 import { EvalSuiteSelect } from './EvalSuiteSelect.js';
 import { EvalEnvironmentSelect } from './EvalEnvironmentSelect.js';
@@ -52,9 +52,9 @@ export function EvalWizard({ onDone, onStart, initialCategoryId, initialSuiteId,
 
   const handleEnvironmentSelect = useCallback((envId: EvalEnvironmentId) => {
     setSelectedEnvironment(envId);
-    const suites = selectedCategory?.suites ?? [];
-    if (selectedCategory && suites.length === 1) {
-      const onlySuite = suites[0]!;
+    const filtered = selectedCategory ? getFilteredSuites(selectedCategory.id as EvalCategoryId, envId) : [];
+    if (selectedCategory && filtered.length === 1) {
+      const onlySuite = filtered[0]!;
       onStart(selectedCategory.id, onlySuite.id, envId);
       onDone();
       return;
@@ -103,6 +103,7 @@ export function EvalWizard({ onDone, onStart, initialCategoryId, initialSuiteId,
       return (
         <EvalSuiteSelect
           category={selectedCategory!}
+          environmentId={selectedEnvironment}
           onSelect={handleSuiteSelect}
           onCancel={handleCancelSuite}
         />

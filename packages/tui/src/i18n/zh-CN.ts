@@ -62,6 +62,11 @@ export const zhCN: Strings = {
   cmdLang: '切换语言',
   cmdStatus: '显示运行状态',
   cmdContext: '配置上下文裁剪/compact',
+  cmdAlone: '切换到单 agent 模式',
+  cmdSubagent: '切换到子 agent（supervisor 调度）模式',
+  cmdLoop: '切换到双 agent 循环模式',
+  cmdEvalStart: '运行固定评测: /eval-start <category> <suite> [--env <env>]',
+  cmdEvalCancel: '取消正在运行的评测',
   // App
   pressCtrlC: '再次按 Ctrl+C 退出',
   shuttingDown: '正在关闭...',

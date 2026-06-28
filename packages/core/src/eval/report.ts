@@ -33,6 +33,7 @@ export async function saveEvalReport(
         passed: report.suiteSummary.passed,
         failed: report.suiteSummary.failed,
         errored: report.suiteSummary.errored,
+        infraErrorCount: report.suiteSummary.infraErrorCount,
         skipped: report.suiteSummary.skipped,
         averageScore: report.suiteSummary.averageScore,
       },
@@ -104,6 +105,14 @@ function generateMarkdownReport(report: EvalRunReport): string {
   lines.push(`- **Environment**: ${meta.environmentId}`);
   lines.push(`- **Provider**: ${meta.providerId}`);
   lines.push(`- **Official Score**: ${meta.officialScore}`);
+  if (meta.preflight) {
+    const missing = meta.preflight.checks.filter(c => !c.found).map(c => c.name);
+    if (missing.length > 0) {
+      lines.push(`- **Preflight**: Missing tools: ${missing.join(", ")}`);
+    } else {
+      lines.push(`- **Preflight**: All ${meta.preflight.checks.length} tools found`);
+    }
+  }
   if (meta.fallbackReason) {
     lines.push(`- **Provider Note**: ${meta.fallbackReason}`);
   }
@@ -120,6 +129,7 @@ function generateMarkdownReport(report: EvalRunReport): string {
   lines.push(`| Passed | ${suiteSummary.passed} |`);
   lines.push(`| Failed | ${suiteSummary.failed} |`);
   lines.push(`| Errored | ${suiteSummary.errored} |`);
+  lines.push(`| Infra Error | ${suiteSummary.infraErrorCount} |`);
   lines.push(`| Skipped | ${suiteSummary.skipped} |`);
   lines.push(`| Average Score | ${suiteSummary.averageScore.toFixed(2)} |`);
   lines.push(`| Overall Score | ${overallScore.toFixed(2)} |`);
@@ -132,7 +142,9 @@ function generateMarkdownReport(report: EvalRunReport): string {
     lines.push(``);
     lines.push(`- **Verdict**: \`${result.verdict}\``);
     lines.push(`- **Final Score**: ${result.score?.finalScore.toFixed(2) ?? "N/A"}`);
-    lines.push(`- **Verifier**: ${result.verifierResult?.verdict ?? "N/A"}`);
+    if (result.verdict !== "infra_error") {
+      lines.push(`- **Verifier**: ${result.verifierResult?.verdict ?? "N/A"}`);
+    }
     if (result.manifest?.sourceMeta) {
       lines.push(`- **Source**: \`${result.manifest.sourceMeta.sourceKind}\` (\`${result.manifest.sourceMeta.sourceId}\`)`);
     }

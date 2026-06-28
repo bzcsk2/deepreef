@@ -47,6 +47,7 @@ import { AgentGroupDisplay } from './components/agents/AgentGroupDisplay.js';
 import { WorkerActivityPanel } from './components/workers/WorkerActivityPanel.js';
 import { DialogManager } from './components/dialogs/DialogManager.js';
 import { EvalWizard } from './eval/EvalWizard.js';
+import { EvalRunPanel } from './eval/EvalRunPanel.js';
 // DA-R6: 双角色组件
 import { WorkflowStatusBar } from './components/workflow/index.js';
 import type { WorkflowPhase, WorkflowState } from './components/workflow/index.js';
@@ -384,6 +385,10 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const [showSearch, setShowSearch] = useState(false);                           // 是否显示搜索覆盖层（Ctrl+F 触发）
   const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
   const [showEvalWizard, setShowEvalWizard] = useState(false);
+  // Eval state for live EvalRunPanel display
+  const [evalState, setEvalState] = useState<{ running: boolean; categoryId: string; suiteId: string; environmentId: string; latestEvent: import('@deepreef/core').EvalProgressEvent | null }>({
+    running: false, categoryId: '', suiteId: '', environmentId: '', latestEvent: null,
+  });
   // ADV-HAR-01: Harness 三档严格度状态
   const initialStrictness = useMemo(() => {
     const projectConfig = readProjectHarnessConfig();
@@ -466,9 +471,9 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const evalAbortRef = useRef<AbortController | null>(null);
   const startFixedEval = useCallback(async (categoryId: string, suiteId: string, environmentId?: string) => {
     const category = getCategory(categoryId as any);
-    const suite = getSuite(categoryId as any, suiteId as any);
+    const suite = getSuite(categoryId as any, suiteId as any, environmentId as any);
     if (!category || !suite) {
-      appendMessage({ role: 'assistant' as const, content: `Invalid eval target: ${categoryId}/${suiteId}` });
+      appendMessage({ role: 'assistant' as const, content: `Invalid eval target: ${categoryId}/${suiteId}${environmentId ? ` for env=${environmentId}` : ''}` });
       return;
     }
     if (evalAbortRef.current) {
@@ -476,11 +481,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       return;
     }
 
+    const env = environmentId ?? 'sandbox';
     const abortController = new AbortController();
     evalAbortRef.current = abortController;
+    setEvalState({ running: true, categoryId, suiteId, environmentId: env, latestEvent: null });
     appendMessage({
       role: 'assistant' as const,
-      content: `Starting eval: ${category.title} · ${suite.title} · env=${environmentId ?? 'sandbox'} (${suite.cases.length} cases)`,
+      content: `Starting eval: ${category.title} · ${suite.title} · env=${env} (${suite.cases.length} cases)`,
     });
 
     try {
@@ -504,6 +511,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           });
         },
         onProgress: (event) => {
+          setEvalState(prev => ({ ...prev, latestEvent: event }));
           if (event.type === 'case-start') {
             appendMessage({
               role: 'assistant' as const,
@@ -511,7 +519,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             });
             return;
           }
-          if (event.type === 'case-end') {
+          if (event.type === 'case-end' || event.type === 'infra-error') {
             if (event.result) {
               appendMessage({
                 role: 'assistant' as const,
@@ -523,6 +531,12 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
                 content: `${event.caseId}: ERROR ${event.error}`,
               });
             }
+          }
+          if (event.type === 'preflight' && event.preflight && !event.preflight.allFound) {
+            appendMessage({
+              role: 'assistant' as const,
+              content: `⚠ Preflight: missing tools — ${event.preflight.checks.filter(c => !c.found).map(c => c.name).join(', ')}`,
+            });
           }
         },
       });
@@ -541,6 +555,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       if (evalAbortRef.current === abortController) {
         evalAbortRef.current = null;
       }
+      setEvalState({ running: false, categoryId, suiteId, environmentId: env, latestEvent: null });
     }
   }, [appendMessage]);
 
@@ -742,14 +757,37 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       }
       return;
     }
-    // /workflow 命令 — 打开工作流模式选择菜单（alone / subagent / loop）
+    // /workflow 命令 — 打开工作流模式选择菜单（alone / subagent / loop / eval）
     if (command?.name === 'workflow') {
       setShowWorkflowMenu(true);
+      return;
+    }
+    // /alone /subagent /loop — quick mode switch aliases
+    if (command?.name === 'alone' || command?.name === 'subagent' || command?.name === 'loop') {
+      if (workflowMode === 'loop' && command.name !== 'loop') {
+        workflowCoordinator?.interrupt();
+        workflowCoordinator?.reset();
+        dualRuntime?.reset();
+      }
+      setWorkflowMode(command.name);
+      saveTuiSettings({ workflowMode: command.name });
+      if (command.name === 'loop') {
+        setWorkflowLifecycle({ status: 'awaiting_goal' });
+        setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }));
+      } else {
+        setWorkflowLifecycle({ status: 'idle' });
+        setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }));
+      }
+      appendMessage({ role: 'assistant' as const, content: `Mode switched to: ${command.name}` });
       return;
     }
     // /eval 命令 — 固定评测向导（无 flags）或旧版多模型自动测评（--legacy / --models）
     if (command?.name === 'eval') {
       if (!command.legacy && !command.models && !command.cases) {
+        setWorkflowMode('eval')
+        saveTuiSettings({ workflowMode: 'eval' })
+        setWorkflowLifecycle({ status: 'idle' })
+        setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }))
         setShowEvalWizard(true)
         return
       }
@@ -832,6 +870,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     }
     // /eval-start — 固定评测模式：运行指定 category/suite
     if (command?.name === 'eval-start') {
+      setWorkflowMode('eval');
       void startFixedEval(command.category, command.suite, command.env)
       return
     }
@@ -1405,22 +1444,31 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     );
   }
 
-  // ---- 覆盖层：工作流模式选择菜单（当 showWorkflowMenu 为 true 时显示） ----
+    // ---- 覆盖层：工作流模式选择菜单（当 showWorkflowMenu 为 true 时显示） ----
   const wfRunningSuffix = workflowLifecycle.status === 'running' ? t().workflowInterruptRunning : '';
   if (showWorkflowMenu) {
     return (
       <ChoiceMenu
-        title="Workflow mode"
-        subtitle={locale === 'zh-CN' ? `当前：${workflowMode}` : `Current: ${workflowMode}`}
+        title="Workflow / Mode"
+        subtitle={locale === 'zh-CN' ? `当前：${workflowMode}\n模式切换后立即生效` : `Current: ${workflowMode}`}
         items={[
           { value: "alone", label: "alone", description: t().workflowMenuAlone(wfRunningSuffix) },
           { value: "subagent", label: "subagent", description: t().workflowMenuSubagent(wfRunningSuffix) },
           { value: "loop", label: "loop", description: t().workflowMenuLoop(wfRunningSuffix) },
+          { value: "eval", label: "eval  ⭐", description: "Open the evaluation wizard — run automated test suites" },
         ]}
         onChoose={(value) => {
           const mode = value as WorkflowMode;
+          if (mode === 'eval') {
+            setWorkflowMode('eval')
+            saveTuiSettings({ workflowMode: 'eval' })
+            setWorkflowLifecycle({ status: 'idle' })
+            setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }))
+            setShowWorkflowMenu(false);
+            setShowEvalWizard(true);
+            return;
+          }
           restoreScrollAfterWorkflowMenuRef.current = true;
-          // SFR-70: 从 loop 切出时中断并清理 Coordinator
           if (workflowMode === 'loop' && mode !== 'loop') {
             workflowCoordinator?.interrupt();
             workflowCoordinator?.reset();
@@ -1430,7 +1478,6 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           saveTuiSettings({ workflowMode: mode });
           setShowWorkflowMenu(false);
           if (mode === 'loop') {
-            // SFR-50: 使用统一 lifecycle 状态
             setWorkflowLifecycle({ status: 'awaiting_goal' });
             setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }));
             appendMessage({
@@ -1438,7 +1485,6 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
               content: t().workflowLoopStarted,
             });
           } else {
-            // SFR-70: 切回 alone/subagent 时清理旧 workflow
             setWorkflowLifecycle({ status: 'idle' });
             setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }));
             appendMessage({
@@ -1496,6 +1542,21 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const timelineProp = isTranscriptStoreEnabled() ? undefined : bridgeState.timeline;
   const scrollableContent = (
     <>
+      {evalState.running && (
+        <EvalRunPanel
+          categoryId={evalState.categoryId as any}
+          suiteId={evalState.suiteId as any}
+          environmentId={evalState.environmentId as any}
+          latestEvent={evalState.latestEvent}
+          onCancel={() => {
+            if (evalAbortRef.current) {
+              evalAbortRef.current.abort();
+              bridgeRef.current.cancel();
+              evalAbortRef.current = null;
+            }
+          }}
+        />
+      )}
       <SearchOverlay
         timeline={timelineProp}
         isOpen={showSearch}

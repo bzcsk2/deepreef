@@ -67,6 +67,11 @@ export interface Strings {
   cmdLang: string;
   cmdStatus: string;
   cmdContext: string;
+  cmdAlone: string;
+  cmdSubagent: string;
+  cmdLoop: string;
+  cmdEvalStart: string;
+  cmdEvalCancel: string;
   // App
   pressCtrlC: string;
   shuttingDown: string;

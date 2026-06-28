@@ -34,6 +34,11 @@ export const SLASH_COMMANDS: Array<{ name: string; descKey: keyof Strings }> = [
   { name: '/config', descKey: 'cmdConfig' },
   { name: '/config open', descKey: 'cmdConfigOpen' },
   { name: '/config reload', descKey: 'cmdConfigReload' },
+  { name: '/alone', descKey: 'cmdAlone' },
+  { name: '/subagent', descKey: 'cmdSubagent' },
+  { name: '/loop', descKey: 'cmdLoop' },
+  { name: '/eval-start', descKey: 'cmdEvalStart' },
+  { name: '/eval-cancel', descKey: 'cmdEvalCancel' },
 ];
 
 export function filterCommands(query: string, t?: () => Strings): SlashCommand[] {

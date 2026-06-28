@@ -1,18 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from '@deepreef/ink';
-import type { EvalCategory, EvalSuite } from '@deepreef/core';
+import type { EvalCategory, EvalSuite, EvalEnvironmentId, EvalCategoryId } from '@deepreef/core';
+import { getFilteredSuites } from '@deepreef/core/eval/registry.js';
 import { ModalShell } from '../ModalShell.js';
 import { FG, TONE } from '../reasonix/tokens.js';
 
 interface Props {
   category: EvalCategory;
+  environmentId: EvalEnvironmentId;
   onSelect: (suite: EvalSuite) => void;
   onCancel: () => void;
 }
 
-export function EvalSuiteSelect({ category, onSelect, onCancel }: Props): React.ReactElement {
+export function EvalSuiteSelect({ category, environmentId, onSelect, onCancel }: Props): React.ReactElement {
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const suites = category.suites;
+  const suites = useMemo(() => getFilteredSuites(category.id as EvalCategoryId, environmentId), [category.id, environmentId]);
 
   useInput((_input, key) => {
     if (key.escape || (key.ctrl && _input === 'c')) {
@@ -38,7 +40,7 @@ export function EvalSuiteSelect({ category, onSelect, onCancel }: Props): React.
       onCancel={onCancel}
     >
       <Box flexDirection="column" gap={1}>
-        {suites.map((suite, i) => (
+        {suites.map((suite: EvalSuite, i: number) => (
           <Box key={suite.id} flexDirection="row">
             <Text color={i === selectedIdx ? TONE.brand : FG.faint}>
               {i === selectedIdx ? '❯ ' : '  '}

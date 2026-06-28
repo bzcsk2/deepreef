@@ -28,7 +28,7 @@ export interface WorkflowStatusBarProps {
   workflow: WorkflowState;
   lifecycle: WorkflowLifecycle;
   activeRole?: 'worker' | 'supervisor';
-  workflowMode?: 'alone' | 'subagent' | 'loop';
+  workflowMode?: 'alone' | 'subagent' | 'loop' | 'eval';
   width?: number;
 }
 
@@ -78,6 +78,7 @@ function modeLabel(mode: string): string {
     case 'alone': return t().workflowModeAlone;
     case 'subagent': return t().workflowModeSubagent;
     case 'loop': return t().workflowModeLoop;
+    case 'eval': return 'EVAL';
     default: return mode;
   }
 }
@@ -124,6 +125,7 @@ const MODE_COLORS: Record<string, string> = {
   alone: FG.faint,
   subagent: TONE.accent,
   loop: TONE.brand,
+  eval: TONE.ok,
 };
 
 export function WorkflowStatusBar({
