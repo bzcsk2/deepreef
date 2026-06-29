@@ -56,6 +56,7 @@ function stubStrings(overrides?: Partial<Strings>): Strings {
     pressYToConfirm: '',
     updateKey: '',
     apiKeyMasked: () => '',
+    cmdCases: 'select cases',
     cmdEval: 'multi-model eval',
     cmdExit: 'exit',
     cmdHelp: 'show help',
@@ -92,6 +93,7 @@ function stubStrings(overrides?: Partial<Strings>): Strings {
     helpAgents: 'Agents:',
     helpCurrent: 'Current:',
     helpDeprecatedAgentNote: 'Note: /agent build|plan commands are deprecated.',
+    cmdCases: '',
     cmdEval: '',
     cmdTheme: '',
     cmdThinking: '',
@@ -361,8 +363,28 @@ describe("CL-52: slash command routing helpers", () => {
     expect(help).toContain("Current:")
   })
 
+  it("parses /cases command", () => {
+    expect(parseSlashCommand("/cases")).toEqual({ name: "cases" })
+  })
+
+  it("parses /eval-cancel command", () => {
+    expect(parseSlashCommand("/eval-cancel")).toEqual({ name: "eval-cancel" })
+  })
+
   it("parses /eval commands", () => {
     expect(parseSlashCommand("/eval")).toEqual({ name: "eval" })
+    expect(parseSlashCommand("/eval-start coding-basics smoke")).toEqual({
+      name: "eval-start",
+      category: "coding-basics",
+      suite: "smoke",
+      env: undefined,
+    })
+    expect(parseSlashCommand("/eval-start coding-basics smoke --env sandbox")).toEqual({
+      name: "eval-start",
+      category: "coding-basics",
+      suite: "smoke",
+      env: "sandbox",
+    })
     expect(parseSlashCommand("/eval --models zen/mimo-v2.5-free,kilo/step-3.7-flash-free")).toEqual({
       name: "eval",
       models: ["zen/mimo-v2.5-free", "kilo/step-3.7-flash-free"],

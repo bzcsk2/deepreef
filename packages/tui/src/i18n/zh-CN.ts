@@ -102,6 +102,7 @@ export const zhCN: Strings = {
   helpAgents: '可用 Agent：',
   helpCurrent: '当前：',
   helpDeprecatedAgentNote: '注意：/agent build|plan 命令已弃用。\n请改用双角色模式 Worker/Supervisor。',
+  cmdCases: '选择并运行评测用例',
   cmdEval: '多模型自动测评',
   cmdTheme: '列出或切换主题',
   cmdThinking: '设置推理模式',

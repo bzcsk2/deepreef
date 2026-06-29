@@ -274,8 +274,8 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
    * useInput 回调 - 处理所有键盘输入事件
    *
    * 按键映射：
-   * - Ctrl+C / Ctrl+c: 加载中时触发取消
-   * - Esc+Esc（800ms 内双击）: 加载中时触发取消
+ * - Ctrl+C / Ctrl+c: 取消当前运行（评测进行中时中止评测）
+ * - Esc+Esc（800ms 内双击）: 取消当前运行（评测进行中时中止评测）
    * - Ctrl+O: 触发思考面板切换（由 DeepiMessages 处理）
    * - Ctrl+Enter: 当前光标处插入换行
    * - Enter: 提交文本（suppressSubmit=true 时跳过）
@@ -306,17 +306,16 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     if (key.wheelUp || key.wheelDown) return;
 
     // Ctrl+C 触发取消（raw mode 下正常工作的 Ctrl+C 信号）
-    // 检查条件：原生 \\x03 或 Ctrl+c 组合键
+    // 不再依赖 isLoading：eval 可能在非 streaming 间隙运行，
+    // 此时 isLoading=false 但 eval 仍在执行，需要能取消。
     if (_input === '\x03' || (key.ctrl && _input === 'c')) {
-      if (isLoading) {
-        onCancel();
-      }
+      onCancel();
       return;
     }
 
-    // 双击 Esc 中断（仅加载中有效）：800ms 内按两次 Esc 触发取消
-    // Esc 是按键事件（保留 key.escape），不同于 Ctrl+C 既可是字符也可是按键
-    if (key.escape && isLoading) {
+    // 双击 Esc 中断：800ms 内按两次 Esc 触发取消
+    // 不再依赖 isLoading（理由同上：eval runner 处于 setup/verifier 间隙时仍需要能取消）。
+    if (key.escape) {
       const now = Date.now();
       if (now - escRef.current < 800) {
         onCancel();

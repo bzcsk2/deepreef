@@ -96,6 +96,23 @@ describe('routeWorkflowInput', () => {
     });
   });
 
+  describe('eval mode', () => {
+    it('routes text to activeRole when activeRole is worker', () => {
+      const r = routeWorkflowInput({ mode: 'eval', lifecycle: { status: 'idle' }, activeRole: 'worker', input: 'hello', inputKind: 'text' });
+      expect(r).toEqual({ type: 'direct', role: 'worker', mode: 'alone' });
+    });
+
+    it('routes text to activeRole when activeRole is supervisor', () => {
+      const r = routeWorkflowInput({ mode: 'eval', lifecycle: { status: 'idle' }, activeRole: 'supervisor', input: 'hello', inputKind: 'text' });
+      expect(r).toEqual({ type: 'direct', role: 'supervisor', mode: 'alone' });
+    });
+
+    it('routes commands as direct', () => {
+      const r = routeWorkflowInput({ mode: 'eval', lifecycle: { status: 'idle' }, activeRole: 'worker', input: '/help', inputKind: 'command' });
+      expect(r).toEqual({ type: 'direct', role: 'worker', mode: 'alone' });
+    });
+  });
+
   describe('commands in any mode', () => {
     it('routes /help as direct in subagent mode', () => {
       const r = routeWorkflowInput(subagentOpts({ input: '/help', inputKind: 'command' }));

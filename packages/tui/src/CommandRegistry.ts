@@ -20,6 +20,7 @@ export const SLASH_COMMANDS: Array<{ name: string; descKey: keyof Strings }> = [
   { name: '/context', descKey: 'cmdContext' },
   { name: '/thinking', descKey: 'cmdThinking' },
   { name: '/harness', descKey: 'cmdThinking' },
+  { name: '/cases', descKey: 'cmdCases' },
   { name: '/eval', descKey: 'cmdEval' },
   { name: '/talk', descKey: 'cmdTalk' },
   { name: '/theme', descKey: 'cmdTheme' },

@@ -57,6 +57,7 @@ export interface Strings {
   updateKey: string;
   apiKeyMasked: (suffix: string) => string;
   // Slash commands
+  cmdCases: string;
   cmdEval: string;
   cmdExit: string;
   cmdHelp: string;

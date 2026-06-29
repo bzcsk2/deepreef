@@ -53,6 +53,7 @@ export const en: Strings = {
   updateKey: 'Update API key:',
   apiKeyMasked: (suffix) => `sk-****${suffix}`,
   // Slash commands
+  cmdCases: 'select and run eval test cases',
   cmdEval: 'multi-model auto evaluation',
   cmdExit: 'exit',
   cmdHelp: 'show help',

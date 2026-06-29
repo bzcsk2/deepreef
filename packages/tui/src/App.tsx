@@ -47,7 +47,6 @@ import { AgentGroupDisplay } from './components/agents/AgentGroupDisplay.js';
 import { WorkerActivityPanel } from './components/workers/WorkerActivityPanel.js';
 import { DialogManager } from './components/dialogs/DialogManager.js';
 import { EvalWizard } from './eval/EvalWizard.js';
-import { EvalRunPanel } from './eval/EvalRunPanel.js';
 // DA-R6: 双角色组件
 import { WorkflowStatusBar } from './components/workflow/index.js';
 import type { WorkflowPhase, WorkflowState } from './components/workflow/index.js';
@@ -77,6 +76,14 @@ let exitPending = false;
 let _cancel: (() => void) | null = null;
 let _interrupt: (() => void) | null = null;
 let _setStatusMsg: ((m: string | null) => void) | null = null;
+let _cancelEval: (() => void) | null = null;
+let _evalRunningRef: (() => boolean) | null = null;
+
+function cancelActiveEval(): boolean {
+  if (!_evalRunningRef || !_evalRunningRef()) return false;
+  _cancelEval?.();
+  return true;
+}
 
 /**
  * 清理终端环境。
@@ -117,6 +124,11 @@ function cleanupTerminal(): void {
  */
 function doInterrupt(): void {
   if (exitPending) return;
+
+  // Always cancel active eval first, regardless of tuiState.
+  // This ensures Ctrl+C aborts eval even when the runner is between cases
+  // (setup/verifier gap) and bridge isLoading is false.
+  if (cancelActiveEval()) return;
 
   if (tuiState === 'loading') {
     _cancel?.();
@@ -304,6 +316,14 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   _cancel = () => bridgeRef.current.cancel();
   _interrupt = () => engineRef.current.interrupt();
   _setStatusMsg = setStatusMessage;
+  _evalRunningRef = () => evalAbortRef.current !== null;
+  _cancelEval = () => {
+    if (evalAbortRef.current) {
+      evalAbortRef.current.abort();
+      bridgeRef.current.cancel();
+      evalAbortRef.current = null;
+    }
+  };
 
   const sigCancelRef = useRef<(() => void) | null>(null);
   const sigInterruptRef = useRef<(() => void) | null>(null);
@@ -316,6 +336,11 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   useEffect(() => {
     const handler = () => {
       if (exitPending) return;
+
+      // Always cancel active eval first; SIGINT can fire when eval is between cases
+      // and tuiState is 'idle', so we cannot rely on the loading check below.
+      if (cancelActiveEval()) return;
+
       const cancel = sigCancelRef.current;
       const interrupt = sigInterruptRef.current;
       const setMsg = sigSetMsgRef.current;
@@ -355,8 +380,9 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     }
   });
 
-  /** 取消当前 LLM 请求 */
+  /** 取消当前 LLM 请求或正在运行的评测 */
   const handleCancel = useCallback(() => {
+    cancelActiveEval();
     bridgeRef.current.cancel();
   }, []);
   const scrollRef = useRef<ScrollBoxHandle | null>(null);
@@ -470,18 +496,17 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   // Fixed eval: 跟踪 evalAbortRef 供 /eval-cancel 使用
   const evalAbortRef = useRef<AbortController | null>(null);
   const startFixedEval = useCallback(async (categoryId: string, suiteId: string, environmentId?: string) => {
+    const env = environmentId ?? 'sandbox';
     const category = getCategory(categoryId as any);
-    const suite = getSuite(categoryId as any, suiteId as any, environmentId as any);
+    const suite = getSuite(categoryId as any, suiteId as any, env as any);
     if (!category || !suite) {
-      appendMessage({ role: 'assistant' as const, content: `Invalid eval target: ${categoryId}/${suiteId}${environmentId ? ` for env=${environmentId}` : ''}` });
+      appendMessage({ role: 'assistant' as const, content: `Invalid eval target: ${categoryId}/${suiteId} for env=${env}` });
       return;
     }
     if (evalAbortRef.current) {
       appendMessage({ role: 'assistant' as const, content: 'An eval is already running. Use /eval-cancel to stop it.' });
       return;
     }
-
-    const env = environmentId ?? 'sandbox';
     const abortController = new AbortController();
     evalAbortRef.current = abortController;
     setEvalState({ running: true, categoryId, suiteId, environmentId: env, latestEvent: null });
@@ -494,7 +519,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       const report = await runFixedEval({
         categoryId: category.id,
         suiteId: suite.id,
-        environmentId: (environmentId ?? 'sandbox') as any,
+        environmentId: env as any,
         abortSignal: abortController.signal,
         executeWorker: async (prompt: string) => {
           return bridgeRef.current.submitAndCollect(prompt, 'worker', 'alone', {
@@ -781,14 +806,17 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       appendMessage({ role: 'assistant' as const, content: `Mode switched to: ${command.name}` });
       return;
     }
-    // /eval 命令 — 固定评测向导（无 flags）或旧版多模型自动测评（--legacy / --models）
+    // /eval 命令 — 模式切换（无 flags）或旧版多模型自动测评（--legacy / --models）
     if (command?.name === 'eval') {
       if (!command.legacy && !command.models && !command.cases) {
         setWorkflowMode('eval')
         saveTuiSettings({ workflowMode: 'eval' })
         setWorkflowLifecycle({ status: 'idle' })
         setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }))
-        setShowEvalWizard(true)
+        appendMessage({
+          role: 'assistant' as const,
+          content: 'Eval mode active. Use /cases to select a test suite. Use /talk worker or /talk supervisor to choose conversation target. Use /eval-cancel or double Esc/Ctrl+C to abort a running eval.',
+        })
         return
       }
 
@@ -874,16 +902,24 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       void startFixedEval(command.category, command.suite, command.env)
       return
     }
-    // /eval-cancel — 取消固定评测
+    // /eval-cancel — 取消固定评测（复用 cancelActiveEval，确保与 Ctrl+C/双 Esc 一致）
     if (command?.name === 'eval-cancel') {
-      if (evalAbortRef.current) {
-        evalAbortRef.current.abort()
-        bridgeRef.current.cancel()
-        evalAbortRef.current = null
+      if (cancelActiveEval()) {
         appendMessage({ role: 'assistant' as const, content: 'Eval cancelled.' })
       } else {
         appendMessage({ role: 'assistant' as const, content: 'No eval is currently running.' })
       }
+      return
+    }
+    // /cases — 打开评测用例选择器
+    if (command?.name === 'cases') {
+      if (workflowMode !== 'eval') {
+        setWorkflowMode('eval')
+        saveTuiSettings({ workflowMode: 'eval' })
+        setWorkflowLifecycle({ status: 'idle' })
+        setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }))
+      }
+      setShowEvalWizard(true)
       return
     }
     // DA-R6: /talk 命令 — 切换输入目标角色
@@ -1455,7 +1491,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
           { value: "alone", label: "alone", description: t().workflowMenuAlone(wfRunningSuffix) },
           { value: "subagent", label: "subagent", description: t().workflowMenuSubagent(wfRunningSuffix) },
           { value: "loop", label: "loop", description: t().workflowMenuLoop(wfRunningSuffix) },
-          { value: "eval", label: "eval  ⭐", description: "Open the evaluation wizard — run automated test suites" },
+          { value: "eval", label: "eval  ⭐", description: "Enter eval mode; use /cases to choose tests" },
         ]}
         onChoose={(value) => {
           const mode = value as WorkflowMode;
@@ -1465,7 +1501,10 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
             setWorkflowLifecycle({ status: 'idle' })
             setWorkflowState(prev => ({ ...prev, phase: 'idle', goal: '', iteration: 0, supervisorStatus: 'idle', workerStatus: 'idle' }))
             setShowWorkflowMenu(false);
-            setShowEvalWizard(true);
+            appendMessage({
+              role: 'assistant' as const,
+              content: 'Eval mode active. Use /cases to select a test suite.',
+            });
             return;
           }
           restoreScrollAfterWorkflowMenuRef.current = true;
@@ -1542,21 +1581,6 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const timelineProp = isTranscriptStoreEnabled() ? undefined : bridgeState.timeline;
   const scrollableContent = (
     <>
-      {evalState.running && (
-        <EvalRunPanel
-          categoryId={evalState.categoryId as any}
-          suiteId={evalState.suiteId as any}
-          environmentId={evalState.environmentId as any}
-          latestEvent={evalState.latestEvent}
-          onCancel={() => {
-            if (evalAbortRef.current) {
-              evalAbortRef.current.abort();
-              bridgeRef.current.cancel();
-              evalAbortRef.current = null;
-            }
-          }}
-        />
-      )}
       <SearchOverlay
         timeline={timelineProp}
         isOpen={showSearch}

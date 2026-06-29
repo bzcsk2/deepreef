@@ -61,7 +61,7 @@ export function routeWorkflowInput(opts: RouteWorkflowInputOpts): WorkflowRouteA
       return { type: 'supervisor_task', mode: 'subagent' }
 
     case 'eval':
-      return { type: 'direct', role: 'worker', mode: 'alone' }
+      return { type: 'direct', role: activeRole, mode: 'alone' }
 
     case 'loop': {
       switch (lifecycle.status) {

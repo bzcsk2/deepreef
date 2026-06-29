@@ -24,6 +24,7 @@ export type SlashCommand =
   | { name: "subagent" }
   | { name: "loop" }
   | { name: "talk"; role?: "worker" | "supervisor" }
+  | { name: "cases" }
   | { name: "eval"; legacy?: boolean; models?: string[]; cases?: string[]; limit?: number; dryRun?: boolean }
   | { name: "eval-start"; category: string; suite: string; env?: string }
   | { name: "eval-cancel" }
@@ -139,6 +140,8 @@ export function parseSlashCommand(text: string): SlashCommand | null {
     return result
   }
 
+  if (trimmed === "/cases") return { name: "cases" }
+
   // First-class mode switch aliases
   if (trimmed === "/alone") return { name: "alone" }
   if (trimmed === "/subagent") return { name: "subagent" }
@@ -225,6 +228,7 @@ export function buildHelpText(activeAgent: string, cmdStrings: Strings): string 
     `  /alone       — Switch to single-agent mode (default)`,
     `  /subagent    — Switch to subagent (supervisor dispatch) mode`,
     `  /loop        — Switch to dual-agent loop (worker/supervisor) mode`,
+    `  /cases       — ${cmdStrings.cmdCases}`,
     `  /eval        — ${cmdStrings.cmdEval}`,
     `  /eval-start  — Run fixed eval: /eval-start <category> <suite> [--env <env>]`,
     `  /eval-cancel — Cancel the currently running eval`,
