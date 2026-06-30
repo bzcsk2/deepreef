@@ -1,5 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { existsSync, rmSync } from "node:fs";
+import { mkdir, writeFile, appendFile } from "node:fs/promises";
+import { existsSync, rmSync, createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
@@ -33,17 +33,31 @@ import type {
   SandboxProviderId,
   PreflightResult,
   PolicyGateResult,
+  FailureClass,
+  FailureEvidence,
 } from "./types";
 import { getSuite, getCategories } from "./registry";
 import { getManifest } from "./loader";
 import { createCaseWorkspace, writeCaseArtifact, getCaseWorkspaceDir, setEvalSandboxProvider, getEvalSandboxProvider, SetupFailedError } from "./workspace";
 import { runVerifier, setSandboxProvider as setVerifierSandboxProvider } from "./verifier";
+import { classifyVerifierResult } from "./verifier-classifier";
 import { initDefaultProviders, detectBestProvider } from "../sandbox/provider-registry";
 import { resolveEvalEnvironment } from "../sandbox/types";
-
 let _currentCaseWorkspace: string | null = null;
+let _currentEvalRunId: string | null = null;
+let _currentEvalContext: { evalRunId: string; environmentId: string; providerId: string; caseId?: string } | null = null;
+let _currentEvalLogger: import("../runtime-logger").RuntimeLogger | null = null;
+
 export function getCurrentCaseWorkspace(): string | null {
   return _currentCaseWorkspace;
+}
+
+export function getCurrentEvalContext(): { evalRunId: string; environmentId: string; providerId: string; caseId?: string } | null {
+  return _currentEvalContext;
+}
+
+export function getCurrentEvalLogger(): import("../runtime-logger").RuntimeLogger | null {
+  return _currentEvalLogger;
 }
 
 function getDeepReefRoot(): string {
@@ -255,8 +269,11 @@ async function runSingleCase(
   caseDir: string,
   options: FixedEvalOptions,
   setupResult?: import("./types").SetupResult | null,
+  runId?: string,
 ): Promise<CaseResult> {
   const startedAt = new Date().toISOString();
+  const emitObs = options.writeObservability ?? (() => {});
+  const caseId = manifest.id;
 
   // Contract preflight: check required binaries
   if (manifest.requiredBinaries && manifest.requiredBinaries.length > 0) {
@@ -302,6 +319,11 @@ async function runSingleCase(
           startedAt,
           finishedAt,
           error: `Infrastructure error: missing required binaries: ${missingBinaries.join(", ")}`,
+          failureClass: "preflight_failure" as FailureClass,
+          failureReason: `Missing required binaries: ${missingBinaries.join(", ")}`,
+          failureEvidence: { missing: missingBinaries },
+          scoreEligible: false,
+          officialScoreEligible: false,
         };
       }
     }
@@ -351,10 +373,16 @@ async function runSingleCase(
           startedAt,
           finishedAt,
           error: `Infrastructure error: missing required Python modules: ${missingModules.join(", ")}`,
+          failureClass: "preflight_failure" as FailureClass,
+          failureReason: `Missing required Python modules: ${missingModules.join(", ")}`,
+          failureEvidence: { missing: missingModules },
+          scoreEligible: false,
+          officialScoreEligible: false,
         };
       }
     }
   }
+
   let workerOutput = "";
   let supervisorOutput = "";
   let verifierResult: VerifierResult | null = null;
@@ -375,18 +403,104 @@ async function runSingleCase(
 
   try {
     if (options.executeWorker) {
+      emitObs("eval.case.worker.start", "info", { caseId });
+      const workerStartedAt = new Date().toISOString();
       toolTrackingValid = true;
       const workerPrompt = buildWorkerPrompt(manifest, workspaceDir);
-      const prevCwd = process.cwd();
-      process.chdir(workspaceDir);
-      _currentCaseWorkspace = workspaceDir;
-      try {
-        workerOutput = await options.executeWorker(workerPrompt);
-      } finally {
-        _currentCaseWorkspace = null;
-        process.chdir(prevCwd);
+
+      // Write TaskDigestPacket from case manifest
+      const { createTaskDigest } = await import("../harness-evolution/packets/task-digest");
+      const taskDigestPacket = createTaskDigest({
+        packetId: `${runId || "eval"}:digest:${caseId}`,
+        runId: runId || "eval",
+        mode: "eval",
+        role: "system",
+        evalRunId: runId || "eval",
+        caseId,
+        goal: manifest.taskPrompt || manifest.title || "Eval case",
+        acceptanceCriteria: manifest.expectedVerification ?? [],
+        repoFacts: {
+          cwd: workspaceDir,
+          packageManager: undefined,
+          gitBranch: undefined,
+          gitClean: undefined,
+          relevantConfigFiles: [],
+        },
+        contextFiles: [],
+        constraints: manifest.requiredBinaries ? [`Requires binaries: ${manifest.requiredBinaries.join(", ")}`] : [],
+        verificationPlan: manifest.expectedVerification ?? [],
+        omittedContext: [],
+      });
+      await writeCaseArtifact(caseDir, "task-digest.json", JSON.stringify(taskDigestPacket, null, 2));
+
+      // Runtime guard before worker dispatch
+      const { guardPrompt, createRuntimeGuardPacket } = await import("../harness-evolution/packets/runtime-guard");
+      const guard = guardPrompt(workerPrompt);
+      const guardPacket = createRuntimeGuardPacket({
+        packetId: `${runId || "eval"}:guard:${caseId}`,
+        runId: runId || "eval",
+        prompt: workerPrompt,
+        mode: "eval",
+        role: "system",
+        evalRunId: runId || "eval",
+        caseId,
+      });
+      await writeCaseArtifact(caseDir, "runtime-guard.json", JSON.stringify(guardPacket, null, 2));
+
+      // Emit guard observability event
+      emitObs("harness.guard." + guard.disposition, "info", { caseId, runId, findings: guard.findings.map(f => f.kind) });
+
+      if (guard.disposition === "block") {
+        error = `Runtime guard blocked worker dispatch: ${guard.findings.map(f => f.kind).join(", ")}`;
+        workerOutput = "";
+        emitObs("eval.case.worker.done", "info", { caseId, outputLength: 0, blocked: true });
+
+        // Write action certificate for blocked action
+        const { createActionCertificate, completeActionCertificate, classifyRisk } = await import("../harness-evolution/packets/action-certificate");
+        const highestRiskFinding = guard.findings.find(f => f.kind === "destructive_action" || f.kind === "privileged_action_without_certificate");
+        if (highestRiskFinding) {
+          const cert = createActionCertificate({
+            packetId: `${runId || "eval"}:cert:${caseId}`,
+            runId: runId || "eval",
+            actionId: `blocked:${caseId}`,
+            action: { toolName: "bash", command: workerPrompt.slice(0, 200), affectedFiles: [] },
+            riskLevel: classifyRisk(workerPrompt),
+            approval: { class: "runtime_enforced" },
+            assumptions: [],
+            rollbackPlan: "N/A",
+            mode: "eval",
+            role: "worker",
+            evalRunId: runId || "eval",
+            caseId,
+          });
+          const completed = completeActionCertificate(cert, { status: "cancelled", exitCode: -1, durationMs: 0 });
+          await writeCaseArtifact(caseDir, "action-certificate.json", JSON.stringify(completed, null, 2));
+        }
+      } else {
+        const prevCwd = process.cwd();
+        process.chdir(workspaceDir);
+        _currentCaseWorkspace = workspaceDir;
+        try {
+          workerOutput = await options.executeWorker(workerPrompt);
+        } finally {
+          _currentCaseWorkspace = null;
+          process.chdir(prevCwd);
+        }
+        const workerFinishedAt = new Date().toISOString();
+        emitObs("eval.case.worker.done", "info", { caseId, outputLength: workerOutput.length });
+        await writeCaseArtifact(caseDir, "worker-output.md", workerOutput);
+        await writeCaseArtifact(
+          caseDir,
+          "worker-submit.json",
+          JSON.stringify({
+            caseId,
+            startedAt: workerStartedAt,
+            finishedAt: workerFinishedAt,
+            outputLength: workerOutput.length,
+            outputEmpty: workerOutput.trim().length === 0,
+          }, null, 2),
+        );
       }
-      await writeCaseArtifact(caseDir, "worker-output.md", workerOutput);
     }
 
     async function getChangedFiles(dir: string): Promise<string[]> {
@@ -433,12 +547,23 @@ async function runSingleCase(
       }
     }
 
+    emitObs("eval.case.verifier.start", "info", { caseId });
     verifierResult = await runVerifier(manifest, workspaceDir);
+    emitObs("eval.case.verifier.done", "info", { caseId, verdict: verifierResult?.verdict ?? null });
     await writeCaseArtifact(
       caseDir,
       "verifier.json",
       JSON.stringify(verifierResult, null, 2),
     );
+    // Write verifier classification
+    if (verifierResult) {
+      const vc = classifyVerifierResult(verifierResult, manifest);
+      await writeCaseArtifact(
+        caseDir,
+        "verifier-classification.json",
+        JSON.stringify(vc, null, 2),
+      );
+    }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
@@ -467,6 +592,21 @@ async function runSingleCase(
   if (patchDiff) {
     await writeCaseArtifact(caseDir, "patch.diff", patchDiff);
   }
+
+  // Write objective signals
+  await writeCaseArtifact(
+    caseDir,
+    "objective-signals.json",
+    JSON.stringify(objectiveSignals, null, 2),
+  );
+
+  // Write tool stats (detailed per-event tracking requires tool-level instrumentation)
+  const toolSummary = { calls: toolStats.calls, failures: toolStats.failures };
+  await writeCaseArtifact(
+    caseDir,
+    "tool-events.jsonl",
+    JSON.stringify({ event: "tool.summary", ...toolSummary }),
+  );
 
   let verdict: "pass" | "fail" | "error" | "skipped" = error
     ? "error"
@@ -522,9 +662,11 @@ async function runSingleCase(
       verdict = "fail";
     }
   }
+  emitObs("eval.case.policy_gates.done", "info", { caseId, gates: policyGates.map(g => ({ gate: g.gate, passed: g.passed })) });
 
   // Supervisor review after all data is collected
   if (options.executeSupervisor) {
+    emitObs("eval.case.supervisor.start", "info", { caseId });
     const supervisorPrompt = buildSupervisorPrompt(
       manifest,
       workerOutput,
@@ -535,8 +677,55 @@ async function runSingleCase(
       changedFiles,
     );
     supervisorOutput = await options.executeSupervisor(supervisorPrompt);
+    emitObs("eval.case.supervisor.done", "info", { caseId });
     await writeCaseArtifact(caseDir, "supervisor-output.md", supervisorOutput);
     supervisorAssessment = extractAssessment(supervisorOutput);
+
+    // Write ReviewPacket from supervisor assessment with deterministic gate constraint
+    const { createReviewPacket } = await import("../harness-evolution/packets/review-packet");
+    const { constrainVerdictWithGates } = await import("../harness-evolution/loop/deterministic-gates");
+    const assessmentKeys = supervisorAssessment ? Object.keys(supervisorAssessment) : [];
+    let reviewVerdict: "ACCEPTED" | "NEEDS_FIX" | "UNKNOWN" =
+      assessmentKeys.length > 0 && assessmentKeys.every(k => (supervisorAssessment![k] ?? 0) >= 0.5)
+        ? "ACCEPTED" : assessmentKeys.length > 0 ? "NEEDS_FIX" : "UNKNOWN";
+
+    // Build deterministic gate results from verifier + policy gates
+    const deterministicGateResults: Array<{ gateId: string; passed: boolean; failureClass?: string }> = [
+      ...(verifierResult ? [{
+        gateId: "verifier" as const,
+        passed: verifierResult.verdict === "pass",
+        failureClass: verifierResult.verdict !== "pass" ? "verifier_failure" as const : undefined,
+      }] : []),
+      ...policyGates.map(g => ({
+        gateId: g.gate,
+        passed: g.passed,
+        failureClass: g.passed ? undefined : "policy_gate_failure" as const,
+      })),
+    ];
+    reviewVerdict = constrainVerdictWithGates(reviewVerdict, deterministicGateResults as any);
+    await writeCaseArtifact(caseDir, "deterministic-gates.json", JSON.stringify(deterministicGateResults, null, 2));
+
+    const reviewPacket = createReviewPacket({
+      packetId: `${runId || "eval"}:review:${caseId}`,
+      runId: runId || "eval",
+      mode: "eval",
+      role: "supervisor",
+      evalRunId: runId || "eval",
+      caseId,
+      verdict: reviewVerdict,
+      findings: supervisorAssessment ? Object.entries(supervisorAssessment).map(([dim, score], i) => ({
+        id: `F${i + 1}`,
+        severity: score < 0.5 ? "major" as const : "minor" as const,
+        category: "correctness" as const,
+        summary: `${dim}: ${score}`,
+        evidence: [],
+        recommendedChecks: [],
+      })) : [],
+      requiredChecks: [],
+      evidenceRefs: [],
+      confidence: supervisorAssessment ? Math.min(1, Math.max(0, assessmentKeys.reduce((s, k) => s + (supervisorAssessment![k] ?? 0), 0) / assessmentKeys.length)) : 0.5,
+    });
+    await writeCaseArtifact(caseDir, "review-packet.json", JSON.stringify(reviewPacket, null, 2));
   }
 
   const score = computeScore(verifierResult, objectiveSignals, supervisorAssessment, policyGates);
@@ -545,6 +734,7 @@ async function runSingleCase(
     "score.json",
     JSON.stringify(score, null, 2),
   );
+  emitObs("eval.case.submit.done", "info", { caseId, score: score?.finalScore });
 
   const caseContract: import("./types").CaseContract | null = error ? null : {
     environment: (options.environmentId ?? "sandbox.benchmark") as import("./types").EvalEnvironmentId,
@@ -561,11 +751,149 @@ async function runSingleCase(
       maxChangedFiles: manifest.scoring?.maxChangedFiles,
     },
   };
+  if (caseContract) {
+    await writeCaseArtifact(caseDir, "case-contract.json", JSON.stringify(caseContract, null, 2));
+  }
+
+  // Write policy-gates.json
+  await writeCaseArtifact(caseDir, "policy-gates.json", JSON.stringify(policyGates, null, 2));
+
+  // Write supervisor-submit.json
+  if (options.executeSupervisor) {
+    await writeCaseArtifact(caseDir, "supervisor-submit.json", JSON.stringify({
+      caseId,
+      startedAt: new Date().toISOString(),
+      supervisorOutputLength: supervisorOutput.length,
+      assessment: supervisorAssessment,
+    }, null, 2));
+  }
 
   const gateFailures = policyGates.filter(g => !g.passed);
   const errorMsg = gateFailures.length > 0
     ? `Policy gates failed: ${gateFailures.map(g => g.gate).join(", ")}`
     : error;
+
+  // Classify failure
+  let failureClass: FailureClass = "none";
+  let failureReason: string | undefined;
+  let failureEvidence: import("./types").FailureEvidence | undefined;
+  let classifiedVerdict: import("./verifier-classifier").ClassifiedVerifierResult | null = null;
+
+  if (verdict === "pass") {
+    failureClass = "none";
+  } else if (error) {
+    failureClass = "system_error";
+    failureReason = error;
+  } else if (!workerOutput.trim() && !error) {
+    // Worker empty output takes priority over verifier/policy failures
+    failureClass = "worker_empty_output";
+    failureReason = "Worker submit completed with empty assistant_final";
+    failureEvidence = {
+      event: "worker_empty_output",
+      stdoutSnippet: workerOutput.slice(0, 200),
+    };
+  } else if (gateFailures.length > 0 && !(verifierResult?.verdict === "pass")) {
+    failureClass = "policy_gate_failure";
+    failureReason = errorMsg;
+    failureEvidence = {
+      event: "policy_gate",
+      missing: gateFailures.map(g => g.gate),
+    };
+  } else if (verifierResult) {
+    classifiedVerdict = classifyVerifierResult(verifierResult, manifest);
+    const cv = classifiedVerdict;
+    failureClass = cv.verdict === "task_fail" ? "worker_failure"
+      : cv.verdict === "verifier_contract_failure" ? "verifier_contract_failure"
+      : cv.verdict === "setup_failure" ? "setup_failure"
+      : cv.verdict === "sandbox_failure" ? "sandbox_failure"
+      : "worker_failure";
+    failureReason = cv.reason;
+    failureEvidence = {
+      event: "verifier",
+      command: cv.evidence.command,
+      exitCode: cv.evidence.exitCode,
+      stdoutSnippet: cv.evidence.stdoutSnippet,
+      stderrSnippet: cv.evidence.stderrSnippet,
+    };
+  } else {
+    failureClass = "worker_failure";
+    failureReason = "Task failed";
+  }
+  const scoreEligible = failureClass === "none" || failureClass === "worker_failure" || failureClass === "worker_empty_output" || failureClass === "policy_gate_failure";
+  const officialScoreEligible = scoreEligible;
+
+  // Write IncidentPacket from failure classification
+  const { createIncidentPacket, classifyFailureClass } = await import("../harness-evolution/packets/incident-packet");
+  const incidentClass = failureClass !== "none" ? classifyFailureClass(failureClass) : null;
+  const incidentPacket = createIncidentPacket({
+    packetId: `${runId || "eval"}:incident:${caseId}`,
+    runId: runId || "eval",
+    mode: "eval",
+    role: "system",
+    evalRunId: runId || "eval",
+    caseId,
+    incidents: incidentClass ? [{
+      id: `I1:${failureClass}`,
+      kind: incidentClass.kind,
+      severity: incidentClass.severity,
+      failureClass,
+      harnessLayer: incidentClass.harnessLayer,
+      summary: failureReason ?? "No failure reason",
+      evidence: failureEvidence ? [{ file: "failure-evidence.json", excerpt: JSON.stringify(failureEvidence) }] : [],
+      recommendedChecks: [],
+    }] : [],
+  });
+  await writeCaseArtifact(caseDir, "incident-packet.json", JSON.stringify(incidentPacket, null, 2));
+
+  // Write RecoveryPacket from incidents (only when repair is needed)
+  if (incidentPacket.incidents.length > 0) {
+    const { createRecoveryPacket } = await import("../harness-evolution/packets/recovery-packet");
+    const recoveryPacket = createRecoveryPacket({
+      packetId: `${runId || "eval"}:recovery:${caseId}`,
+      runId: runId || "eval",
+      mode: "eval",
+      role: "system",
+      evalRunId: runId || "eval",
+      caseId,
+      incidents: incidentPacket.incidents,
+    });
+    await writeCaseArtifact(caseDir, "recovery-packet.json", JSON.stringify(recoveryPacket, null, 2));
+  }
+
+  // Sync packets to PacketStore (JSONL for harness mine --from-eval)
+  if (runId) {
+    try {
+      const { PacketStore } = await import("../harness-evolution/packets/packet-store");
+      const packetStore = new PacketStore({ baseDir: process.cwd(), runId: `eval-${runId}`, evalRunId: runId, caseId });
+      await packetStore.init();
+      const packetFiles = [
+        "task-digest.json", "runtime-guard.json", "action-certificate.json",
+        "review-packet.json", "incident-packet.json", "recovery-packet.json",
+      ];
+      const PACKET_SCHEMAS = new Set([
+        "looprig.task-digest.v1", "looprig.runtime-guard.v1", "looprig.action-certificate.v1",
+        "looprig.review-packet.v1", "looprig.incident-packet.v1", "looprig.recovery-packet.v1",
+        "looprig.harness-patch.v1",
+      ]);
+      for (const fileName of packetFiles) {
+        const { join } = await import("node:path");
+        const filePath = join(caseDir, fileName);
+        const { existsSync } = await import("node:fs");
+        if (existsSync(filePath)) {
+          const { readFileSync } = await import("node:fs");
+          const content = readFileSync(filePath, "utf-8");
+          const packet = JSON.parse(content);
+          // Only write valid HarnessPackets (skip arrays or non-packet JSON like deterministic-gates.json)
+          if (packet && typeof packet === "object" && !Array.isArray(packet) && PACKET_SCHEMAS.has(packet.schemaVersion)) {
+            await packetStore.append(packet);
+            await packetStore.mirrorToEvalCase(runId, caseId, packet);
+          }
+        }
+      }
+    } catch {
+      // PacketStore sync is optional; fail silently
+    }
+  }
 
   return {
     caseId: manifest.id,
@@ -587,6 +915,11 @@ async function runSingleCase(
     startedAt,
     finishedAt,
     error: errorMsg,
+    failureClass,
+    failureReason,
+    failureEvidence,
+    scoreEligible,
+    officialScoreEligible,
   };
 }
 
@@ -683,19 +1016,109 @@ export async function runFixedEval(
 
   const { categoryId, suiteId, environmentId: optEnv, onProgress } = options;
   const environmentId = optEnv ?? "sandbox.benchmark";
+
+  _currentEvalRunId = runId;
+  _currentEvalContext = { evalRunId: runId, environmentId, providerId };
+
+  // Wire eval context into runtime logger for cross-layer correlation
+  const evalLogger = options.logger?.child({
+    mode: "eval",
+    evalRunId: runId,
+    environmentId,
+    providerId,
+  });
+  _currentEvalLogger = evalLogger ?? null;
+
+  let obsQueue: Promise<void> = Promise.resolve();
+  let traceQueue: Promise<void> = Promise.resolve();
+
+  try {
+  const traceFile = join(evalDir, "trace.jsonl");
+  const observabilityFile = join(evalDir, "observability.jsonl");
+
   const suite = getSuite(categoryId, suiteId, environmentId);
   if (!suite) {
     throw new Error(`Suite not found: category=${categoryId} suite=${suiteId} environment=${environmentId}`);
   }
   const caseRefs = suite.cases;
 
-  const traceLines: string[] = [];
+  // Write sandbox fingerprint
+  const profile = provider.getProfile ? provider.getProfile() : null;
+  let bwrapVersion: string | null = null;
+  let bwrapPath: string | null = null;
+  if (provider.id === "bwrap") {
+    try {
+      const out = execSync("bwrap --version 2>/dev/null", { encoding: "utf-8", stdio: "pipe" }).toString().trim();
+      bwrapVersion = out || null;
+      bwrapPath = execSync("command -v bwrap 2>/dev/null", { encoding: "utf-8", stdio: "pipe" }).toString().trim() || null;
+    } catch {}
+  }
+  const tools: Array<{ name: string; path: string; version: string; source: string }> = [];
+  if (profile?.toolchainFingerprint?.tools) {
+    for (const t of profile.toolchainFingerprint.tools) {
+      tools.push({ name: t.name, path: t.path ?? "", version: t.version ?? "", source: t.source });
+    }
+  } else {
+    // Detect host tools
+    for (const name of ["node", "bun", "python3", "git"]) {
+      try {
+        const p = execSync(`command -v ${name} 2>/dev/null`, { encoding: "utf-8", stdio: "pipe" }).toString().trim();
+        if (p) {
+          const v = execSync(`${name} --version 2>/dev/null`, { encoding: "utf-8", stdio: "pipe" }).toString().trim().split("\n")[0] ?? "";
+          tools.push({ name, path: p, version: v, source: "host" });
+        }
+      } catch {}
+    }
+  }
+  const fingerprint = {
+    providerId,
+    environmentId,
+    officialScore,
+    providerVersion: process.version,
+    bwrapPath,
+    bwrapVersion,
+    toolchainProfile: profile?.toolchainProfile ?? "node",
+    pathInsideSandbox: profile?.path?.join(":") ?? process.env.PATH?.slice(0, 200) ?? "",
+    network: {
+      setup: profile?.networkPolicy?.setup ?? true,
+      agent: profile?.networkPolicy?.agent ?? false,
+      verifier: profile?.networkPolicy?.verifier ?? false,
+    },
+    filesystem: {
+      workspaceDir: evalDir,
+      readRoots: [evalDir],
+      writeRoots: [evalDir],
+      tmpfs: ["/tmp"],
+      roBinds: ["/usr", "/bin", "/lib", "/lib64"],
+      rwBinds: [evalDir],
+    },
+    tools,
+    timestamp: new Date().toISOString(),
+  };
+  await writeFile(join(evalDir, "sandbox-fingerprint.json"), JSON.stringify(fingerprint, null, 2), "utf-8");
+
+  function writeObservability(event: string, level: string, overrides: Record<string, unknown> = {}): void {
+    const entry = JSON.stringify({
+      schemaVersion: 1,
+      ts: new Date().toISOString(),
+      level,
+      event,
+      runId,
+      environmentId,
+      providerId,
+      mode: "eval",
+      ...overrides,
+    }) + "\n";
+    obsQueue = obsQueue.then(() => appendFile(observabilityFile, entry, "utf-8").catch(() => {}));
+  }
 
   function recordTrace(event: string, data: Record<string, unknown>): void {
-    traceLines.push(JSON.stringify({ t: Date.now(), event, ...data }));
+    const line = JSON.stringify({ t: Date.now(), event, ...data }) + "\n";
+    traceQueue = traceQueue.then(() => appendFile(traceFile, line, "utf-8").catch(() => {}));
   }
 
   recordTrace("eval-start", { categoryId, suiteId, environmentId, providerId, runId });
+  writeObservability("eval.run.start", "info", { categoryId, suiteId });
 
   await writeFile(
     join(evalDir, "registry.json"),
@@ -704,10 +1127,12 @@ export async function runFixedEval(
   );
 
   // === PREFLIGHT ===
+  writeObservability("eval.preflight.start", "info", {});
   const preflight = await runPreflight(provider, environmentId);
   if (preflight) {
     await writeFile(join(evalDir, "preflight.json"), JSON.stringify(preflight, null, 2), "utf-8");
     recordTrace("preflight", { allFound: preflight.allFound, checks: preflight.checks.map(c => `${c.name}:${c.found}`) });
+    writeObservability("eval.preflight.done", "info", { allFound: preflight.allFound });
     onProgress?.({
       type: "preflight",
       preflight,
@@ -728,6 +1153,7 @@ export async function runFixedEval(
   for (const caseRef of caseRefs) {
     if (options.abortSignal?.aborted) {
       recordTrace("eval-abort", { reason: "signal" });
+      writeObservability("eval.run.cancelled", "warn", { reason: "user_cancel" });
       await writeFile(join(evalDir, "shutdown-reason.json"), JSON.stringify({
         reason: "user_cancel",
         mode: "eval",
@@ -738,16 +1164,45 @@ export async function runFixedEval(
       throw new Error("Eval aborted");
     }
 
+    if (_currentEvalContext) _currentEvalContext.caseId = caseRef.id;
     const manifest = getManifest(caseRef.manifestId);
     if (!manifest) {
       errored++;
       recordTrace("manifest-missing", { caseId: caseRef.id, manifestId: caseRef.manifestId });
+      writeObservability("eval.case.setup.error", "error", { caseId: caseRef.id, reason: "manifest-not-found", manifestId: caseRef.manifestId });
+      const missingResult: CaseResult = {
+        caseId: caseRef.id,
+        title: caseRef.title,
+        category: categoryId,
+        suite: suiteId,
+        manifest: null as unknown as import("./types").EvalCaseManifest,
+        verdict: "infra_error",
+        verifierResult: null,
+        objectiveSignals: null,
+        setupResult: null,
+        policyGates: [],
+        supervisorAssessment: null,
+        score: null,
+        workerOutput: "",
+        supervisorOutput: "",
+        patchDiff: "",
+        caseContract: null,
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        error: `Manifest not found: ${caseRef.manifestId}`,
+        failureClass: "registry_failure" as FailureClass,
+        failureReason: `Manifest not found: ${caseRef.manifestId}`,
+        failureEvidence: undefined,
+        scoreEligible: false,
+        officialScoreEligible: false,
+      };
+      results.push(missingResult);
       onProgress?.({
         type: "case-start",
         caseId: caseRef.id,
         title: caseRef.title,
         totalCases: caseRefs.length,
-        completedCases: results.length,
+        completedCases: results.length - 1,
       });
       onProgress?.({
         type: "case-end",
@@ -755,7 +1210,7 @@ export async function runFixedEval(
         title: caseRef.title,
         error: `Manifest not found: ${caseRef.manifestId}`,
         totalCases: caseRefs.length,
-        completedCases: results.length + 1,
+        completedCases: results.length,
       });
       continue;
     }
@@ -784,6 +1239,11 @@ export async function runFixedEval(
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
         error: "Infrastructure error: preflight checks failed — missing tools in sandbox environment",
+        failureClass: "preflight_failure" as FailureClass,
+        failureReason: "Preflight checks failed — missing tools in sandbox environment",
+        failureEvidence: undefined,
+        scoreEligible: false,
+        officialScoreEligible: false,
       };
       results.push(infraResult);
       onProgress?.({
@@ -799,6 +1259,8 @@ export async function runFixedEval(
     }
 
     recordTrace("case-start", { caseId: manifest.id, title: manifest.title });
+    if (_currentEvalContext) _currentEvalContext.caseId = manifest.id;
+    writeObservability("eval.case.start", "info", { caseId: manifest.id, title: manifest.title, role: "system" });
 
     onProgress?.({
       type: "case-start",
@@ -809,7 +1271,31 @@ export async function runFixedEval(
     });
 
     try {
+      writeObservability("eval.case.workspace.start", "info", { caseId: manifest.id });
+      writeObservability("eval.case.setup.start", "info", { caseId: manifest.id });
       const workspace = await createCaseWorkspace(runId, manifest, provider);
+      writeObservability("eval.case.setup.done", "info", { caseId: manifest.id });
+      writeObservability("eval.case.workspace.done", "info", { caseId: manifest.id });
+
+      // Write case.json metadata with optional artifact annotations
+      const notes: string[] = [];
+      if (!workspace.setupResult) notes.push("setup.json: no setup commands defined");
+      await writeFile(
+        join(workspace.caseDir, "case.json"),
+        JSON.stringify({
+          caseId: manifest.id,
+          title: manifest.title,
+          category: manifest.category,
+          suite: manifest.suite,
+          environmentId,
+          providerId: provider.id,
+          runId,
+          startedAt: new Date().toISOString(),
+          manifestId: caseRef.manifestId,
+          notes: notes.length > 0 ? notes : undefined,
+        }, null, 2),
+        "utf-8",
+      );
 
       await writeFile(
         join(workspace.caseDir, "manifest.json"),
@@ -817,13 +1303,64 @@ export async function runFixedEval(
         "utf-8",
       );
 
+      // Write workspace.json
+      await writeFile(
+        join(workspace.caseDir, "workspace.json"),
+        JSON.stringify({
+          caseId: manifest.id,
+          providerId: provider.id,
+          environmentId,
+          workspaceDir: workspace.caseDir,
+          caseDir: getCaseWorkspaceDir(workspace.caseDir),
+          sandboxed: provider.id === "bwrap",
+          setupResult: workspace.setupResult
+            ? {
+                passed: workspace.setupResult.allPassed,
+                commandCount: workspace.setupResult.commands.length,
+                failedCommands: workspace.setupResult.commands.filter(c => c.exitCode !== 0).map(c => c.command),
+              }
+            : null,
+        }, null, 2),
+        "utf-8",
+      );
+
+      // Write setup.json (always, even if no setup commands)
+      await writeFile(
+        join(workspace.caseDir, "setup.json"),
+        JSON.stringify(workspace.setupResult
+          ? {
+              caseId: manifest.id,
+              startedAt: workspace.setupResult.startedAt,
+              finishedAt: workspace.setupResult.finishedAt,
+              allPassed: workspace.setupResult.allPassed,
+              commands: workspace.setupResult.commands.map(c => ({
+                command: c.command,
+                exitCode: c.exitCode,
+                timedOut: c.timedOut,
+                stdoutSnippet: c.stdout.slice(0, 500),
+                stderrSnippet: c.stderr.slice(0, 500),
+              })),
+            }
+          : { caseId: manifest.id, note: "No setup commands defined for this case" },
+        null, 2),
+        "utf-8",
+      );
+
       const result = await runSingleCase(
         manifest,
         getCaseWorkspaceDir(workspace.caseDir),
         workspace.caseDir,
-        options,
+        { ...options, writeObservability },
         workspace.setupResult,
+        runId,
       );
+      writeObservability("eval.case.score.done", "info", {
+        caseId: manifest.id,
+        verdict: result.verdict,
+        failureClass: result.failureClass,
+        score: result.score?.finalScore,
+        scoreEligible: result.scoreEligible,
+      });
       results.push(result);
 
       if (result.verdict === "pass") passed++;
@@ -850,6 +1387,7 @@ export async function runFixedEval(
       if (err instanceof SetupFailedError) {
         infraErrorCount++;
         recordTrace("case-infra-error", { caseId: manifest.id, reason: "setup-failed" });
+        writeObservability("eval.case.setup.error", "error", { caseId: manifest.id, reason: "setup-failed" });
         const infraResult: CaseResult = {
           caseId: manifest.id,
           title: manifest.title,
@@ -870,6 +1408,17 @@ export async function runFixedEval(
           startedAt: new Date().toISOString(),
           finishedAt: new Date().toISOString(),
           error: "Infrastructure error: setup failed",
+          failureClass: "setup_failure" as FailureClass,
+          failureReason: "Setup failed",
+          failureEvidence: err.setupResult
+            ? {
+                event: "setup",
+                command: err.setupResult.commands.map((c: { command: string }) => c.command).join("; "),
+                exitCode: err.setupResult.commands[err.setupResult.commands.length - 1]?.exitCode,
+              }
+            : undefined,
+          scoreEligible: false,
+          officialScoreEligible: false,
         };
         results.push(infraResult);
         onProgress?.({
@@ -883,30 +1432,111 @@ export async function runFixedEval(
         });
       } else {
         errored++;
+        const errMsg = err instanceof Error ? err.message : String(err);
         recordTrace("case-error", {
           caseId: manifest.id,
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg,
         });
+        const errorResult: CaseResult = {
+          caseId: manifest.id,
+          title: manifest.title,
+          category: manifest.category,
+          suite: manifest.suite,
+          manifest,
+          verdict: "error",
+          verifierResult: null,
+          objectiveSignals: null,
+          setupResult: null,
+          policyGates: [],
+          supervisorAssessment: null,
+          score: null,
+          workerOutput: "",
+          supervisorOutput: "",
+          patchDiff: "",
+          caseContract: null,
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          error: errMsg,
+          failureClass: "system_error" as FailureClass,
+          failureReason: errMsg,
+          failureEvidence: undefined,
+          scoreEligible: false,
+          officialScoreEligible: false,
+        };
+        results.push(errorResult);
         onProgress?.({
           type: "case-end",
           caseId: caseRef.id,
           title: manifest.title,
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg,
           totalCases: caseRefs.length,
           completedCases: results.length + 1,
         });
       }
     }
+    if (_currentEvalContext) _currentEvalContext.caseId = undefined;
   }
 
-  await writeFile(join(evalDir, "trace.jsonl"), traceLines.join("\n"), "utf-8");
-
   const finishedAt = new Date().toISOString();
+  const scoreEligibleCount = results.filter(r => r.scoreEligible).length;
   const averageScore =
-    results.length > 0
+    scoreEligibleCount > 0
       ? results.reduce((sum, r) => sum + (r.score?.finalScore ?? 0), 0) /
-        results.length
+        scoreEligibleCount
       : 0;
+
+  const failureBreakdown: Record<string, number> = {};
+  for (const r of results) {
+    const fc = r.failureClass;
+    failureBreakdown[fc] = (failureBreakdown[fc] ?? 0) + 1;
+  }
+
+  // Write cache summary
+  const totalToolFailures = results.reduce((s, r) => s + (r.objectiveSignals?.toolFailureCount ?? 0), 0);
+  const byCase: Record<string, unknown> = {};
+  for (const r of results) {
+    if (r.objectiveSignals) {
+      byCase[r.caseId] = {
+        verdict: r.verdict,
+        toolFailures: r.objectiveSignals.toolFailureCount,
+        verificationCommandsRun: r.objectiveSignals.verificationCommandsRun,
+        changedFiles: r.objectiveSignals.changedFiles,
+      };
+    }
+  }
+  const cacheSummary = {
+    runId,
+    environmentId,
+    providerId,
+    totalCases: results.length,
+    totalToolFailures,
+    totalVerificationCommandsRun: results.reduce((s, r) => s + (r.objectiveSignals?.verificationCommandsRun ?? 0), 0),
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+    totalCacheHitTokens: 0,
+    totalCacheMissTokens: 0,
+    cacheHitRatio: 0,
+    byCase,
+    // Token-level cache aggregation requires model request instrumentation in the engine/runtime layer
+    _note: "Token-level cache tracking requires model request instrumentation in engine",
+  };
+  await writeFile(join(evalDir, "cache-summary.json"), JSON.stringify(cacheSummary, null, 2), "utf-8");
+
+  // Write failures.json
+  const failures = results.filter(r => r.verdict !== "pass" && r.verdict !== "skipped").map(r => ({
+    caseId: r.caseId,
+    title: r.title,
+    category: r.category,
+    suite: r.suite,
+    verdict: r.verdict,
+    failureClass: r.failureClass,
+    failureReason: r.failureReason,
+    failureEvidence: r.failureEvidence,
+    error: r.error,
+    scoreEligible: r.scoreEligible,
+    score: r.score?.finalScore,
+  }));
+  await writeFile(join(evalDir, "failures.json"), JSON.stringify(failures, null, 2), "utf-8");
 
   const suiteSummary: SuiteSummary = {
     suiteId,
@@ -919,6 +1549,7 @@ export async function runFixedEval(
     skipped,
     averageScore: Math.round(averageScore * 100) / 100,
     results,
+    failureBreakdown,
   };
 
   const hasPreflightFailure = results.some(r => r.error?.includes("preflight"));
@@ -929,6 +1560,8 @@ export async function runFixedEval(
     : options.abortSignal?.aborted
       ? "cancelled"
       : "completed";
+
+  writeObservability("eval.run.done", "info", { status, infraErrorCount, totalCases: results.length });
 
   const fallbackMsg = infraErrorCount > 0
     ? hasSetupFailure && hasPreflightFailure
@@ -992,12 +1625,20 @@ export async function runFixedEval(
     timestamp: new Date().toISOString(),
   }, null, 2), "utf-8");
 
-  setVerifierSandboxProvider(null);
-  setEvalSandboxProvider(null);
-
   return {
     meta,
     suiteSummary,
     overallScore: Math.round(overallScore * 100) / 100,
   };
+  } finally {
+    setVerifierSandboxProvider(null);
+    setEvalSandboxProvider(null);
+    _currentEvalRunId = null;
+    _currentEvalContext = null;
+    _currentEvalLogger = null;
+
+    // Flush write queues before returning
+    await obsQueue;
+    await traceQueue;
+  }
 }

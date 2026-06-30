@@ -17,7 +17,7 @@ export type SlashCommand =
   | { name: "lang" }
   | { name: "status" }
   | { name: "context" }
-  | { name: "harness"; subcommand?: "status" | "strict" | "normal" | "loose" | "project"; arg?: string }
+  | { name: "harness"; subcommand?: "status" | "strict" | "normal" | "loose" | "project" | "doctor" | "mine" | "propose" | "validate" | "promote" | "history" | "rollback"; arg?: string }
   | { name: "theme"; themeName?: string }
   | { name: "workflow" }
   | { name: "alone" }
@@ -65,6 +65,14 @@ export function parseSlashCommand(text: string): SlashCommand | null {
   if (trimmed.startsWith("/harness")) {
     const parts = trimmed.split(/\s+/)
     const sub = parts[1]
+    // New harness evolution subcommands
+    if (sub === "doctor" || sub === "mine" || sub === "propose" || sub === "validate" || sub === "promote" || sub === "history") {
+      return { name: "harness" as const, subcommand: sub as any, arg: parts.slice(2).join(" ") }
+    }
+    if (sub === "rollback") {
+      return { name: "harness" as const, subcommand: "rollback" as const, arg: parts[2] }
+    }
+    // Legacy harness mode switching
     if (sub === "status" || sub === "strict" || sub === "normal" || sub === "loose") {
       return { name: "harness" as const, subcommand: sub as "status" | "strict" | "normal" | "loose" }
     }
@@ -243,6 +251,14 @@ export function buildHelpText(activeAgent: string, cmdStrings: Strings): string 
     `  /thinking    — ${cmdStrings.cmdThinking}`,
     `  /workflow    — ${cmdStrings.cmdWorkflow}`,
     `  /talk [role] — ${cmdStrings.cmdTalk}`,
+    `  /harness     — ${cmdStrings.cmdThinking}`,
+    `    /harness doctor     — Check harness health`,
+    `    /harness mine       — Mine weaknesses from eval`,
+    `    /harness propose    — Propose harness patches`,
+    `    /harness validate   — Validate a patch`,
+    `    /harness promote    — Promote a patch`,
+    `    /harness history    — Show evolution history`,
+    `    /harness rollback   — Rollback a patch`,
     `  /goal        — ${cmdStrings.cmdGoal}`,
     `  /goal <obj>  — ${cmdStrings.cmdGoalSet}`,
     `  /goal edit   — ${cmdStrings.cmdGoalEdit}`,

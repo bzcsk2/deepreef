@@ -751,6 +751,14 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
         });
         return;
       }
+      // Harness evolution subcommands: route to CLI (capture output)
+      if (['doctor', 'mine', 'propose', 'validate', 'promote', 'history', 'rollback'].includes(command.subcommand ?? '')) {
+        appendMessage({
+          role: 'assistant' as const,
+          content: '这个命令在 CLI 下更合适。请在终端中运行:\n  looprig harness ' + command.subcommand + (command.arg ? ' ' + command.arg : ''),
+        });
+        return;
+      }
       setShowHarnessMenu(true);
       return;
     }

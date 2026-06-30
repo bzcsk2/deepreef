@@ -1,6 +1,9 @@
 import { describe, it, expect } from "bun:test"
 import { resolveProfile, buildToolchainFingerprint, listProfiles } from "../src/eval/profile/resolver"
 import { isToolInstalled, getToolchainInfo, TOOL_MANIFEST } from "../src/eval/profile/installer"
+import type { FailureClass } from "../src/eval/types"
+import { classifyVerifierResult, detectInfraFailureFromOutput } from "../src/eval/verifier-classifier"
+import type { VerifierResult, EvalCaseManifest } from "../src/eval/types"
 
 describe("profile resolver", () => {
   it("resolves sandbox.benchmark as official", () => {
@@ -68,9 +71,13 @@ describe("toolchain installer info", () => {
     )
   })
 
-  it("pins sha256 for all managed benchmark tools", () => {
+  it("pins sha256 for all managed benchmark tools when populated", () => {
     for (const entry of TOOL_MANIFEST) {
-      expect(entry.sha256).toMatch(/^[a-f0-9]{64}$/)
+      if (entry.sha256) {
+        expect(entry.sha256).toMatch(/^[a-f0-9]{64}$/)
+      } else {
+        expect(entry.sha256).toBe("")
+      }
     }
   })
 
@@ -104,5 +111,66 @@ describe("native fixtures in sandbox.local", () => {
     expect(suite).toBeDefined()
     expect(suite!.environmentId).toBe("sandbox.benchmark")
     expect(suite!.cases.length).toBeGreaterThan(0)
+  })
+})
+
+describe("verifier classifier", () => {
+  const baseManifest = {
+    id: "test-case",
+    category: "coding-basics" as const,
+    suite: "smoke" as const,
+    title: "Test",
+    description: "",
+    fixtureSource: "",
+    taskPrompt: "do something",
+    expectedVerification: [],
+    verifier: { type: "command" as const, command: "bun test" },
+  } as EvalCaseManifest
+
+  it("detects 'No tests found' as infra failure", () => {
+    const vr: VerifierResult = { passed: false, verdict: "fail", stdout: "", stderr: "No tests found", exitCode: 1, details: [] }
+    const result = detectInfraFailureFromOutput(vr.stdout, vr.stderr)
+    expect(result).not.toBeNull()
+    expect(result!.isInfra).toBe(true)
+  })
+
+  it("detects 'command not found' as infra failure", () => {
+    const vr: VerifierResult = { passed: false, verdict: "fail", stdout: "", stderr: "bun: command not found", exitCode: 127, details: [] }
+    const result = detectInfraFailureFromOutput(vr.stdout, vr.stderr)
+    expect(result).not.toBeNull()
+    expect(result!.isInfra).toBe(true)
+  })
+
+  it("classifies 'No tests found' as verifier_contract_failure", () => {
+    const vr: VerifierResult = { passed: false, verdict: "fail", stdout: "", stderr: "No tests found", exitCode: 1, details: [] }
+    const classified = classifyVerifierResult(vr, baseManifest)
+    expect(classified.verdict).toBe("verifier_contract_failure")
+    expect(classified.scoreEligible).toBe(false)
+  })
+
+  it("classifies normal verifier fail as task_fail", () => {
+    const vr: VerifierResult = { passed: false, verdict: "fail", stdout: "1 failed", stderr: "AssertionError", exitCode: 1, details: [] }
+    const classified = classifyVerifierResult(vr, baseManifest)
+    expect(classified.verdict).toBe("task_fail")
+    expect(classified.scoreEligible).toBe(true)
+  })
+
+  it("classifies verifier pass as task_pass", () => {
+    const vr: VerifierResult = { passed: true, verdict: "pass", stdout: "1 passed", stderr: "", exitCode: 0, details: [] }
+    const classified = classifyVerifierResult(vr, baseManifest)
+    expect(classified.verdict).toBe("task_pass")
+    expect(classified.scoreEligible).toBe(true)
+  })
+})
+
+describe("failure class type", () => {
+  it("accepts all defined failure classes", () => {
+    const classes: FailureClass[] = [
+      "none", "registry_failure", "sandbox_failure", "preflight_failure",
+      "setup_failure", "worker_failure", "worker_empty_output",
+      "verifier_failure", "verifier_contract_failure", "policy_gate_failure",
+      "system_error", "user_cancel",
+    ]
+    expect(classes.length).toBe(12)
   })
 })

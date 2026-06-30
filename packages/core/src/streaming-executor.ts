@@ -280,6 +280,57 @@ export class StreamingToolExecutor {
         if (diagnosticsEnabled) logger.warn("tool.execute.denied", { durationMs: Date.now() - startedAt })
         return { event: makeErrorEvent(result, tc.function.name, index), result }
       }
+
+      // Action certificate gate: check high-risk bash commands before execution
+      if (tc.function.name === "bash" || tc.function.name === "shell" || tc.function.name === "exec") {
+        const command = typeof args.command === "string" ? args.command : typeof args.commands === "string" ? args.commands : ""
+        if (command) {
+          const { classifyRisk, createActionCertificate, completeActionCertificate } = await import("./harness-evolution/packets/action-certificate");
+          const risk = classifyRisk(command);
+          if (risk === "high" || risk === "medium") {
+            const cert = createActionCertificate({
+              packetId: `ac:streaming-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              runId: this.sessionId ?? "streaming",
+              actionId: `action-${index}-${Date.now()}`,
+              action: {
+                toolName: tc.function.name,
+                command: command.slice(0, 500),
+                affectedFiles: [command],
+                promptSha256: undefined,
+              },
+              riskLevel: risk,
+              approval: { class: "runtime_enforced", approvedBy: "policy" },
+              assumptions: [],
+              rollbackPlan: "N/A",
+              mode: "loop",
+              role: "worker",
+            });
+            const outcome = { status: "cancelled" as const, exitCode: -1, durationMs: 0 };
+            const completedCert = completeActionCertificate(cert, outcome);
+            // Persist the certificate as sidecar artifact
+            try {
+              const { mkdir, writeFile } = await import("node:fs/promises");
+              const { join } = await import("node:path");
+              const certDir = join(process.cwd(), ".looprig", "harness", "certificates");
+              await mkdir(certDir, { recursive: true });
+              await writeFile(join(certDir, `${completedCert.packetId}.json`), JSON.stringify(completedCert, null, 2), "utf-8");
+            } catch {
+              // Certificate artifact is optional
+            }
+            // Log the certificate blocking event
+            if (diagnosticsEnabled) logger.warn("tool.action_certificate_blocked", {
+              toolName: tc.function.name, risk,
+              command: command.slice(0, 200),
+              packetId: completedCert.packetId,
+              approval: completedCert.approval.class,
+              outcome: completedCert.outcome?.status,
+            });
+            // Block execution: return tool error with the certificate evidence
+            const blockedResult = makeToolError(`Action certificate: blocked ${risk}-risk command. Certificate ${completedCert.packetId} recorded outcome=${completedCert.outcome?.status}. Command: ${command.slice(0, 200)}`);
+            return { event: makeErrorEvent(blockedResult, tc.function.name, index), result: blockedResult };
+          }
+        }
+      }
       // "ask" decisions are handled upstream in executeToolCall (async generator)
       // where yield is available for UI confirmation events.
       // Here we only enforce deny; allow or unhandled-ask fall through to execution.

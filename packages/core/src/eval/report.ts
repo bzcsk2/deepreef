@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { EvalRunReport, CaseResult } from "./types";
 import type { ScoreKind } from "../sandbox/types";
@@ -24,6 +25,12 @@ export async function saveEvalReport(
   const metaJson = JSON.stringify(report.meta, null, 2);
   await writeFile(metaPath, metaJson, "utf-8");
 
+  const scoreEligibleCount = report.suiteSummary.results.filter(
+    r => r.scoreEligible === true
+  ).length;
+  const scoreIneligibleCount = report.suiteSummary.results.filter(
+    r => r.scoreEligible === false
+  ).length;
   const totalSetupFailures = report.suiteSummary.results.filter(
     r => r.setupResult && !r.setupResult.allPassed
   ).length;
@@ -48,6 +55,9 @@ export async function saveEvalReport(
         infraErrorCount: report.suiteSummary.infraErrorCount,
         skipped: report.suiteSummary.skipped,
         averageScore: report.suiteSummary.averageScore,
+        failureBreakdown: report.suiteSummary.failureBreakdown,
+        scoreEligible: scoreEligibleCount,
+        scoreIneligible: scoreIneligibleCount,
       },
       scoreKind,
       breakdown: {
@@ -78,6 +88,36 @@ export async function saveEvalReport(
   for (const result of report.suiteSummary.results) {
     const caseDir = join(evalDir, "cases", result.caseId);
     await mkdir(caseDir, { recursive: true });
+
+    // Copy packet artifacts from packets.jsonl if present
+    const packetsPath = join(caseDir, "packets.jsonl");
+    if (existsSync(packetsPath)) {
+      const content = readFileSync(packetsPath, "utf-8");
+      const packetArtifactMap: Record<string, string> = {
+        "looprig.task-digest.v1": "task-digest.json",
+        "looprig.runtime-guard.v1": "runtime-guard.json",
+        "looprig.action-certificate.v1": "action-certificate.json",
+        "looprig.review-packet.v1": "review-packet.json",
+        "looprig.incident-packet.v1": "incident-packet.json",
+        "looprig.recovery-packet.v1": "recovery-packet.json",
+        "looprig.harness-patch.v1": "harness-patch.json",
+      };
+      for (const line of content.trim().split("\n").filter(Boolean)) {
+        try {
+          const packet = JSON.parse(line);
+          const schema = packet.schemaVersion;
+          const fileName = packetArtifactMap[schema];
+          if (fileName) {
+            const artifactPath = join(caseDir, fileName);
+            if (!existsSync(artifactPath)) {
+              await writeFile(artifactPath, JSON.stringify(packet, null, 2), "utf-8");
+            }
+          }
+        } catch {
+          // Best-effort per line
+        }
+      }
+    }
 
     if (result.setupResult) {
       await writeFile(
@@ -157,6 +197,13 @@ function generateMarkdownReport(report: EvalRunReport): string {
   }
   const scoreKindLabel = meta.environmentId === "sandbox.benchmark" && meta.officialScore ? "Official Benchmark Score" : "Local Compatibility Score";
   lines.push(`- **Score Kind**: ${scoreKindLabel}`);
+  lines.push(`- **Infrastructure Failures**: ${suiteSummary.infraErrorCount}`);
+  lines.push(`- **Task Failures**: ${suiteSummary.failed}`);
+  const fb = suiteSummary.failureBreakdown ?? {};
+  lines.push(`- **Registry Failures**: ${fb.registry_failure ?? 0}`);
+  lines.push(`- **Verifier Contract Failures**: ${fb.verifier_contract_failure ?? 0}`);
+  lines.push(`- **Cache Hit Ratio**: N/A (cache instrumentation pending)`);
+  lines.push(`- **Sandbox Fingerprint**: sandbox-fingerprint.json`);
   lines.push(`- **Official Score Eligible**: ${meta.officialScore}`);
   lines.push(`- **Model**: ${meta.model}`);
   lines.push(`- **Status**: ${meta.status}`);

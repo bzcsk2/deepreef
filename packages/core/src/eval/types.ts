@@ -11,6 +11,34 @@ export type EvalCategoryId =
 export type EvalSuiteId = "smoke" | "standard" | "stress";
 export type { EvalEnvironmentId, SandboxProviderId, PreflightResult, PreflightCheck } from "../sandbox/types";
 
+export type FailureClass =
+  | "none"
+  | "registry_failure"
+  | "suite_selection_failure"
+  | "sandbox_failure"
+  | "preflight_failure"
+  | "setup_failure"
+  | "worker_failure"
+  | "worker_empty_output"
+  | "model_failure"
+  | "tool_failure"
+  | "permission_failure"
+  | "verifier_failure"
+  | "verifier_contract_failure"
+  | "policy_gate_failure"
+  | "supervisor_failure"
+  | "user_cancel"
+  | "system_error";
+
+export interface FailureEvidence {
+  event?: string;
+  command?: string;
+  exitCode?: number | null;
+  stdoutSnippet?: string;
+  stderrSnippet?: string;
+  missing?: string[];
+}
+
 export interface EvalCaseRef {
   id: string;
   title: string;
@@ -185,6 +213,11 @@ export interface CaseResult {
   startedAt: string;
   finishedAt: string;
   error?: string;
+  failureClass: FailureClass;
+  failureReason?: string;
+  failureEvidence?: FailureEvidence;
+  scoreEligible: boolean;
+  officialScoreEligible: boolean;
 }
 
 export interface SuiteSummary {
@@ -197,6 +230,7 @@ export interface SuiteSummary {
   infraErrorCount: number;
   skipped: number;
   averageScore: number;
+  failureBreakdown: Record<string, number>;
   results: CaseResult[];
 }
 
@@ -254,4 +288,6 @@ export interface FixedEvalOptions {
   executeWorker?: (prompt: string) => Promise<string>;
   executeSupervisor?: (prompt: string) => Promise<string>;
   sandboxProvider?: import("../sandbox/types").SandboxProvider;
+  writeObservability?: (event: string, level: string, overrides?: Record<string, unknown>) => void;
+  logger?: import("../runtime-logger").RuntimeLogger;
 }

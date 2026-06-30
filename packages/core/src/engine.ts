@@ -855,6 +855,9 @@ Do not change goal status.`
     this.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })
     if (diagnosticsEnabled) submitLogger.info("submit.start", { agent: this.currentAgent, role: role ?? "unspecified", mode: mode ?? "unspecified", inputLength: userInput.length })
 
+    // Packet lifecycle: generate runId for loop mode
+    const packetRunId = submitId ?? `loop-${Date.now().toString(36)}`
+
     // TUI-FIX-10: emit loop_transition at submit start
     yield {
       role: "orchestration",
@@ -864,7 +867,94 @@ Do not change goal status.`
       },
     }
 
+    // Packet lifecycle: create actual packets and emit phases
+    let packetStore: import("./harness-evolution/packets/packet-store").PacketStore | null = null;
+    let guardBlocked = false;
+    if (mode === "loop" || mode === "subagent") {
+      yield { role: "status", content: "Task digest created", metadata: { runId: packetRunId } }
+
+      // Initialize PacketStore for this run
+      try {
+        const { PacketStore } = await import("./harness-evolution/packets/packet-store");
+        packetStore = new PacketStore({ baseDir: process.cwd(), runId: packetRunId });
+        await packetStore.init();
+
+        // Create and persist TaskDigestPacket
+        const { createTaskDigest } = await import("./harness-evolution/packets/task-digest");
+        const digestPacket = createTaskDigest({
+          packetId: `${packetRunId}:digest`,
+          runId: packetRunId,
+          mode: mode as "loop" | "eval",
+          role: (role ?? "worker") as "worker" | "supervisor" | "system",
+          goal: userInput.slice(0, 500),
+          acceptanceCriteria: [],
+          repoFacts: {
+            cwd: process.cwd(),
+            packageManager: undefined,
+            gitBranch: undefined,
+            gitClean: undefined,
+            relevantConfigFiles: [],
+          },
+          contextFiles: [],
+          constraints: [],
+          verificationPlan: [],
+          omittedContext: [],
+        });
+        await packetStore.append(digestPacket);
+        await packetStore.writeArtifact("task-digest.json", digestPacket);
+      } catch {
+        // PacketStore is optional
+      }
+
+      // Runtime guard on user input
+      const { guardPrompt, createRuntimeGuardPacket } = await import("./harness-evolution/packets/runtime-guard");
+      const guard = guardPrompt(userInput);
+      const guardPacket = createRuntimeGuardPacket({
+        packetId: `${packetRunId}:guard`,
+        runId: packetRunId,
+        prompt: userInput,
+        mode: (mode as "loop" | "eval") || "loop",
+        role: (role ?? "worker") as "worker" | "supervisor" | "system",
+      });
+      // Persist guard packet
+      if (packetStore) {
+        try {
+          await packetStore.append(guardPacket);
+          await packetStore.writeArtifact("runtime-guard.json", guardPacket);
+        } catch {}
+      }
+
+      if (guard.disposition === "allow") {
+        yield { role: "status", content: "Runtime guard allowed", metadata: { runId: packetRunId } };
+        this.logger.info("harness.guard.allow", { runId: packetRunId, mode, role, promptLength: userInput.length });
+      } else {
+        yield { role: "status", content: `Runtime guard ${guard.disposition}: ${guard.findings.map(f => f.kind).join(", ")}`, severity: "warning", metadata: { runId: packetRunId } };
+        if (guard.disposition === "block") {
+          guardBlocked = true;
+          this.logger.warn("harness.guard.block", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind), promptLength: userInput.length });
+        } else {
+          this.logger.info("harness.guard.review", { runId: packetRunId, mode, role, findings: guard.findings.map(f => f.kind) });
+        }
+      }
+      if (!guardBlocked) {
+        yield { role: "status", content: "Worker running", metadata: { runId: packetRunId } };
+      }
+    }
+
+    // If runtime guard blocked, skip execution and emit block event
+    let guardSkipped = false;
+    if (guardBlocked) {
+      guardSkipped = true;
+      yield { role: "error", content: `Runtime guard blocked: ${userInput.slice(0, 200)}`, severity: "error" };
+    }
+
     try {
+      // If guard blocked, skip the entire loop execution
+      if (guardSkipped) {
+        // Break out of try to trigger finally cleanup
+        return;
+      }
+
       // SFR-30: 使用 resolveEffectiveTools 统一计算有效工具列表
       const effectiveRole: "worker" | "supervisor" = role ?? (agentName === "supervisor" ? "supervisor" : "worker")
       const effectiveMode: WorkflowMode = mode ?? "alone"
@@ -953,7 +1043,7 @@ Do not change goal status.`
           : undefined,
         buildSupervisorExtras: () => {
           if (!this.taskLedger) return {}
-          const failedVerifications = this.taskLedger.lastVerification?.exitCode !== 0 ? 1 : 0
+          const failedVerifications = this.taskLedger?.lastVerification != null && this.taskLedger.lastVerification.exitCode !== 0 ? 1 : 0
           const doneSteps = this.taskLedger.plan.filter(s => s.status === "done").length
           return {
             consecutiveVerificationFailures: failedVerifications,
@@ -985,7 +1075,106 @@ Do not change goal status.`
       while (this.delegatedEvents.length > 0) {
         yield this.delegatedEvents.shift()!
       }
+
+      // Post-loop packet lifecycle: create review/incident/recovery packets based on outcome
+      if (mode === "loop" || mode === "subagent") {
+        try {
+          const { createReviewPacket } = await import("./harness-evolution/packets/review-packet");
+          const { createIncidentPacket, classifyFailureClass } = await import("./harness-evolution/packets/incident-packet");
+          const { createRecoveryPacket } = await import("./harness-evolution/packets/recovery-packet");
+
+          const hasVerifierFailure = this.taskLedger?.lastVerification != null && this.taskLedger.lastVerification.exitCode !== 0;
+          const workerError = this._interrupted;
+          const verdict = workerError || hasVerifierFailure ? "NEEDS_FIX" : "ACCEPTED";
+
+          // Create ReviewPacket from loop outcome
+          const reviewPacket = createReviewPacket({
+            packetId: `${packetRunId}:review`,
+            runId: packetRunId,
+            mode: (mode === "subagent" ? "subagent" : "loop") as "loop" | "eval",
+            role: "supervisor",
+            verdict,
+            findings: hasVerifierFailure ? [{
+              id: "F1:verifier",
+              severity: "major" as const,
+              category: "correctness" as const,
+              summary: "Verification command failed",
+              evidence: this.taskLedger?.lastVerification
+                ? [{ file: "verification", excerpt: `exit ${this.taskLedger.lastVerification.exitCode}` }]
+                : [],
+              recommendedChecks: [],
+            }] : [],
+            requiredChecks: [],
+            evidenceRefs: [],
+            confidence: workerError ? 0 : hasVerifierFailure ? 0.3 : 1,
+          });
+
+          if (packetStore) {
+            await packetStore.append(reviewPacket);
+            await packetStore.writeArtifact("review-packet.json", reviewPacket);
+          }
+
+          // If failed, create incident and recovery packets
+          if (verdict === "NEEDS_FIX") {
+            const failureClass = workerError ? "worker_failure" : "verifier_contract_failure";
+            const fc = classifyFailureClass(failureClass);
+            const incidentPacket = createIncidentPacket({
+              packetId: `${packetRunId}:incident`,
+              runId: packetRunId,
+              mode: (mode === "subagent" ? "subagent" : "loop") as "loop" | "eval",
+              role: "system",
+              incidents: [{
+                id: `I1:${failureClass}`,
+                kind: fc.kind,
+                severity: fc.severity,
+                failureClass,
+                harnessLayer: fc.harnessLayer,
+                summary: workerError ? "Worker interrupted by user" : "Verification command failed",
+                evidence: [],
+                recommendedChecks: [],
+              }],
+            });
+
+            const recoveryPacket = createRecoveryPacket({
+              packetId: `${packetRunId}:recovery`,
+              runId: packetRunId,
+              mode: (mode === "subagent" ? "subagent" : "loop") as "loop" | "eval",
+              role: "system",
+              incidents: incidentPacket.incidents,
+            });
+
+            if (packetStore) {
+              await packetStore.append(incidentPacket);
+              await packetStore.writeArtifact("incident-packet.json", incidentPacket);
+              await packetStore.append(recoveryPacket);
+              await packetStore.writeArtifact("recovery-packet.json", recoveryPacket);
+            }
+
+            this.logger.info("harness.packet.created", {
+              packetId: incidentPacket.packetId, packetType: "incident",
+              runId: packetRunId, mode, failureClass,
+            });
+          }
+
+          this.logger.info("harness.packet.created", {
+            packetId: reviewPacket.packetId, packetType: "review",
+            runId: packetRunId, mode, verdict,
+          });
+        } catch {
+          // Packet lifecycle is optional
+        }
+      }
     } finally {
+      // Packet lifecycle: emit completed phase
+      if (mode === "loop" || mode === "subagent") {
+        yield {
+          role: "status",
+          content: this._interrupted ? "Interrupted" : "Accepted",
+          severity: this._interrupted ? "warning" : undefined,
+          metadata: { runId: packetRunId },
+        };
+      }
+
       // TUI-FIX-10: emit loop_transition at submit end
       yield {
         role: "orchestration",
