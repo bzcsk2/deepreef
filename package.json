@@ -47,7 +47,10 @@
   "scripts": {
     "dev": "bun run packages/cli/src/index.ts",
     "build": "bun build ./packages/cli/src/index.ts --outdir ./dist --target node --format esm --external @anthropic-ai/sdk --external @anthropic-ai/claude-agent-sdk --banner '#!/usr/bin/env node'",
-    "prepublishOnly": "bun run build",
+    "eval:assets:build": "bun run scripts/eval-assets/build-swe-snapshots.ts",
+    "eval:assets:verify": "bun run scripts/eval-assets/verify-assets.ts",
+    "eval:assets:size": "bun run scripts/eval-assets/check-size.ts",
+    "prepublishOnly": "bun run build && bun run eval:assets:verify && bun run eval:assets:size",
     "pack:dry-run": "npm pack --dry-run",
     "smoke:cli": "node ./dist/index.js --help",
     "test": "bun test packages/core packages/tools packages/tui packages/cli packages/security",
