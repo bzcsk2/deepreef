@@ -5,7 +5,7 @@
  * agentConfigFor bilingual, buildVerificationGatePrompt bilingual.
  */
 import { describe, test, expect, beforeEach } from "bun:test";
-import { setPromptLocale, getPromptLocale, normalizePromptLocale, isChinesePromptLocale } from "../src/prompt-locale";
+import { setPromptLocale, getPromptLocale, normalizePromptLocale, isChinesePromptLocale, DEFAULT_LOCALE } from "../src/prompt-locale";
 import { buildSystemPrompt } from "../src/system-prompt";
 import { agentConfigFor, getAgent, getAgentSystemPrompt } from "../src/agent";
 import type { AgentDefinition } from "../src/agent";
@@ -20,8 +20,8 @@ describe("prompt-locale core", () => {
     setPromptLocale("zh-CN");
   });
 
-  test("default locale is zh-CN", () => {
-    expect(getPromptLocale()).toBe("zh-CN");
+  test("DEFAULT_LOCALE export is zh-CN per spec", () => {
+    expect(DEFAULT_LOCALE).toBe("zh-CN");
   });
 
   test("setPromptLocale/getPromptLocale round-trip", () => {
@@ -37,7 +37,7 @@ describe("prompt-locale core", () => {
     expect(normalizePromptLocale("zh-CN")).toBe("zh-CN");
     expect(normalizePromptLocale("中文")).toBe("zh-CN");
     expect(normalizePromptLocale("chinese")).toBe("zh-CN");
-    expect(normalizePromptLocale("fr")).toBe("en"); // unknown -> default en
+    expect(normalizePromptLocale("fr")).toBe("zh-CN"); // unknown -> default zh-CN
   });
 
   test("isChinesePromptLocale", () => {

@@ -12,7 +12,8 @@ import { join, dirname } from "node:path";
 
 export type PromptLocale = "zh-CN" | "en";
 
-const DEFAULT_LOCALE: PromptLocale = "en";
+/** @note 按 PROMPT_LOCALE_SPEC.md 要求默认 locale 为 zh-CN */
+export const DEFAULT_LOCALE: PromptLocale = "zh-CN";
 
 let currentLocale: PromptLocale = DEFAULT_LOCALE;
 

@@ -57,16 +57,16 @@ export function buildWorkerEvalPrompt(
       ]
 
   if (benchmarkCase.repository) {
-    parts.push(`### Repository`)
+    parts.push(`### ${isZh ? "仓库" : "Repository"}`)
     parts.push(``)
     parts.push(benchmarkCase.repository)
     parts.push(``)
   }
 
   if (tokenBudget > 0) {
-    parts.push(`### Constraints`)
+    parts.push(`### ${isZh ? "约束条件" : "Constraints"}`)
     parts.push(``)
-    parts.push(`Token budget: ${tokenBudget}`)
+    parts.push(`${isZh ? "Token 预算" : "Token budget"}: ${tokenBudget}`)
     parts.push(``)
   }
 
@@ -128,7 +128,7 @@ export function buildSupervisorEvalPrompt(
       ? "阅读任务、Worker 报告并提供结构化评估。"
       : "Read the task, the Worker report, and provide a structured assessment.",
     ``,
-    `### Original Objective`,
+    `### ${isZh ? "原始目标" : "Original Objective"}`,
     objective,
     ``,
   ]

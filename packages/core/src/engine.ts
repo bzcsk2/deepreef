@@ -18,6 +18,7 @@ import type { WorkflowMode } from "./dual-agent-runtime/types.js"
 import { resolveEffectiveTools } from "./resolve-effective-tools.js"
 import type { WorkflowPhase } from "./workflow-coordinator/types.js"
 import { SubagentRegistry, checkSubagentPermission } from "./subagent/index.js"
+import { getSubagentSystemPrompt } from "./subagent/definition.js"
 import type { SubagentRunOptions, SubagentRunResult, SubagentDefinition } from "./subagent/index.js"
 import type { ThinkingMode } from "./provider-thinking.js"
 import { createRuntimeLoggerFromEnv, type RuntimeLogger } from "./runtime-logger.js"
@@ -1387,7 +1388,7 @@ Do not change goal status.`
       }
 
       const agentCfg = agentConfigFor("build", {
-        systemPrompt: def.systemPrompt,
+        systemPrompt: getSubagentSystemPrompt(def),
         toolNames: this.subagentRegistry.getEffectiveTools(def) ?? undefined,
         model: typeof options.model === "string" && options.model !== "inherit" ? options.model : undefined,
       })

@@ -71,11 +71,24 @@ async function main(): Promise<void> {
   // Load persisted prompt locale at startup
   const promptLocale = loadPromptLocaleFromDisk(process.cwd()) ?? "zh-CN"
   setPromptLocale(promptLocale)
-  let baseSystemPrompt = buildSystemPrompt(process.cwd(), {
-    osPlatform: platform,
-    shellBackend: `${shellBackend.id} (${shellBackend.executable})`,
-    locale: promptLocale,
-  })
+  let currentPromptLocale: import("@deepreef/core").PromptLocale = promptLocale
+  let pluginRulesPrompt = ""
+  let memoryContextPrompt = ""
+
+  function rebuildBaseSystemPrompt(locale = currentPromptLocale): string {
+    currentPromptLocale = locale
+    return [
+      buildSystemPrompt(process.cwd(), {
+        osPlatform: platform,
+        shellBackend: `${shellBackend.id} (${shellBackend.executable})`,
+        locale,
+      }),
+      pluginRulesPrompt,
+      memoryContextPrompt,
+    ].filter(Boolean).join("\n\n")
+  }
+
+  let baseSystemPrompt = rebuildBaseSystemPrompt(promptLocale)
 
   // Render-first startup: plugins/default tools are loaded in the background.
   // The TUI accepts input immediately; the first submit waits for this promise.
@@ -102,7 +115,8 @@ async function main(): Promise<void> {
 
       const rulesResult = pluginRuntime.compileRules()
       if (rulesResult.systemPrompt) {
-        baseSystemPrompt += "\n\n" + rulesResult.systemPrompt
+        pluginRulesPrompt = rulesResult.systemPrompt
+        baseSystemPrompt = rebuildBaseSystemPrompt()
         engine.setSystemPrompt(baseSystemPrompt)
       }
 
@@ -176,9 +190,10 @@ async function main(): Promise<void> {
         }).catch(() => null)
         if (memContext && typeof memContext === "object" && "context" in memContext) {
           const ctx = (memContext as { context: string }).context
-          if (ctx) baseSystemPrompt += `\n\n<deepreef-memory-context>\n${ctx}\n</deepreef-memory-context>`
+          if (ctx) memoryContextPrompt = `<deepreef-memory-context>\n${ctx}\n</deepreef-memory-context>`
         }
         // P0-1: Re-set system prompt after memory context is appended
+        baseSystemPrompt = rebuildBaseSystemPrompt()
         engine.setSystemPrompt(baseSystemPrompt)
       }
 
@@ -266,7 +281,7 @@ async function main(): Promise<void> {
         }
       : config
     const supervisorEngine = new ReasonixEngine(supervisorConfig, clearReadTracker)
-    supervisorEngine.setSystemPrompt(baseSystemPrompt)
+    supervisorEngine.setSystemPrompt(rebuildBaseSystemPrompt())
     // SFR-40: 应用 Supervisor Profile 的 thinking 模式（与 Worker 独立）
     supervisorEngine.setThinkingMode(supervisorProfile.thinking)
 
@@ -383,6 +398,7 @@ async function main(): Promise<void> {
       dualRuntime,
       workflowCoordinator,
       { os: platform, shell: shellBackend.id, shellBackend: `${shellBackend.id} (${shellBackend.executable})` },
+      rebuildBaseSystemPrompt,
     )
   } finally {
     await Promise.allSettled([pluginReady, memoryReady])
@@ -465,6 +481,7 @@ async function runTUIMode(
   dualRuntime?: DualAgentRuntime,
   workflowCoordinator?: WorkflowCoordinator,
   platformInfo?: { os: string; shell: string; shellBackend: string },
+  rebuildBaseSystemPrompt?: (locale?: import("@deepreef/core").PromptLocale) => string,
 ): Promise<void> {
   const status = pluginRuntime.getStatus()
   const pluginCount = status.loadedPlugins.length
@@ -485,7 +502,7 @@ async function runTUIMode(
   try {
     const { waitUntilExit } = await render(
       React.createElement(App, { engine, config, pluginCount, contentPackCount, assetCounts, diagnosticCounts, onUserInput, beforeSubmit, dualRuntime, workflowCoordinator, onPromptLocaleChange: (locale: "zh-CN" | "en") => {
-        const newPrompt = buildSystemPrompt(process.cwd(), {
+        const newPrompt = rebuildBaseSystemPrompt?.(locale) ?? buildSystemPrompt(process.cwd(), {
           osPlatform: platformInfo?.os ?? "linux",
           shellBackend: platformInfo?.shellBackend ?? "",
           locale,
