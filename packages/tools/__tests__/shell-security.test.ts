@@ -25,6 +25,21 @@ describe("matchDeniedShellPattern", () => {
     expect(matchDeniedShellPattern("rm -r /*", "bash")).not.toBeNull()
   })
 
+  it("rm -r src/* is NOT denied (regression: was a false positive)", () => {
+    expect(matchDeniedShellPattern("rm -r src/*", "bash")).toBeNull()
+    expect(matchDeniedShellPattern("rm -rf build/*", "bash")).toBeNull()
+  })
+
+  it("rm root variants with -- are denied", () => {
+    expect(matchDeniedShellPattern("rm -rf -- /", "bash")).not.toBeNull()
+    expect(matchDeniedShellPattern("rm -rf --no-preserve-root /", "bash")).not.toBeNull()
+  })
+
+  it("rm with multiple flags is denied", () => {
+    expect(matchDeniedShellPattern("rm -rf -v /", "bash")).not.toBeNull()
+    expect(matchDeniedShellPattern("rm -r -f -v /*", "bash")).not.toBeNull()
+  })
+
   it("sudo is denied", () => {
     expect(matchDeniedShellPattern("sudo rm -rf /", "bash")).not.toBeNull()
     expect(matchDeniedShellPattern("sudo apt update", "bash")).not.toBeNull()

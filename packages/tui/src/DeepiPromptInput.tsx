@@ -227,6 +227,16 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     cursorRef.current = newCursor;
   }
 
+  function commitHistoryIdx(next: number) {
+    setHistoryIdx(next);
+    historyIdxRef.current = next;
+  }
+
+  function commitDraftBeforeHistory(next: string) {
+    setDraftBeforeHistory(next);
+    draftBeforeHistoryRef.current = next;
+  }
+
   useImperativeHandle(ref, () => ({
     writeText: (text: string) => {
       commitInput(text, text.length, []);
@@ -265,8 +275,8 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     if (!injectedText || lastInjectionIdRef.current === injectedText.id) return;
     lastInjectionIdRef.current = injectedText.id;
     commitInput(injectedText.text, injectedText.text.length, []);
-    setHistoryIdx(-1);
-    setDraftBeforeHistory('');
+    commitHistoryIdx(-1);
+    commitDraftBeforeHistory('');
   }, [injectedText]);
 
   /**
@@ -277,8 +287,8 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
   const submitLine = useCallback(() => {
     const text = expandTrackedPastes(inputRef.current, pastePartsRef.current).trim();
     if (!text) return;
-    setHistoryIdx(-1);
-    setDraftBeforeHistory('');
+    commitHistoryIdx(-1);
+    commitDraftBeforeHistory('');
     commitInput('', 0, []);
     onSubmit(text);
   }, [onSubmit]);
@@ -420,11 +430,11 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
         const prev = historyIdxRef.current;
         const next = Math.min(prev + 1, history.length - 1);
         if (next >= 0) {
-          if (prev < 0) setDraftBeforeHistory(inputRef.current);
+          if (prev < 0) commitDraftBeforeHistory(inputRef.current);
           const item = history[next] ?? '';
           commitInput(item, item.length, []);
         }
-        setHistoryIdx(next);
+        commitHistoryIdx(next);
       }
       return;
     }
@@ -437,11 +447,11 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
         const next = prev - 1;
         if (next < 0) {
           commitInput(draftBeforeHistoryRef.current, draftBeforeHistoryRef.current.length, []);
-          setHistoryIdx(-1);
+          commitHistoryIdx(-1);
         } else {
           const item = history[next] ?? '';
           commitInput(item, item.length, []);
-          setHistoryIdx(next);
+          commitHistoryIdx(next);
         }
       }
       return;

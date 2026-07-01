@@ -308,6 +308,16 @@ describe("glob", () => {
     expect(p2.filenames).not.toContain(".ssh/id_rsa")
     expect(p2.filenames).toContain("normal.ts")
   })
+
+  it("denies globbing a sensitive directory (.ssh/)", async () => {
+    mkdirSync(join(tmpDir, ".ssh"))
+    writeFileSync(join(tmpDir, ".ssh", "id_rsa"), "key", "utf-8")
+    const tool = createGlobTool()
+    const r = await tool.execute({ pattern: "**/*", path: join(tmpDir, ".ssh") }, ctx(tmpDir))
+    expect(r.isError).toBe(true)
+    const p = JSON.parse(r.content as string)
+    expect(p.error).toContain("sensitive")
+  })
 })
 
 describe("grep", () => {
@@ -330,6 +340,15 @@ describe("grep", () => {
     const { createGrepTool } = await import("../src/grep.js")
     const tool = createGrepTool()
     const r = await tool.execute({ pattern: "SECRET", path: join(tmpDir, ".env") }, ctx(tmpDir))
+    expect(r.isError).toBe(true)
+    const p = JSON.parse(r.content as string)
+    expect(p.error).toContain("sensitive")
+  })
+
+  it("denies searching a sensitive directory (.ssh/)", async () => {
+    const { createGrepTool } = await import("../src/grep.js")
+    const tool = createGrepTool()
+    const r = await tool.execute({ pattern: "key", path: join(tmpDir, ".ssh") }, ctx(tmpDir))
     expect(r.isError).toBe(true)
     const p = JSON.parse(r.content as string)
     expect(p.error).toContain("sensitive")
