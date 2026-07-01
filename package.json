@@ -54,6 +54,7 @@
     "pack:dry-run": "npm pack --dry-run",
     "smoke:cli": "node ./dist/index.js --help",
     "test": "bun test packages/core packages/tools packages/tui packages/cli packages/security",
+    "test:eval": "bun test packages/core/src/eval/assets packages/core/src/eval/materialize packages/core/src/eval/__tests__",
     "test:all": "bun run test && cd packages/memory && bun run test",
     "test:memory": "cd packages/memory && bun run test",
     "benchmark:fusion": "bun run packages/core/scripts/benchmark-matrix.ts",
