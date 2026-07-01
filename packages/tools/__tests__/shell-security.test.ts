@@ -40,6 +40,18 @@ describe("matchDeniedShellPattern", () => {
     expect(matchDeniedShellPattern("rm -r -f -v /*", "bash")).not.toBeNull()
   })
 
+  it("rm root as non-first operand is denied", () => {
+    expect(matchDeniedShellPattern("rm -rf build /", "bash")).not.toBeNull()
+    expect(matchDeniedShellPattern("rm -rf ./tmp /*", "bash")).not.toBeNull()
+    expect(matchDeniedShellPattern("rm -rf /tmp/cache /", "bash")).not.toBeNull()
+  })
+
+  it("rm with r-flag not required when deleting specific paths under root", () => {
+    // These delete specific directories, not root itself
+    expect(matchDeniedShellPattern("rm -rf /build", "bash")).toBeNull()
+    expect(matchDeniedShellPattern("rm -rf /tmp/*", "bash")).toBeNull()
+  })
+
   it("sudo is denied", () => {
     expect(matchDeniedShellPattern("sudo rm -rf /", "bash")).not.toBeNull()
     expect(matchDeniedShellPattern("sudo apt update", "bash")).not.toBeNull()

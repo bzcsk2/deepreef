@@ -7,10 +7,11 @@ import { isSensitive } from "../sensitive.js"
 import type { ShellBackendId } from "../platform/shell-backend.js"
 
 // Recursive root deletion: rm -rf /, rm -rf /*
-// Path must be exactly "/" or "/*" — subdirectories like "src/*" are not denied.
-// Supports flag variants: rm -rf -- /, rm -rf -v /, rm -rf --no-preserve-root /
-// Uses \S+ for flags to handle arbitrary flag combinations and the -- terminator.
-const RM_ROOT = /\brm\s+(?:-\S+\s+)*\/(?:\*)?(?:\s|$)/
+// Matches rm with at least one -r flag, where ANY operand token is "/" or "/*".
+// Subdirectories like "src/*" are not denied — only bare "/" or "/*" count.
+// Multi-operand cases: rm -rf build /, rm -rf ./tmp /* are also denied.
+// Uses backtrackable flag groups to handle arbitrary flag order and -- terminator.
+const RM_ROOT = /\brm\s+(?:-\S+\s+)*(?:-\S*[rR]\S*\s+)(?:-\S+\s+)*(?:\S+\s+)*\/(?:\*)?(?:\s|$)/
 // Privileged escalation
 const SUDO = /\bsudo\b/
 // Disk formatting / partitioning
