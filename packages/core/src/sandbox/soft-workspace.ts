@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { relative, isAbsolute } from "node:path";
 import type { SandboxProvider, SandboxCommand, SandboxResult, SandboxCapabilities } from "./types";
 
 /**
@@ -23,27 +24,39 @@ export class SoftWorkspaceProvider implements SandboxProvider {
   }
 
   /**
-   * 验证 cwd 在至少一个允许根目录下，否则回退到最近的允许根目录。
+   * 验证 cwd 在至少一个允许根目录下，否则抛出错误。
+   * 使用 path.relative 而非 startsWith 来避免路径边界误判（如 /tmp/work2 误认为属于 /tmp/work）。
    */
   private resolveContainedCwd(cwd: string, allowRoots: string[]): string {
-    // 如果允许根目录列表为空，使用 cwd 原值（兼容旧行为）
     if (allowRoots.length === 0) return cwd;
 
     const resolved = resolveReal(cwd);
     for (const root of allowRoots) {
       const resolvedRoot = resolveReal(root);
-      if (resolved.startsWith(resolvedRoot)) {
+      const rel = relative(resolvedRoot, resolved);
+      if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
         return resolved;
       }
     }
-    // 回退到第一个允许根目录
-    return resolveReal(allowRoots[0]!);
+    throw new SandboxCwdError(
+      `cwd ${cwd} is outside all allowed roots: ${allowRoots.join(", ")}`
+    );
   }
 
   async run(input: SandboxCommand): Promise<SandboxResult> {
     const timeout = input.timeoutMs ?? 60_000;
     const allRoots = [...(input.readRoots ?? []), ...(input.writeRoots ?? [])];
-    const safeCwd = this.resolveContainedCwd(input.cwd, allRoots);
+    let safeCwd: string;
+    try {
+      safeCwd = this.resolveContainedCwd(input.cwd, allRoots);
+    } catch (e) {
+      return {
+        stdout: "",
+        stderr: e instanceof Error ? e.message : String(e),
+        exitCode: 1,
+        timedOut: false,
+      };
+    }
 
     try {
       const result = spawnSync(input.command, [], {
@@ -74,6 +87,15 @@ export class SoftWorkspaceProvider implements SandboxProvider {
         timedOut: !!(error.killed || error.signal === "SIGTERM"),
       };
     }
+  }
+}
+
+export class SandboxCwdError extends Error {
+  readonly path: string;
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxCwdError";
+    this.path = message;
   }
 }
 

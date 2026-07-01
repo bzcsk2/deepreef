@@ -45,7 +45,7 @@ export function createGrepTool(): AgentTool {
       const pattern = args.pattern
       const include = typeof args.include === "string" ? args.include : undefined
 
-      if (isSensitive(searchPath)) {
+      if (isSensitive(searchPath) || isSensitive(searchPath + "/")) {
         return { content: safeStringify({ error: `Searching sensitive path is denied: ${args.path ?? ctx.cwd}` }), isError: true }
       }
 

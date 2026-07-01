@@ -201,16 +201,35 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
   const cursorRef = useRef(cursor);
   const draftBeforeHistoryRef = useRef(draftBeforeHistory);
 
+  const historyIdxRef = useRef(historyIdx);
+
   useEffect(() => { inputRef.current = input; }, [input]);
   useEffect(() => { pastePartsRef.current = pasteParts; }, [pasteParts]);
   useEffect(() => { cursorRef.current = cursor; }, [cursor]);
   useEffect(() => { draftBeforeHistoryRef.current = draftBeforeHistory; }, [draftBeforeHistory]);
+  useEffect(() => { historyIdxRef.current = historyIdx; }, [historyIdx]);
+
+  function commitInput(
+    newInput: string,
+    newCursor: number,
+    newPasteParts: TrackedPaste[],
+  ) {
+    setInput(newInput);
+    setCursor(newCursor);
+    setPasteParts(newPasteParts);
+    inputRef.current = newInput;
+    cursorRef.current = newCursor;
+    pastePartsRef.current = newPasteParts;
+  }
+
+  function commitCursor(newCursor: number) {
+    setCursor(newCursor);
+    cursorRef.current = newCursor;
+  }
 
   useImperativeHandle(ref, () => ({
     writeText: (text: string) => {
-      setInput(text);
-      setCursor(text.length);
-      setPasteParts([]);
+      commitInput(text, text.length, []);
     }
   }));
 
@@ -232,16 +251,12 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       const lineCount = countLines(content);
       const marker = formatPasteMarker(lineCount, t().pasteSummary);
       const next = insertSummarizedPasteAt(currentInput, currentParts, insertPos, content, marker);
-      setInput(next.input);
-      setPasteParts(next.parts);
-      setCursor(next.cursor);
+      commitInput(next.input, next.cursor, next.parts);
       return;
     }
 
     const next = insertPlainTextAt(currentInput, currentParts, insertPos, normalized);
-    setInput(next.input);
-    setPasteParts(next.parts);
-    setCursor(next.cursor);
+    commitInput(next.input, next.cursor, next.parts);
   }, []);
 
   useEffect(() => { onChange?.(input); }, [input, onChange]);
@@ -249,9 +264,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
   useEffect(() => {
     if (!injectedText || lastInjectionIdRef.current === injectedText.id) return;
     lastInjectionIdRef.current = injectedText.id;
-    setInput(injectedText.text);
-    setCursor(injectedText.text.length);
-    setPasteParts([]);
+    commitInput(injectedText.text, injectedText.text.length, []);
     setHistoryIdx(-1);
     setDraftBeforeHistory('');
   }, [injectedText]);
@@ -266,9 +279,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     if (!text) return;
     setHistoryIdx(-1);
     setDraftBeforeHistory('');
-    setInput('');
-    setCursor(0);
-    setPasteParts([]);
+    commitInput('', 0, []);
     onSubmit(text);
   }, [onSubmit]);
 
@@ -359,37 +370,33 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     // Ctrl+左箭头: 跳到前一个词边界（使用 charClass 按词类跳转）
     // 必须在普通左箭头之前，否则 Ctrl+Left 会被左箭头分支拦截
     if (key.leftArrow && key.ctrl) {
-      const curInput = inputRef.current;
-      setCursor(prev => findWordLeft(curInput, prev));
+      commitCursor(findWordLeft(inputRef.current, cursorRef.current));
       return;
     }
 
     // Ctrl+右箭头: 跳到后一个词边界
     // 必须在普通右箭头之前
     if (key.rightArrow && key.ctrl) {
-      const curInput = inputRef.current;
-      setCursor(prev => findWordRight(curInput, prev));
+      commitCursor(findWordRight(inputRef.current, cursorRef.current));
       return;
     }
 
     // 左箭头 — 光标左移（不越过行首）
     if (key.leftArrow) {
-      setCursor(prev => Math.max(0, prev - 1));
+      commitCursor(Math.max(0, cursorRef.current - 1));
       return;
     }
 
     // 右箭头 — 光标右移（不越过行尾）
     if (key.rightArrow) {
-      setCursor(prev => Math.min(inputRef.current.length, prev + 1));
+      commitCursor(Math.min(inputRef.current.length, cursorRef.current + 1));
       return;
     }
 
     // Ctrl+Enter — 在当前光标位置插入换行符
     if (key.return && key.ctrl) {
       const next = insertPlainTextAt(inputRef.current, pastePartsRef.current, cursorRef.current, '\n');
-      setInput(next.input);
-      setPasteParts(next.parts);
-      setCursor(next.cursor);
+      commitInput(next.input, next.cursor, next.parts);
       return;
     }
 
@@ -410,18 +417,14 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     // 后续上翻时从 history 数组中取出对应的历史项
     if (key.upArrow && !key.ctrl) {
       if (!suppressHistory) {
-        const curInput = inputRef.current;
-        setHistoryIdx(prev => {
-          const next = Math.min(prev + 1, history.length - 1);
-          if (next >= 0) {
-            if (prev < 0) setDraftBeforeHistory(curInput);
-            const item = history[next] ?? '';
-            setInput(item);
-            setCursor(item.length);
-            setPasteParts([]);
-          }
-          return next;
-        });
+        const prev = historyIdxRef.current;
+        const next = Math.min(prev + 1, history.length - 1);
+        if (next >= 0) {
+          if (prev < 0) setDraftBeforeHistory(inputRef.current);
+          const item = history[next] ?? '';
+          commitInput(item, item.length, []);
+        }
+        setHistoryIdx(next);
       }
       return;
     }
@@ -430,21 +433,16 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     // 超出历史范围（next < 0）时恢复保存的当前草稿 draftBeforeHistory
     if (key.downArrow && !key.ctrl) {
       if (!suppressHistory) {
-        const curDraft = draftBeforeHistoryRef.current;
-        setHistoryIdx(prev => {
-          const next = prev - 1;
-          if (next < 0) {
-            setInput(curDraft);
-            setCursor(curDraft.length);
-            setPasteParts([]);
-            return -1;
-          }
+        const prev = historyIdxRef.current;
+        const next = prev - 1;
+        if (next < 0) {
+          commitInput(draftBeforeHistoryRef.current, draftBeforeHistoryRef.current.length, []);
+          setHistoryIdx(-1);
+        } else {
           const item = history[next] ?? '';
-          setInput(item);
-          setCursor(item.length);
-          setPasteParts([]);
-          return next;
-        });
+          commitInput(item, item.length, []);
+          setHistoryIdx(next);
+        }
       }
       return;
     }
@@ -455,33 +453,32 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       const pos = cursorRef.current;
       const newCursor = findWordLeft(curInput, pos);
       if (newCursor < pos) {
-        setInput(prev => prev.slice(0, newCursor) + prev.slice(pos));
-        setCursor(newCursor);
+        commitInput(curInput.slice(0, newCursor) + curInput.slice(pos), newCursor, pastePartsRef.current);
       }
       return;
     }
 
     // Ctrl+A — 光标回到行首
     if (_input === 'a' && key.ctrl) {
-      setCursor(0);
+      commitCursor(0);
       return;
     }
 
     // Ctrl+E — 光标跳到行尾
     if (_input === 'e' && key.ctrl) {
-      setCursor(inputRef.current.length);
+      commitCursor(inputRef.current.length);
       return;
     }
 
     // Home — 光标回到行首
     if (key.home) {
-      setCursor(0);
+      commitCursor(0);
       return;
     }
 
     // End — 光标跳到行尾
     if (key.end) {
-      setCursor(inputRef.current.length);
+      commitCursor(inputRef.current.length);
       return;
     }
 
@@ -494,22 +491,20 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       const endingPart = findPastePartEndingAt(curParts, pos);
       if (endingPart) {
         const removed = removePastePart(curInput, curParts, endingPart);
-        setInput(removed.input);
-        setPasteParts(removed.parts);
-        setCursor(removed.cursor);
+        commitInput(removed.input, removed.cursor, removed.parts);
         return;
       }
       const insidePart = findPastePartAt(curParts, pos);
       if (insidePart) {
         const removed = removePastePart(curInput, curParts, insidePart);
-        setInput(removed.input);
-        setPasteParts(removed.parts);
-        setCursor(removed.cursor);
+        commitInput(removed.input, removed.cursor, removed.parts);
         return;
       }
-      setInput(curInput.slice(0, pos - 1) + curInput.slice(pos));
-      setPasteParts(shiftPasteParts(curParts, pos, -1));
-      setCursor(pos - 1);
+      commitInput(
+        curInput.slice(0, pos - 1) + curInput.slice(pos),
+        pos - 1,
+        shiftPasteParts(curParts, pos, -1),
+      );
       return;
     }
 
@@ -522,13 +517,14 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       const partAtCursor = curParts.find((part) => part.start === pos);
       if (partAtCursor) {
         const removed = removePastePart(curInput, curParts, partAtCursor);
-        setInput(removed.input);
-        setPasteParts(removed.parts);
-        setCursor(removed.cursor);
+        commitInput(removed.input, removed.cursor, removed.parts);
         return;
       }
-      setInput(curInput.slice(0, pos) + curInput.slice(pos + 1));
-      setPasteParts(shiftPasteParts(curParts, pos + 1, -1));
+      commitInput(
+        curInput.slice(0, pos) + curInput.slice(pos + 1),
+        cursorRef.current,
+        shiftPasteParts(curParts, pos + 1, -1),
+      );
       return;
     }
 
@@ -536,23 +532,22 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     if (_input === 'd' && key.ctrl) {
       const pos = cursorRef.current;
       if (pos < inputRef.current.length) {
-        setInput(prev => prev.slice(0, pos) + prev.slice(pos + 1));
+        const cur = inputRef.current;
+        commitInput(cur.slice(0, pos) + cur.slice(pos + 1), pos, pastePartsRef.current);
       }
       return;
     }
 
     // Ctrl+U — 清空整行输入
     if (_input === 'u' && key.ctrl) {
-      setInput('');
-      setCursor(0);
-      setPasteParts([]);
+      commitInput('', 0, []);
       return;
     }
 
     // Ctrl+K — 删除光标到行尾的内容
     if (_input === 'k' && key.ctrl) {
       const pos = cursorRef.current;
-      setInput(prev => prev.slice(0, pos));
+      commitInput(inputRef.current.slice(0, pos), pos, pastePartsRef.current);
       return;
     }
 
@@ -562,9 +557,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     // 普通字符输入：在光标位置插入字符，光标后移
     if (_input) {
       const next = insertPlainTextAt(inputRef.current, pastePartsRef.current, cursorRef.current, _input);
-      setInput(next.input);
-      setPasteParts(next.parts);
-      setCursor(next.cursor);
+      commitInput(next.input, next.cursor, next.parts);
     }
   });
 

@@ -6,8 +6,9 @@ import { resolve } from "node:path"
 import { isSensitive } from "../sensitive.js"
 import type { ShellBackendId } from "../platform/shell-backend.js"
 
-// Recursive root deletion: rm -rf /, rm -r /*
-const RM_ROOT = /\brm\s+(?:-[A-Za-z]*r[A-Za-z]*\s+.*\/\*|.*-[A-Za-z]*r[A-Za-z]*\s+\/)/
+// Recursive root deletion: rm -rf /, rm -rf /*
+// Path must be exactly "/" or "/*" to match — subdirectories like "src/*" are not denied.
+const RM_ROOT = /\brm\s+(?:-[A-Za-z]*r[A-Za-z]*\s+)?\/(?:\*)?(?:\s|$)/
 // Privileged escalation
 const SUDO = /\bsudo\b/
 // Disk formatting / partitioning

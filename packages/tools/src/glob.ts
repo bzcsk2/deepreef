@@ -40,6 +40,10 @@ export function createGlobTool(): AgentTool {
       }
       const pattern = args.pattern
 
+      if (isSensitive(searchPath) || isSensitive(searchPath + "/")) {
+        return { content: safeStringify({ error: `Globbing sensitive path is denied: ${args.path ?? ctx.cwd}` }), isError: true }
+      }
+
       const t0 = Date.now()
       try {
         const results = await fg(pattern, {
