@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import {
   BackgroundTaskManager,
+  getBackgroundTaskManagerFor,
   __resetBackgroundTaskManagers,
 } from "../src/shell-dual-track/background-task-manager.js"
 import { createDualTrackBashTool, sleepCommand, spawnTestShell } from "../src/shell-dual-track/bash-dual-track.js"
@@ -198,6 +199,45 @@ describe("dual-track bash tool — soft timeout escalate", () => {
     expect(p.mode).toBe("foreground")
     expect(p.stdout.trim()).toBe("hello")
   })
+
+  it("when background full, soft timeout does NOT escalate and command completes in foreground", async () => {
+    // Fill background capacity with dummy tasks via the session's manager
+    const mgr = getBackgroundTaskManagerFor("test-session", workDir)
+    // Create 8 dummy child processes to fill MAX_CONCURRENT (8)
+    const dummies: import("node:child_process").ChildProcess[] = []
+    for (let i = 0; i < 8; i++) {
+      const dummy = spawnTestShell(sleepCommand(30), workDir)
+      dummies.push(dummy)
+      mgr.adopt(dummy, {
+        command: "dummy",
+        label: `dummy-${i}`,
+        hardTimeoutMs: 60_000,
+        backend: "bash",
+      })
+    }
+
+    const tool = createDualTrackBashTool()
+    // A command that would normally escalate (auto classification)
+    const start = Date.now()
+    // Use timeout_ms to ensure it doesn't hang forever
+    const r = await tool.execute(
+      { command: "echo 'adopt failure test'", timeout_ms: 10_000 },
+      makeCtx(workDir) as any,
+    )
+    const elapsed = Date.now() - start
+
+    expect(r.isError).toBe(false)
+    // Should complete in foreground since adopt was prevented
+    expect(elapsed).toBeLessThan(5_000)
+    const p = JSON.parse(r.content as string)
+    expect(p.mode).toBe("foreground")
+    expect(p.stdout).toContain("adopt failure test")
+
+    // Cleanup dummies
+    for (const d of dummies) {
+      try { d.kill("SIGKILL") } catch { /* ignore */ }
+    }
+  }, 15_000)
 
   it("does NOT escalate when background:false is explicit", async () => {
     const tool = createDualTrackBashTool()

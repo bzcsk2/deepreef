@@ -72,3 +72,10 @@ export async function rerank(
 export function isRerankerAvailable(): boolean {
   return pipeline !== null;
 }
+
+/** Reset the module-level reranker cache (useful for testing or lifecycle changes). */
+export function resetRerankerCache(): void {
+  pipeline = null;
+  pipelineLoading = null;
+  pipelineUnavailable = false;
+}

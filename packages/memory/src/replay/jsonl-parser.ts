@@ -26,7 +26,7 @@ export interface ParsedTranscript {
 
 function deriveProject(cwd: string): string {
   if (!cwd) return "unknown";
-  const parts = cwd.split("/").filter(Boolean);
+  const parts = cwd.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts[parts.length - 1] || "unknown";
 }
 

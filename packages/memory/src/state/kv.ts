@@ -12,11 +12,12 @@ export class StateKV {
   }
 
   async update<T = unknown>(scope: string, key: string, ops: Array<{ type: string; path: string; value?: unknown }>): Promise<T> {
-    const mapped: MemoryUpdateOp[] = ops.map(o => ({
-      op: o.type === "set" ? "set" : o.type === "delete" ? "delete" : "append",
-      path: o.path,
-      value: o.value,
-    }))
+    const mapped: MemoryUpdateOp[] = ops.map(o => {
+      if (o.type !== "set" && o.type !== "delete" && o.type !== "append") {
+        throw new Error(`Unknown KV operation type: "${o.type}"`)
+      }
+      return { op: o.type, path: o.path, value: o.value }
+    })
     return this.store.update<T>(scope, key, mapped)
   }
 

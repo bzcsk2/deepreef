@@ -13,6 +13,11 @@ function float32ToBase64(arr: Float32Array): string {
 
 function base64ToFloat32(b64: string): Float32Array {
   const buf = Buffer.from(b64, "base64");
+  if (buf.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    throw new Error(
+      `Invalid embedding byte length ${buf.byteLength}; not divisible by ${Float32Array.BYTES_PER_ELEMENT}`,
+    );
+  }
   return new Float32Array(
     buf.buffer,
     buf.byteOffset,

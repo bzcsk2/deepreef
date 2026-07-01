@@ -1,12 +1,14 @@
 export type PermissionDecision = "deny" | "allow" | "ask"
 
 export interface DenyRule {
+  id?: string
   toolName: string | RegExp
   args?: Record<string, unknown>
   reason?: string
 }
 
 export interface AllowRule {
+  id?: string
   toolName: string | RegExp
   args?: Record<string, unknown>
 }
@@ -40,8 +42,12 @@ export class PermissionEngine {
   removeDenyRule(toolName: string): void {
     this.denyRules = this.denyRules.filter(r => {
       if (typeof r.toolName === "string") return r.toolName !== toolName
-      return true // keep RegExp rules — use clear() to remove all
+      return true // keep RegExp rules — use removeDenyRuleById() or clear()
     })
+  }
+
+  removeDenyRuleById(id: string): void {
+    this.denyRules = this.denyRules.filter(r => r.id !== id)
   }
 
   addAllowRule(rule: AllowRule): void {
@@ -51,8 +57,12 @@ export class PermissionEngine {
   removeAllowRule(toolName: string): void {
     this.allowRules = this.allowRules.filter(r => {
       if (typeof r.toolName === "string") return r.toolName !== toolName
-      return true
+      return true // keep RegExp rules — use removeAllowRuleById() or clear()
     })
+  }
+
+  removeAllowRuleById(id: string): void {
+    this.allowRules = this.allowRules.filter(r => r.id !== id)
   }
 
   clear(): void {

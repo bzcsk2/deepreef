@@ -1,6 +1,8 @@
 import { readdir, stat } from "node:fs/promises"
 import { resolve } from "node:path"
 import type { AgentTool } from "@deepreef/core"
+import { resolvePath, PathContainmentError } from "./resolve-path.js"
+import { isSensitive } from "./sensitive.js"
 import { safeStringify } from "./safe-stringify.js"
 
 export function createListDirTool(): AgentTool {
@@ -20,7 +22,21 @@ export function createListDirTool(): AgentTool {
       if (typeof args.path !== "string" || !args.path) {
         return { content: safeStringify({ error: "path is required" }), isError: true }
       }
-      const dir = resolve(ctx.cwd, args.path)
+
+      let dir: string
+      try {
+        dir = await resolvePath(args.path, ctx.cwd)
+      } catch (e) {
+        if (e instanceof PathContainmentError) {
+          return { content: safeStringify({ error: `path is outside the project directory: ${args.path}` }), isError: true }
+        }
+        return { content: safeStringify({ error: `cannot resolve path: ${args.path}` }), isError: true }
+      }
+
+      // Check with trailing / to match directory-sensitive patterns (.ssh/, .git/)
+      if (isSensitive(dir) || isSensitive(dir + "/")) {
+        return { content: safeStringify({ error: `Listing sensitive path is denied: ${args.path}` }), isError: true }
+      }
 
       let entries: string[]
       try {
@@ -32,6 +48,8 @@ export function createListDirTool(): AgentTool {
       const items: Array<{ name: string; type: "file" | "dir" | "unknown"; size?: number }> = []
       for (const name of entries) {
         const full = resolve(dir, name)
+        // isSensitive patterns for directories require trailing /, for files do not
+        if (isSensitive(full) || isSensitive(full + "/")) continue
         try {
           const st = await stat(full)
           items.push({ name, type: st.isDirectory() ? "dir" : "file", size: st.size })

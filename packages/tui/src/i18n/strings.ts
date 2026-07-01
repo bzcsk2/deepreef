@@ -260,6 +260,8 @@ export interface Strings {
   workflowAlreadyRunning: string;
   workflowModeChanged: (mode: string) => string;
   workflowLoopStarted: string;
+  workflowContinuationGuard: string;
+  workflowStuckGuard: string;
   // P0: agent/worker labels
   agentStatusQueued: string;
   agentStatusStarting: string;

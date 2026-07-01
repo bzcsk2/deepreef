@@ -6,17 +6,25 @@ import { resolve } from "node:path"
 import { isSensitive } from "../sensitive.js"
 import type { ShellBackendId } from "../platform/shell-backend.js"
 
+// Recursive root deletion: rm -rf /, rm -r /*
+const RM_ROOT = /\brm\s+(?:-[A-Za-z]*r[A-Za-z]*\s+.*\/\*|.*-[A-Za-z]*r[A-Za-z]*\s+\/)/
+// Privileged escalation
+const SUDO = /\bsudo\b/
+// Disk formatting / partitioning
+const DISK_FORMAT = /\bmkfs(?:\.[a-zA-Z]+)?\b/
+const DISK_PARTITION = /\bfdisk\b/
+// Raw block-device overwrite: dd with if= is destructive; standalone dd is not
+const DD_IF = /\bdd\s+if=/
+// Recursive world-writable chmod on root
+const CHMOD_RECURSIVE_ROOT = /\bchmod\s+-R\s+777\s+\//
+
 const POSIX_DENY_PATTERNS = [
-  /\brm\s+(?:-[A-Za-z]*r[A-Za-z]*\s+.*\/\*|.*-[A-Za-z]*r[A-Za-z]*\s+\/)/,
-  /\bsudo\b/,
-  /\bmkfs\b/,
-  /\bdd\s+if=/,
-  /\bchmod\s+-R\s+777\s+\//,
-  /\bdd\b/,
-  /\bfdisk\b/,
-  /\bmkfs\.\w+\b/,
-  /\bgit\s+push\b/,
-  /\bgit\s+commit\b/,
+  RM_ROOT,
+  SUDO,
+  DISK_FORMAT,
+  DD_IF,
+  CHMOD_RECURSIVE_ROOT,
+  DISK_PARTITION,
 ]
 
 const POWERSHELL_DENY_PATTERNS = [
@@ -44,14 +52,19 @@ export function matchDeniedShellPattern(command: string, backend: ShellBackendId
 /**
  * 检查命令是否引用敏感文件路径。
  *
+ * Tokenizes the command into candidate path segments and checks each
+ * against isSensitive. Supports leading dots (e.g. .env, .npmrc) which
+ * word-boundary regexes cannot capture.
+ *
  * @returns 敏感路径，未匹配则 null
  */
 export function matchSensitivePathInCommand(command: string): string | null {
-  const pathRe = /\b([\w./-]*(?:\.\w{1,10}))\b|\b([\w./-]*\/?\.[\w.-]+)\b|\b([\w./-]*(?:id_rsa|id_ed25519|credentials\.json|service-account\.json|token\.json))\b/g
-  let pathMatch: RegExpExecArray | null
-  while ((pathMatch = pathRe.exec(command)) !== null) {
-    const fp = pathMatch[1] || pathMatch[2] || pathMatch[3]
-    if (fp && isSensitive(fp)) return fp
+  // Split on whitespace, quotes, pipes, redirects, semicolons, etc.
+  const tokens = command.split(/[\s"'|&;<>()`$]+/).filter(Boolean)
+  for (const token of tokens) {
+    // Skip obvious flags and numeric-only tokens
+    if (token.startsWith("-") || /^\d+$/.test(token)) continue
+    if (isSensitive(token)) return token
   }
   return null
 }
@@ -86,7 +99,7 @@ export function validateShellCommand(
   const sensitive = matchSensitivePathInCommand(trimmed)
   if (sensitive) {
     const resolved = cwd ? resolve(cwd, sensitive) : sensitive
-    if (isSensitive(sensitive) || isSensitive(resolved)) {
+    if (isSensitive(resolved)) {
       return { ok: false, error: `Command references sensitive file: ${sensitive}` }
     }
   }

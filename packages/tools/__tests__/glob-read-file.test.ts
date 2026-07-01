@@ -159,6 +159,47 @@ describe("write_file", () => {
     expect(r.isError).toBe(false)
     expect(readFileSync(join(tmpDir, "relative.txt"), "utf-8")).toBe("relative path")
   })
+
+  it("write_file rejects path traversal outside cwd", async () => {
+    const { createWriteFileTool } = await import("../src/write-file.js")
+    const tool = createWriteFileTool()
+    const r = await tool.execute({ path: "../escape.txt", content: "should fail" }, { cwd: tmpDir, signal: new AbortController().signal } as any)
+    expect(r.isError).toBe(true)
+    expect(JSON.parse(r.content as string).error).toContain("outside")
+  })
+
+  it("write_file rejects overwriting a stale file", async () => {
+    const { createWriteFileTool } = await import("../src/write-file.js")
+    const { recordRead } = await import("../src/stale-read.js")
+    const { stat: fsStat } = await import("node:fs/promises")
+
+    const filePath = join(tmpDir, "stale.txt")
+    writeFileSync(filePath, "original", "utf-8")
+
+    // Read the file to record it
+    const st = await fsStat(filePath)
+    recordRead(filePath, st.mtimeMs, st.size)
+
+    // Modify externally (simulate concurrent edit)
+    writeFileSync(filePath, "externally modified", "utf-8")
+
+    // Now write_file should reject because file is stale
+    const tool = createWriteFileTool()
+    const r = await tool.execute({ path: filePath, content: "overwrite" }, { cwd: tmpDir, signal: new AbortController().signal } as any)
+    expect(r.isError).toBe(true)
+    const p = JSON.parse(r.content as string)
+    expect(p.error).toContain("modified since last read")
+    // File should still contain the external modification
+    expect(readFileSync(filePath, "utf-8")).toBe("externally modified")
+  })
+
+  it("write_file can create a new non-sensitive file under workspace", async () => {
+    const { createWriteFileTool } = await import("../src/write-file.js")
+    const tool = createWriteFileTool()
+    const r = await tool.execute({ path: "new-file.txt", content: "new content" }, { cwd: tmpDir, signal: new AbortController().signal } as any)
+    expect(r.isError).toBe(false)
+    expect(readFileSync(join(tmpDir, "new-file.txt"), "utf-8")).toBe("new content")
+  })
 })
 
 describe("glob - Bun.Glob fallback", () => {
@@ -239,6 +280,130 @@ describe("glob", () => {
   it("should reject path traversal with ../", async () => {
     const tool = createGlobTool()
     const r = await tool.execute({ pattern: "*.txt", path: "../" }, { cwd: tmpDir, signal: new AbortController().signal } as any)
+    expect(r.isError).toBe(true)
+    expect(JSON.parse(r.content as string).error).toContain("outside")
+  })
+
+  it("filters out sensitive files from glob results", async () => {
+    writeFileSync(join(tmpDir, ".env"), "SECRET", "utf-8")
+    writeFileSync(join(tmpDir, ".npmrc"), "token", "utf-8")
+    writeFileSync(join(tmpDir, "normal.ts"), "ok", "utf-8")
+    mkdirSync(join(tmpDir, ".ssh"))
+    writeFileSync(join(tmpDir, ".ssh", "id_rsa"), "key", "utf-8")
+
+    const tool = createGlobTool()
+
+    // Hidden files with dot:true
+    const r1 = await tool.execute({ pattern: ".env", path: tmpDir }, ctx(tmpDir))
+    expect(r1.isError).toBe(false)
+    const p1 = JSON.parse(r1.content as string)
+    expect(p1.numFiles).toBe(0)
+
+    // All files should not include sensitive ones
+    const r2 = await tool.execute({ pattern: "**/*", path: tmpDir }, ctx(tmpDir))
+    expect(r2.isError).toBe(false)
+    const p2 = JSON.parse(r2.content as string)
+    expect(p2.filenames).not.toContain(".env")
+    expect(p2.filenames).not.toContain(".npmrc")
+    expect(p2.filenames).not.toContain(".ssh/id_rsa")
+    expect(p2.filenames).toContain("normal.ts")
+  })
+})
+
+describe("grep", () => {
+  let tmpDir: string
+  const ctx = (cwd: string) => ({ cwd, signal: new AbortController().signal } as any)
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `deepreef-grep-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(join(tmpDir, "normal.txt"), "This is normal content", "utf-8")
+    writeFileSync(join(tmpDir, ".env"), "SECRET=value", "utf-8")
+    writeFileSync(join(tmpDir, ".npmrc"), "token=abc123", "utf-8")
+    mkdirSync(join(tmpDir, ".ssh"))
+    writeFileSync(join(tmpDir, ".ssh", "id_rsa"), "ssh-rsa AAAAB3...", "utf-8")
+  })
+
+  afterEach(() => { try { rmSync(tmpDir, { recursive: true, force: true }) } catch {} })
+
+  it("denies searching a sensitive file directly (.env)", async () => {
+    const { createGrepTool } = await import("../src/grep.js")
+    const tool = createGrepTool()
+    const r = await tool.execute({ pattern: "SECRET", path: join(tmpDir, ".env") }, ctx(tmpDir))
+    expect(r.isError).toBe(true)
+    const p = JSON.parse(r.content as string)
+    expect(p.error).toContain("sensitive")
+  })
+
+  it("filters out sensitive files from grep results when searching a directory", async () => {
+    const { createGrepTool } = await import("../src/grep.js")
+    const tool = createGrepTool()
+    const r = await tool.execute({ pattern: ".", path: tmpDir }, ctx(tmpDir))
+    expect(r.isError).toBe(false)
+    const p = JSON.parse(r.content as string)
+    const filePaths = p.results.map((line: string) => line.split(":")[0])
+    expect(filePaths).not.toContain(join(tmpDir, ".env"))
+    expect(filePaths).not.toContain(join(tmpDir, ".npmrc"))
+    expect(filePaths).not.toContain(join(tmpDir, ".ssh/id_rsa"))
+    expect(filePaths).toContain(join(tmpDir, "normal.txt"))
+  })
+
+  it("non-sensitive dot files are searchable", async () => {
+    writeFileSync(join(tmpDir, ".hidden-ok"), "visible content", "utf-8")
+    const { createGrepTool } = await import("../src/grep.js")
+    const tool = createGrepTool()
+    const r = await tool.execute({ pattern: "visible", path: tmpDir }, ctx(tmpDir))
+    expect(r.isError).toBe(false)
+    const p = JSON.parse(r.content as string)
+    expect(p.totalMatches).toBeGreaterThanOrEqual(1)
+  })
+
+  it("grep rejects path traversal outside cwd", async () => {
+    const { createGrepTool } = await import("../src/grep.js")
+    const tool = createGrepTool()
+    const r = await tool.execute({ pattern: "test", path: "../" }, ctx(tmpDir))
+    expect(r.isError).toBe(true)
+    expect(JSON.parse(r.content as string).error).toContain("outside")
+  })
+})
+
+describe("path containment", () => {
+  let tmpDir: string
+  const ctx2 = (cwd: string) => ({ cwd, signal: new AbortController().signal }) as any
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `deepreef-containment-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    mkdirSync(tmpDir, { recursive: true })
+  })
+
+  afterEach(() => { try { rmSync(tmpDir, { recursive: true, force: true }) } catch {} })
+
+  it("read_file rejects path traversal outside cwd", async () => {
+    const tool = createReadFileTool()
+    const r = await tool.execute({ path: "../outside.txt" }, ctx2(tmpDir))
+    expect(r.isError).toBe(true)
+    expect(JSON.parse(r.content as string).error).toContain("outside")
+  })
+
+  it("list_dir rejects path traversal outside cwd", async () => {
+    const { createListDirTool } = await import("../src/list-dir.js")
+    const tool = createListDirTool()
+    const r = await tool.execute({ path: "../" }, ctx2(tmpDir))
+    expect(r.isError).toBe(true)
+    expect(JSON.parse(r.content as string).error).toContain("outside")
+  })
+
+  it("glob rejects path traversal outside cwd", async () => {
+    const tool = createGlobTool()
+    const r = await tool.execute({ pattern: "*.txt", path: "../" }, ctx2(tmpDir))
+    expect(r.isError).toBe(true)
+    expect(JSON.parse(r.content as string).error).toContain("outside")
+  })
+
+  it("edit rejects path traversal outside cwd", async () => {
+    const tool = createEditTool()
+    writeFileSync(join(tmpDir, "target.txt"), "content", "utf-8")
+    const r = await tool.execute({ path: "../outside.txt", old_string: "anything", new_string: "nope" }, ctx2(tmpDir))
     expect(r.isError).toBe(true)
     expect(JSON.parse(r.content as string).error).toContain("outside")
   })

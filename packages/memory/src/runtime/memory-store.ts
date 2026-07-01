@@ -25,17 +25,31 @@ export class MemoryStore {
     }
   }
 
+  private validatePathComponent(name: string, label: string): void {
+    if (name.includes("/") || name.includes("\\") || name === ".." || name.includes("..")) {
+      throw new Error(`Invalid ${label}: ${name}`)
+    }
+  }
+
   private scopeDir(scope: string): string {
+    this.validatePathComponent(scope, "scope")
     const d = resolve(this.baseDir, "state", scope)
     if (!existsSync(d)) mkdirSync(d, { recursive: true })
     return d
   }
 
   private filePath(scope: string, key: string): string {
+    this.validatePathComponent(key, "key")
     return resolve(this.scopeDir(scope), `${key}.json`)
   }
 
+  private validateAccess(scope: string, key: string): void {
+    this.validatePathComponent(scope, "scope")
+    this.validatePathComponent(key, "key")
+  }
+
   async get<T = unknown>(scope: string, key: string): Promise<T | null> {
+    this.validateAccess(scope, key)
     try {
       const raw = readFileSync(this.filePath(scope, key), "utf8")
       return JSON.parse(raw) as T
@@ -45,6 +59,7 @@ export class MemoryStore {
   }
 
   async set<T = unknown>(scope: string, key: string, value: T): Promise<T> {
+    this.validateAccess(scope, key)
     const path = this.filePath(scope, key)
     const data = JSON.stringify(value, null, 2)
     const tmp = path + ".tmp"
@@ -60,6 +75,7 @@ export class MemoryStore {
   }
 
   async update<T = unknown>(scope: string, key: string, ops: MemoryUpdateOp[]): Promise<T> {
+    this.validateAccess(scope, key)
     let current = await this.get<Record<string, unknown>>(scope, key) ?? {} as Record<string, unknown>
     for (const op of ops) {
       if (op.op === "set") {
@@ -79,6 +95,7 @@ export class MemoryStore {
   }
 
   async delete(scope: string, key: string): Promise<void> {
+    this.validateAccess(scope, key)
     try {
       unlinkSync(this.filePath(scope, key))
     } catch {
@@ -87,6 +104,7 @@ export class MemoryStore {
   }
 
   async list<T = unknown>(scope: string): Promise<T[]> {
+    this.validatePathComponent(scope, "scope")
     const dir = this.scopeDir(scope)
     try {
       const files = readdirSync(dir).filter(f => f.endsWith(".json"))

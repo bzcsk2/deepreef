@@ -1,11 +1,15 @@
+import { createHash } from "node:crypto"
 import { readFile, writeFile, stat } from "node:fs/promises"
-import { resolve } from "node:path"
 import type { AgentTool } from "@deepreef/core"
-import { hashAnchoredReplaceOnce } from "./hash-edit.js"
 import { fuzzyReplaceOnce } from "./fuzzy-edit.js"
+import { resolvePath, PathContainmentError } from "./resolve-path.js"
 import { checkStale } from "./stale-read.js"
 import { isSensitive } from "./sensitive.js"
 import { safeStringify } from "./safe-stringify.js"
+
+function sha256(s: string): string {
+  return createHash("sha256").update(s).digest("hex")
+}
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
@@ -64,7 +68,16 @@ export function createEditTool(): AgentTool {
         return { content: safeStringify({ error: "new_string is required" }), isError: true }
       }
 
-      const path = resolve(ctx.cwd, args.path)
+      let path: string
+      try {
+        path = await resolvePath(args.path, ctx.cwd)
+      } catch (e) {
+        if (e instanceof PathContainmentError) {
+          return { content: safeStringify({ error: `path is outside the project directory: ${args.path}` }), isError: true }
+        }
+        return { content: safeStringify({ error: `cannot resolve path: ${args.path}` }), isError: true }
+      }
+
       const oldString = args.old_string
       const newString = args.new_string
       const oldHash = typeof args.old_hash === "string" && args.old_hash ? args.old_hash : undefined
@@ -107,6 +120,9 @@ export function createEditTool(): AgentTool {
           return { content: safeStringify({ error: `old_string appears multiple times (${countOccurrences(normalizedContent, normalizedOld)}). Provide more surrounding context to uniquely identify the target block.`, path: args.path }), isError: true }
         }
         if (firstIdx >= 0) {
+          if (oldHash !== undefined && sha256(normalizedOld) !== oldHash) {
+            return { content: safeStringify({ error: `old_hash mismatch: computed ${sha256(normalizedOld)} but expected ${oldHash}`, path: args.path }), isError: true }
+          }
           const result = normalizedContent.slice(0, firstIdx) + normalizedNew + normalizedContent.slice(firstIdx + normalizedOld.length)
           await writeFile(path, restoreLineEndings(result, lineEnding), "utf-8")
           return { content: safeStringify({ path: args.path, replaced: 1, method: "hash_anchored", cwd: ctx.cwd }), isError: false }

@@ -3,6 +3,7 @@ import { existsSync, rmSync, mkdirSync } from "node:fs"
 import { resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { GoalStore } from "../src/goal/store.js"
+import { WorkflowCoordinator } from "../src/workflow-coordinator/coordinator.js"
 
 const TEST_DIR = resolve(process.cwd(), ".deepreef-test-accept")
 
@@ -152,9 +153,6 @@ describe("Mailbox 工具角色验收", () => {
 
 describe("App → bridge → coordinator workflowId 集成", () => {
   it("startWorkflow 使用传入的 workflowId 而非随机 UUID", () => {
-    const { WorkflowCoordinator } = require("../src/workflow-coordinator/coordinator.js")
-    const { GoalStore } = require("../src/goal/store.js")
-
     const store = new GoalStore(TEST_DIR)
     const workflowId = "session-12345"
     store.createGoal(workflowId, "Test goal integration")
@@ -173,8 +171,6 @@ describe("App → bridge → coordinator workflowId 集成", () => {
   })
 
   it("不传 workflowId 时仍生成随机 UUID（向后兼容）", () => {
-    const { WorkflowCoordinator } = require("../src/workflow-coordinator/coordinator.js")
-
     const coordinator = new WorkflowCoordinator({} as any, {})
     coordinator.startWorkflow({ goal: "Test" })
 

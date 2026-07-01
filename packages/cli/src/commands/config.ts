@@ -1,7 +1,7 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { homedir } from "node:os"
-import { execSync } from "node:child_process"
+import { spawnSync } from "node:child_process"
 import { stringify } from "smol-toml"
 import { parse } from "smol-toml"
 import { ConfigManager, getConfigPath, DEFAULT_CONFIG, CONFIG_TEMPLATES } from "@deepreef/core"
@@ -13,6 +13,7 @@ interface ConfigCommandOptions {
   redact?: boolean
   project?: boolean
   template?: string
+  force?: boolean
 }
 
 export async function configCommand(subcommand: string, args: string[]): Promise<void> {
@@ -154,9 +155,13 @@ async function configInit(args: string[]): Promise<void> {
   
   // Check if config already exists
   if (existsSync(targetPath)) {
-    console.error(`Config file already exists: ${targetPath}`)
-    console.error(`Use --force to overwrite or delete the file first.`)
-    process.exit(1)
+    if (options.force) {
+      console.log(`Overwriting existing config: ${targetPath}`)
+    } else {
+      console.error(`Config file already exists: ${targetPath}`)
+      console.error(`Use --force to overwrite or delete the file first.`)
+      process.exit(1)
+    }
   }
   
   // Get template
@@ -205,11 +210,14 @@ async function configEdit(args: string[]): Promise<void> {
     writeFileSync(targetPath, stringify(DEFAULT_CONFIG), "utf-8")
   }
   
-  // Open in editor
-  const editor = process.env.EDITOR || process.env.VISUAL || "vi"
-  
+  // Open in editor — 使用 spawnSync 而非 execSync 防止 shell 注入
+  const editorEnv = process.env.EDITOR || process.env.VISUAL || "vi"
+  const editorParts = editorEnv.split(/\s+/)
+  const editorCmd = editorParts[0]!
+  const editorArgs = [...editorParts.slice(1), targetPath]
+
   try {
-    execSync(`${editor} "${targetPath}"`, { stdio: "inherit" })
+    spawnSync(editorCmd, editorArgs, { stdio: "inherit" })
     console.log(`Config file edited: ${targetPath}`)
     console.log(`Run 'deepreef config validate' to check your changes.`)
   } catch (error) {
@@ -324,6 +332,7 @@ function parseInitOptions(args: string[]): ConfigCommandOptions {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg === "--project") options.project = true
+    if (arg === "--force") options.force = true
     if (arg === "--template" && i + 1 < args.length) {
       options.template = args[++i]
     }

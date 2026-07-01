@@ -67,15 +67,14 @@ describe("bash tool", () => {
     expect(r.isError).toBe(true)
   })
 
-  it("S12: reading non-existent sensitive file via bash returns command error (not denied)", async () => {
-    // bash does NOT check file paths in commands — it only checks DENY_PATTERNS
-    // The command fails because file doesn't exist, not because of security check
+  it("S12: reading sensitive file .env via bash is denied by security check", async () => {
+    // The shell security layer now detects .env as a sensitive path
     const { createBashTool } = await import("../src/shell-exec.js")
     const tool = createBashTool()
     const r = await tool.execute({ command: "cat .env" }, ctx)
     expect(r.isError).toBe(true)
     const p = JSON.parse(r.content as string)
-    expect(p.exitCode).toBe(1) // file not found
+    expect(p.error).toContain("sensitive file")
   })
 
   it("S15: SQL-like text in command does not match DENY_PATTERNS and executes safely", async () => {

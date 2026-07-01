@@ -438,14 +438,11 @@ async function runForegroundShell(opts: ForegroundRunOptions): Promise<Foregroun
     if (opts.enableEscalate) {
       softTimer = setTimeout(() => {
         if (done || timedOut) return
-        escalated = true
-        clearTimeout(hardTimer)
 
-        try { child.stdout?.removeAllListeners("data") } catch { /* ignore */ }
-        try { child.stderr?.removeAllListeners("data") } catch { /* ignore */ }
-        try { child.removeAllListeners("close") } catch { /* ignore */ }
-        try { child.removeAllListeners("error") } catch { /* ignore */ }
-
+        // Try to adopt BEFORE detaching foreground listeners.
+        // adopt() checks background capacity internally via attachChildHandlers.
+        // If adopt succeeds, foreground listeners are removed; if it fails,
+        // the child remains fully managed by foreground listeners + hard timer.
         const stdout = finalizeBounded(stdoutBuf).text
         const stderr = finalizeBounded(stderrBuf).text
         const prefix = stdout + (stderr ? `\n[stderr]\n${stderr}` : "")
@@ -459,9 +456,17 @@ async function runForegroundShell(opts: ForegroundRunOptions): Promise<Foregroun
         })
 
         if (adoptResult.error) {
-          escalated = false
+          // Capacity full or other error — keep running in foreground
           return
         }
+
+        // Adopt succeeded — flag before detaching to prevent race on close
+        escalated = true
+        clearTimeout(hardTimer)
+        try { child.stdout?.removeAllListeners("data") } catch { /* ignore */ }
+        try { child.stderr?.removeAllListeners("data") } catch { /* ignore */ }
+        try { child.removeAllListeners("close") } catch { /* ignore */ }
+        try { child.removeAllListeners("error") } catch { /* ignore */ }
 
         done = true
         cleanup()

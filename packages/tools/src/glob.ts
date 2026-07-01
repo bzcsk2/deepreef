@@ -1,11 +1,11 @@
-import { isAbsolute, relative, resolve } from "node:path"
-import { realpathSync } from "node:fs"
+import { resolve } from "node:path"
 import type { AgentTool } from "@deepreef/core"
+import { resolvePath, PathContainmentError } from "./resolve-path.js"
+import { isSensitive } from "./sensitive.js"
 import { safeStringify } from "./safe-stringify.js"
 import fg from "fast-glob"
 
 const MAX_RESULTS = 100
-const DEFAULT_PATH = process.cwd()
 
 export function createGlobTool(): AgentTool {
   return {
@@ -25,17 +25,18 @@ export function createGlobTool(): AgentTool {
       if (typeof args.pattern !== "string" || !args.pattern) {
         return { content: safeStringify({ error: "pattern is required" }), isError: true }
       }
-      const searchPath = typeof args.path === "string" ? resolve(ctx.cwd, args.path) : ctx.cwd
-      // Validate path is within project directory
-      try {
-        const realSearch = realpathSync(searchPath)
-        const realBase = realpathSync(ctx.cwd)
-        const rel = relative(realBase, realSearch)
-        if (rel.startsWith("..") || isAbsolute(rel)) {
-          return { content: safeStringify({ error: "path is outside the project directory" }), isError: true }
+      let searchPath: string
+      if (typeof args.path === "string") {
+        try {
+          searchPath = await resolvePath(args.path, ctx.cwd)
+        } catch (e) {
+          if (e instanceof PathContainmentError) {
+            return { content: safeStringify({ error: "path is outside the project directory" }), isError: true }
+          }
+          return { content: safeStringify({ error: `cannot resolve path: ${args.path}` }), isError: true }
         }
-      } catch {
-        return { content: safeStringify({ error: `cannot resolve path: ${searchPath}` }), isError: true }
+      } else {
+        searchPath = ctx.cwd
       }
       const pattern = args.pattern
 
@@ -47,12 +48,13 @@ export function createGlobTool(): AgentTool {
           dot: true,
           suppressErrors: true,
         })
+        const filtered = results.filter((f) => !isSensitive(resolve(searchPath, f).replace(/\\/g, "/")))
         const elapsed = Date.now() - t0
         return {
           content: safeStringify({
-            numFiles: Math.min(results.length, MAX_RESULTS),
-            filenames: results.slice(0, MAX_RESULTS),
-            truncated: results.length > MAX_RESULTS,
+            numFiles: Math.min(filtered.length, MAX_RESULTS),
+            filenames: filtered.slice(0, MAX_RESULTS),
+            truncated: filtered.length > MAX_RESULTS,
             durationMs: elapsed,
           }),
           isError: false,

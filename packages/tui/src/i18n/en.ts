@@ -261,6 +261,8 @@ export const en: Strings = {
   workflowAlreadyRunning: 'A workflow is already running. Cancel or wait before starting a new goal.',
   workflowModeChanged: (mode) => `Workflow mode: ${mode}`,
   workflowLoopStarted: 'Workflow mode: loop\nEnter a goal to start the workflow.',
+  workflowContinuationGuard: 'Workflow exceeded max continuation cycles (50). Stopped to prevent infinite loop. Check workflow state.',
+  workflowStuckGuard: 'Workflow detected a no-progress loop (same phase and iteration). Stopped to prevent dead loop. Check workflow state.',
   // P0: agent/worker labels
   agentStatusQueued: 'Queued',
   agentStatusStarting: 'Starting',

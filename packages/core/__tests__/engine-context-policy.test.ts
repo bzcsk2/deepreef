@@ -77,32 +77,22 @@ vi.mock("../src/context/tokenizer-pool.js", () => ({
 }))
 
 // Mock RuntimeLogger
-vi.mock("../src/runtime-logger.js", () => ({
-  createRuntimeLoggerFromEnv: () => ({
+vi.mock("../src/runtime-logger.js", () => {
+  const noop = {
     isEnabled: () => false,
     info: () => {},
     error: () => {},
     warn: () => {},
     debug: () => {},
-    child: () => ({
-      isEnabled: () => false,
-      info: () => {},
-      error: () => {},
-      warn: () => {},
-      debug: () => {},
-      child: () => ({
-        isEnabled: () => false,
-        info: () => {},
-        error: () => {},
-        warn: () => {},
-        debug: () => {},
-        flush: () => Promise.resolve(),
-      }),
-      flush: () => Promise.resolve(),
-    }),
+    getDroppedCount: () => 0,
+    child: () => noop,
     flush: () => Promise.resolve(),
-  }),
-}))
+  }
+  return {
+    noopRuntimeLogger: noop,
+    createRuntimeLoggerFromEnv: () => noop,
+  }
+})
 
 describe("ReasonixEngine context policy", () => {
   let engine: ReasonixEngine

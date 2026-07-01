@@ -1,6 +1,8 @@
-import { writeFile as fsWriteFile, mkdir } from "node:fs/promises"
-import { resolve, dirname } from "node:path"
+import { writeFile as fsWriteFile, mkdir, stat } from "node:fs/promises"
+import { dirname } from "node:path"
 import type { AgentTool } from "@deepreef/core"
+import { resolvePath, PathContainmentError } from "./resolve-path.js"
+import { checkStale } from "./stale-read.js"
 import { isSensitive } from "./sensitive.js"
 import { safeStringify } from "./safe-stringify.js"
 
@@ -32,10 +34,32 @@ export function createWriteFileTool(): AgentTool {
         return { content: safeStringify({ error: `Content too large (${args.content.length} bytes). Max allowed: ${MAX_FILE_SIZE} bytes.` }), isError: true }
       }
 
-      const path = resolve(ctx.cwd, args.path)
+      let path: string
+      try {
+        path = await resolvePath(args.path, ctx.cwd)
+      } catch (e) {
+        if (e instanceof PathContainmentError) {
+          return { content: safeStringify({ error: `path is outside the project directory: ${args.path}` }), isError: true }
+        }
+        return { content: safeStringify({ error: `cannot resolve path: ${args.path}` }), isError: true }
+      }
 
       if (isSensitive(path)) {
         return { content: safeStringify({ error: `Writing to sensitive file is denied: ${args.path}` }), isError: true }
+      }
+
+      // Stale-write check for existing files
+      let exists = false
+      try {
+        await stat(path)
+        exists = true
+      } catch { /* new file */ }
+
+      if (exists) {
+        const staleCheck = await checkStale(path)
+        if (staleCheck.isStale) {
+          return { content: safeStringify({ error: staleCheck.message, path: args.path }), isError: true }
+        }
       }
 
       await mkdir(dirname(path), { recursive: true })

@@ -1,8 +1,8 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
 import { WorkflowCoordinator } from "../src/workflow-coordinator/coordinator.js"
 import type { WorkflowSupervisorAdvice } from "../src/workflow-coordinator/types.js"
 
-import { setPromptLocale } from "../src/prompt-locale";
+import { setPromptLocale } from "../src/prompt-locale.js"
 describe("WorkflowCoordinator", () => {
   beforeEach(() => setPromptLocale("en"));
   it("resumes a user-interrupted workflow with the user's instruction", async () => {
@@ -1092,11 +1092,11 @@ describe("WorkflowCoordinator", () => {
       expect(checkInput).toContain("Report: Refactored all modules, tests pass")
     })
 
-    it("workflowId === sessionId 时 goal/coordinator 使用同一 ID", () => {
-      const { GoalStore } = require("../src/goal/store.js")
-      const { randomUUID } = require("node:crypto")
-      const { rmSync, mkdirSync, existsSync } = require("node:fs")
-      const { resolve } = require("node:path")
+    it("workflowId === sessionId 时 goal/coordinator 使用同一 ID", async () => {
+      const { rmSync, mkdirSync, existsSync } = await import("node:fs")
+      const { resolve } = await import("node:path")
+      const { GoalStore } = await import("../src/goal/store.js")
+      const { randomUUID } = await import("node:crypto")
 
       const testDir = resolve(process.cwd(), ".deepreef-test-regression-wfid")
       if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })

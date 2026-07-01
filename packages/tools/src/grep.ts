@@ -1,6 +1,8 @@
 import { resolve } from "node:path"
 import { spawn } from "node:child_process"
 import type { AgentTool } from "@deepreef/core"
+import { resolvePath, PathContainmentError } from "./resolve-path.js"
+import { isSensitive } from "./sensitive.js"
 import { safeStringify } from "./safe-stringify.js"
 
 const MAX_OUTPUT_CHARS = 500_000
@@ -26,9 +28,26 @@ export function createGrepTool(): AgentTool {
         return { content: safeStringify({ error: "pattern is required" }), isError: true }
       }
 
-      const searchPath = typeof args.path === "string" ? resolve(ctx.cwd, args.path) : ctx.cwd
+      let searchPath: string
+      if (typeof args.path === "string") {
+        try {
+          searchPath = await resolvePath(args.path, ctx.cwd)
+        } catch (e) {
+          if (e instanceof PathContainmentError) {
+            return { content: safeStringify({ error: `path is outside the project directory: ${args.path}` }), isError: true }
+          }
+          return { content: safeStringify({ error: `cannot resolve path: ${args.path}` }), isError: true }
+        }
+      } else {
+        searchPath = ctx.cwd
+      }
+
       const pattern = args.pattern
       const include = typeof args.include === "string" ? args.include : undefined
+
+      if (isSensitive(searchPath)) {
+        return { content: safeStringify({ error: `Searching sensitive path is denied: ${args.path ?? ctx.cwd}` }), isError: true }
+      }
 
       let stdout: string
       try {
@@ -39,16 +58,20 @@ export function createGrepTool(): AgentTool {
       }
 
       const lines = stdout.split("\n").filter(Boolean)
+      const filtered = lines.filter((line) => {
+        const filePath = line.split(":")[0]
+        return !isSensitive(resolve(searchPath, filePath))
+      })
       const maxResults = 200
-      const truncated = lines.length > maxResults
-      const results = truncated ? lines.slice(0, maxResults) : lines
+      const truncated = filtered.length > maxResults
+      const results = truncated ? filtered.slice(0, maxResults) : filtered
 
       return {
         content: safeStringify({
           pattern,
           path: args.path ?? ctx.cwd,
           results,
-          totalMatches: lines.length,
+          totalMatches: filtered.length,
           truncated,
           cwd: ctx.cwd,
         }),

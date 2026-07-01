@@ -136,7 +136,7 @@ function renderTextWithPasteMarkers(
  * @param pos - 起始位置
  * @returns 前一个词边界位置
  */
-function findWordLeft(text: string, pos: number): number {
+export function findWordLeft(text: string, pos: number): number {
   if (pos <= 0) return 0;
   // Skip spaces
   let i = pos - 1;
@@ -156,7 +156,7 @@ function findWordLeft(text: string, pos: number): number {
  * @param pos - 起始位置
  * @returns 后一个词边界位置
  */
-function findWordRight(text: string, pos: number): number {
+export function findWordRight(text: string, pos: number): number {
   if (pos >= text.length) return text.length;
   // Skip word chars of the same class
   let i = pos;
@@ -199,10 +199,12 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
   const inputRef = useRef(input);
   const pastePartsRef = useRef(pasteParts);
   const cursorRef = useRef(cursor);
+  const draftBeforeHistoryRef = useRef(draftBeforeHistory);
 
   useEffect(() => { inputRef.current = input; }, [input]);
   useEffect(() => { pastePartsRef.current = pasteParts; }, [pasteParts]);
   useEffect(() => { cursorRef.current = cursor; }, [cursor]);
+  useEffect(() => { draftBeforeHistoryRef.current = draftBeforeHistory; }, [draftBeforeHistory]);
 
   useImperativeHandle(ref, () => ({
     writeText: (text: string) => {
@@ -260,7 +262,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
    * 提交后重置输入框内容、光标位置和历史浏览状态。
    */
   const submitLine = useCallback(() => {
-    const text = expandTrackedPastes(input, pasteParts).trim();
+    const text = expandTrackedPastes(inputRef.current, pastePartsRef.current).trim();
     if (!text) return;
     setHistoryIdx(-1);
     setDraftBeforeHistory('');
@@ -268,7 +270,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     setCursor(0);
     setPasteParts([]);
     onSubmit(text);
-  }, [input, pasteParts, onSubmit]);
+  }, [onSubmit]);
 
   /**
    * useInput 回调 - 处理所有键盘输入事件
@@ -333,7 +335,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
 
     // Bracketed paste（终端 Cmd+V / 右键粘贴）
     if (event.keypress.isPasted) {
-      applyPaste(_input, cursor);
+      applyPaste(_input, cursorRef.current);
       event.stopImmediatePropagation();
       return;
     }
@@ -349,14 +351,42 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
 
     // 多字符单次输入视为粘贴（useInput 对 paste 的保证）
     if (_input.length > 1 && !key.ctrl && !key.meta) {
-      applyPaste(_input, cursor);
+      applyPaste(_input, cursorRef.current);
       event.stopImmediatePropagation();
+      return;
+    }
+
+    // Ctrl+左箭头: 跳到前一个词边界（使用 charClass 按词类跳转）
+    // 必须在普通左箭头之前，否则 Ctrl+Left 会被左箭头分支拦截
+    if (key.leftArrow && key.ctrl) {
+      const curInput = inputRef.current;
+      setCursor(prev => findWordLeft(curInput, prev));
+      return;
+    }
+
+    // Ctrl+右箭头: 跳到后一个词边界
+    // 必须在普通右箭头之前
+    if (key.rightArrow && key.ctrl) {
+      const curInput = inputRef.current;
+      setCursor(prev => findWordRight(curInput, prev));
+      return;
+    }
+
+    // 左箭头 — 光标左移（不越过行首）
+    if (key.leftArrow) {
+      setCursor(prev => Math.max(0, prev - 1));
+      return;
+    }
+
+    // 右箭头 — 光标右移（不越过行尾）
+    if (key.rightArrow) {
+      setCursor(prev => Math.min(inputRef.current.length, prev + 1));
       return;
     }
 
     // Ctrl+Enter — 在当前光标位置插入换行符
     if (key.return && key.ctrl) {
-      const next = insertPlainTextAt(input, pasteParts, cursor, '\n');
+      const next = insertPlainTextAt(inputRef.current, pastePartsRef.current, cursorRef.current, '\n');
       setInput(next.input);
       setPasteParts(next.parts);
       setCursor(next.cursor);
@@ -380,10 +410,11 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     // 后续上翻时从 history 数组中取出对应的历史项
     if (key.upArrow && !key.ctrl) {
       if (!suppressHistory) {
+        const curInput = inputRef.current;
         setHistoryIdx(prev => {
           const next = Math.min(prev + 1, history.length - 1);
           if (next >= 0) {
-            if (prev < 0) setDraftBeforeHistory(input);
+            if (prev < 0) setDraftBeforeHistory(curInput);
             const item = history[next] ?? '';
             setInput(item);
             setCursor(item.length);
@@ -399,11 +430,12 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
     // 超出历史范围（next < 0）时恢复保存的当前草稿 draftBeforeHistory
     if (key.downArrow && !key.ctrl) {
       if (!suppressHistory) {
+        const curDraft = draftBeforeHistoryRef.current;
         setHistoryIdx(prev => {
           const next = prev - 1;
           if (next < 0) {
-            setInput(draftBeforeHistory);
-            setCursor(draftBeforeHistory.length);
+            setInput(curDraft);
+            setCursor(curDraft.length);
             setPasteParts([]);
             return -1;
           }
@@ -417,34 +449,11 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
       return;
     }
 
-    // 左箭头 — 光标左移（不越过行首）
-    if (key.leftArrow) {
-      setCursor(prev => Math.max(0, prev - 1));
-      return;
-    }
-
-    // 右箭头 — 光标右移（不越过行尾）
-    if (key.rightArrow) {
-      setCursor(prev => Math.min(input.length, prev + 1));
-      return;
-    }
-
-    // Ctrl+左箭头: 跳到前一个词边界（使用 charClass 按词类跳转）
-    if (key.leftArrow && key.ctrl) {
-      setCursor(prev => findWordLeft(input, prev));
-      return;
-    }
-
-    // Ctrl+右箭头: 跳到后一个词边界
-    if (key.rightArrow && key.ctrl) {
-      setCursor(prev => findWordRight(input, prev));
-      return;
-    }
-
     // Ctrl+Backspace: 删除光标前的整个词（通过 findWordLeft 找到词边界后切片删除）
     if (key.backspace && key.ctrl) {
-      const pos = cursor;
-      const newCursor = findWordLeft(input, pos);
+      const curInput = inputRef.current;
+      const pos = cursorRef.current;
+      const newCursor = findWordLeft(curInput, pos);
       if (newCursor < pos) {
         setInput(prev => prev.slice(0, newCursor) + prev.slice(pos));
         setCursor(newCursor);
@@ -460,7 +469,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
 
     // Ctrl+E — 光标跳到行尾
     if (_input === 'e' && key.ctrl) {
-      setCursor(input.length);
+      setCursor(inputRef.current.length);
       return;
     }
 
@@ -472,57 +481,61 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
 
     // End — 光标跳到行尾
     if (key.end) {
-      setCursor(input.length);
+      setCursor(inputRef.current.length);
       return;
     }
 
     // Backspace — 删除光标前一个字符；若在粘贴占位符内则整块删除
     if (key.backspace) {
-      const pos = cursor;
+      const curInput = inputRef.current;
+      const curParts = pastePartsRef.current;
+      const pos = cursorRef.current;
       if (pos <= 0) return;
-      const endingPart = findPastePartEndingAt(pasteParts, pos);
+      const endingPart = findPastePartEndingAt(curParts, pos);
       if (endingPart) {
-        const removed = removePastePart(input, pasteParts, endingPart);
+        const removed = removePastePart(curInput, curParts, endingPart);
         setInput(removed.input);
         setPasteParts(removed.parts);
         setCursor(removed.cursor);
         return;
       }
-      const insidePart = findPastePartAt(pasteParts, pos);
+      const insidePart = findPastePartAt(curParts, pos);
       if (insidePart) {
-        const removed = removePastePart(input, pasteParts, insidePart);
+        const removed = removePastePart(curInput, curParts, insidePart);
         setInput(removed.input);
         setPasteParts(removed.parts);
         setCursor(removed.cursor);
         return;
       }
-      setInput(input.slice(0, pos - 1) + input.slice(pos));
-      setPasteParts(shiftPasteParts(pasteParts, pos, -1));
+      setInput(curInput.slice(0, pos - 1) + curInput.slice(pos));
+      setPasteParts(shiftPasteParts(curParts, pos, -1));
       setCursor(pos - 1);
       return;
     }
 
     // Delete — 删除光标后一个字符；若在粘贴占位符起点则整块删除
     if (key.delete) {
-      const pos = cursor;
-      if (pos >= input.length) return;
-      const partAtCursor = pasteParts.find((part) => part.start === pos);
+      const curInput = inputRef.current;
+      const curParts = pastePartsRef.current;
+      const pos = cursorRef.current;
+      if (pos >= curInput.length) return;
+      const partAtCursor = curParts.find((part) => part.start === pos);
       if (partAtCursor) {
-        const removed = removePastePart(input, pasteParts, partAtCursor);
+        const removed = removePastePart(curInput, curParts, partAtCursor);
         setInput(removed.input);
         setPasteParts(removed.parts);
         setCursor(removed.cursor);
         return;
       }
-      setInput(input.slice(0, pos) + input.slice(pos + 1));
-      setPasteParts(shiftPasteParts(pasteParts, pos + 1, -1));
+      setInput(curInput.slice(0, pos) + curInput.slice(pos + 1));
+      setPasteParts(shiftPasteParts(curParts, pos + 1, -1));
       return;
     }
 
     // Ctrl+D — 删除光标后一个字符（同 Delete）
     if (_input === 'd' && key.ctrl) {
-      const pos = cursor;
-      if (pos < input.length) {
+      const pos = cursorRef.current;
+      if (pos < inputRef.current.length) {
         setInput(prev => prev.slice(0, pos) + prev.slice(pos + 1));
       }
       return;
@@ -538,7 +551,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
 
     // Ctrl+K — 删除光标到行尾的内容
     if (_input === 'k' && key.ctrl) {
-      const pos = cursor;
+      const pos = cursorRef.current;
       setInput(prev => prev.slice(0, pos));
       return;
     }
@@ -548,7 +561,7 @@ export const DeepiPromptInput = forwardRef<DeepiPromptInputHandle, DeepiPromptIn
 
     // 普通字符输入：在光标位置插入字符，光标后移
     if (_input) {
-      const next = insertPlainTextAt(input, pasteParts, cursor, _input);
+      const next = insertPlainTextAt(inputRef.current, pastePartsRef.current, cursorRef.current, _input);
       setInput(next.input);
       setPasteParts(next.parts);
       setCursor(next.cursor);

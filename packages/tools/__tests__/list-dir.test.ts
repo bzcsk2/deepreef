@@ -36,7 +36,7 @@ describe("list_dir", () => {
     const tool = createListDirTool()
     const r = await tool.execute({ path: "/nonexistent/path" }, ctx(tmpDir))
     expect(r.isError).toBe(true)
-    expect(JSON.parse(r.content as string).error).toContain("not found")
+    expect(JSON.parse(r.content as string).error).toMatch(/(not found|cannot resolve|outside)/)
   })
 
   it("should report stat failure entries as type: unknown", async () => {
@@ -68,13 +68,39 @@ describe("list_dir", () => {
   })
 
   it("should return empty items array for empty directory", async () => {
-    const emptyDir = join(tmpdir(), `deepreef-empty-${Date.now()}`)
+    const emptyDir = join(tmpDir, "empty-subdir")
     mkdirSync(emptyDir)
     const tool = createListDirTool()
-    const r = await tool.execute({ path: emptyDir }, ctx(tmpDir))
+    const r = await tool.execute({ path: "empty-subdir" }, ctx(tmpDir))
     expect(r.isError).toBe(false)
     const p = JSON.parse(r.content as string)
     expect(p.items).toEqual([])
-    rmSync(emptyDir, { recursive: true, force: true })
+  })
+
+  it("denies listing a sensitive directory (.ssh)", async () => {
+    mkdirSync(join(tmpDir, ".ssh"))
+    const tool = createListDirTool()
+    const r = await tool.execute({ path: join(tmpDir, ".ssh") }, ctx(tmpDir))
+    expect(r.isError).toBe(true)
+    expect(JSON.parse(r.content as string).error).toContain("sensitive")
+  })
+
+  it("omits sensitive child files from directory listing", async () => {
+    writeFileSync(join(tmpDir, ".env"), "SECRET=value", "utf-8")
+    writeFileSync(join(tmpDir, ".npmrc"), "//registry.npmjs.org/:_authToken=abc", "utf-8")
+    writeFileSync(join(tmpDir, "normal.txt"), "hello", "utf-8")
+    mkdirSync(join(tmpDir, ".ssh"))
+
+    const tool = createListDirTool()
+    const r = await tool.execute({ path: tmpDir }, ctx(tmpDir))
+    expect(r.isError).toBe(false)
+    const p = JSON.parse(r.content as string)
+    const names = p.items.map((i: any) => i.name)
+    expect(names).not.toContain(".env")
+    expect(names).not.toContain(".npmrc")
+    expect(names).not.toContain(".ssh")
+    expect(names).toContain("normal.txt")
+    expect(names).toContain("file.txt")
+    expect(names).toContain("subdir")
   })
 })

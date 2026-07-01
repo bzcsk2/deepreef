@@ -1,18 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { createWriteFileTool } from "@deepreef/tools"
-import { createGrepTool } from "@deepreef/tools"
-import { createListDirTool } from "@deepreef/tools"
-import { createTodoWriteTool } from "@deepreef/tools"
+import { createWriteFileTool, createGrepTool, createListDirTool, createTodoWriteTool } from "../../tools/src/index.ts"
 import { mkdir, writeFile, rm } from "node:fs/promises"
 import { resolve } from "node:path"
 import { tmpdir } from "node:os"
+
+function tmpCtx(cwd: string) {
+  return { cwd, signal: new AbortController().signal } as any
+}
 
 // ============================================================
 // write_file 工具测试
 // ============================================================
 describe("write_file tool (B2: new tool)", () => {
   let tmpDir: string
-  const ctx = { cwd: process.cwd(), signal: new AbortController().signal } as any
 
   beforeEach(async () => {
     tmpDir = resolve(tmpdir(), `deepreef-test-wf-${Date.now()}-${Math.random().toString(36).slice(2)}`)
@@ -25,7 +25,7 @@ describe("write_file tool (B2: new tool)", () => {
 
   it("should create a new file with given content", async () => {
     const tool = createWriteFileTool()
-    const result = await tool.execute({ path: resolve(tmpDir, "hello.txt"), content: "world" }, ctx)
+    const result = await tool.execute({ path: "hello.txt", content: "world" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(false)
     const out = JSON.parse(result.content as string)
     expect(out.path).toMatch(/hello\.txt$/)
@@ -33,11 +33,11 @@ describe("write_file tool (B2: new tool)", () => {
   })
 
   it("should overwrite an existing file", async () => {
-    const filePath = resolve(tmpDir, "overwrite.txt")
-    await writeFile(filePath, "old", "utf-8")
+    const filePath = "overwrite.txt"
+    await writeFile(resolve(tmpDir, filePath), "old", "utf-8")
 
     const tool = createWriteFileTool()
-    const result = await tool.execute({ path: filePath, content: "new content" }, ctx)
+    const result = await tool.execute({ path: filePath, content: "new content" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(false)
     const out = JSON.parse(result.content as string)
     expect(out.size).toBe(11)
@@ -45,41 +45,41 @@ describe("write_file tool (B2: new tool)", () => {
 
   it("should reject sensitive paths like api-key", async () => {
     const tool = createWriteFileTool()
-    const result = await tool.execute({ path: resolve(tmpDir, "api-key"), content: "sk-xxx" }, ctx)
+    const result = await tool.execute({ path: "api-key", content: "sk-xxx" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
     expect(JSON.parse(result.content as string).error).toContain("sensitive")
   })
 
   it("should reject sensitive paths like .env", async () => {
     const tool = createWriteFileTool()
-    const result = await tool.execute({ path: resolve(tmpDir, ".env"), content: "SECRET=1" }, ctx)
+    const result = await tool.execute({ path: ".env", content: "SECRET=1" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
     expect(JSON.parse(result.content as string).error).toContain("sensitive")
   })
 
   it("should reject sensitive paths containing .git/", async () => {
     const tool = createWriteFileTool()
-    const result = await tool.execute({ path: resolve(tmpDir, ".git/config"), content: "[core]" }, ctx)
+    const result = await tool.execute({ path: ".git/config", content: "[core]" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
     expect(JSON.parse(result.content as string).error).toContain("sensitive")
   })
 
   it("should reject sensitive paths like known_hosts", async () => {
     const tool = createWriteFileTool()
-    const result = await tool.execute({ path: resolve(tmpDir, "known_hosts"), content: "github.com" }, ctx)
+    const result = await tool.execute({ path: "known_hosts", content: "github.com" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
     expect(JSON.parse(result.content as string).error).toContain("sensitive")
   })
 
   it("should reject missing path argument", async () => {
     const tool = createWriteFileTool()
-    const result = await tool.execute({ path: "", content: "x" }, ctx)
+    const result = await tool.execute({ path: "", content: "x" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
   })
 
   it("should reject missing content argument", async () => {
     const tool = createWriteFileTool()
-    const result = await tool.execute({ path: "/tmp/test.txt", content: 123 as any }, ctx)
+    const result = await tool.execute({ path: "/tmp/test.txt", content: 123 as any }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
   })
 })
@@ -129,7 +129,6 @@ describe("grep tool (C1: new tool)", () => {
 // ============================================================
 describe("list_dir tool (C1: new tool)", () => {
   let tmpDir: string
-  const ctx = { cwd: process.cwd(), signal: new AbortController().signal } as any
 
   beforeEach(async () => {
     tmpDir = resolve(tmpdir(), `deepreef-test-ld-${Date.now()}-${Math.random().toString(36).slice(2)}`)
@@ -145,7 +144,7 @@ describe("list_dir tool (C1: new tool)", () => {
 
   it("should list directory contents with types and sizes", async () => {
     const tool = createListDirTool()
-    const result = await tool.execute({ path: tmpDir }, ctx)
+    const result = await tool.execute({ path: tmpDir }, tmpCtx(tmpDir))
     expect(result.isError).toBe(false)
     const out = JSON.parse(result.content as string)
     expect(out.items.length).toBe(3)
@@ -162,14 +161,14 @@ describe("list_dir tool (C1: new tool)", () => {
 
   it("should return error for non-existent directory", async () => {
     const tool = createListDirTool()
-    const result = await tool.execute({ path: resolve(tmpDir, "nonexistent") }, ctx)
+    const result = await tool.execute({ path: resolve(tmpDir, "nonexistent") }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
     expect(JSON.parse(result.content as string).error).toContain("not found")
   })
 
   it("should reject missing path argument", async () => {
     const tool = createListDirTool()
-    const result = await tool.execute({ path: "" }, ctx)
+    const result = await tool.execute({ path: "" }, tmpCtx(tmpDir))
     expect(result.isError).toBe(true)
     expect(JSON.parse(result.content as string).error).toContain("path")
   })
@@ -222,7 +221,7 @@ describe("bash tool security baseline (D2: deny patterns)", () => {
   const isWin = process.platform === "win32"
 
   it("should deny rm -rf / command", async () => {
-    const { createBashTool } = await import("@deepreef/tools")
+    const { createBashTool } = await import("../../tools/src/index.ts")
     const tool = createBashTool()
     const cmd = isWin ? "rm -Recurse -Force /" : "rm -rf /"
     const result = await tool.execute({ command: cmd }, ctx)
@@ -232,7 +231,7 @@ describe("bash tool security baseline (D2: deny patterns)", () => {
 
   it("should deny sudo commands", async () => {
     if (isWin) return // sudo does not exist on Windows
-    const { createBashTool } = await import("@deepreef/tools")
+    const { createBashTool } = await import("../../tools/src/index.ts")
     const tool = createBashTool()
     const result = await tool.execute({ command: "sudo whoami" }, ctx)
     expect(result.isError).toBe(true)
@@ -241,7 +240,7 @@ describe("bash tool security baseline (D2: deny patterns)", () => {
 
   it("should deny mkfs commands", async () => {
     if (isWin) return // mkfs does not exist on Windows
-    const { createBashTool } = await import("@deepreef/tools")
+    const { createBashTool } = await import("../../tools/src/index.ts")
     const tool = createBashTool()
     const result = await tool.execute({ command: "mkfs.ext4 /dev/sda1" }, ctx)
     expect(result.isError).toBe(true)
@@ -250,7 +249,7 @@ describe("bash tool security baseline (D2: deny patterns)", () => {
 
   it("should deny chmod -R 777 /", async () => {
     if (isWin) return // chmod does not exist on Windows
-    const { createBashTool } = await import("@deepreef/tools")
+    const { createBashTool } = await import("../../tools/src/index.ts")
     const tool = createBashTool()
     const result = await tool.execute({ command: "chmod -R 777 /" }, ctx)
     expect(result.isError).toBe(true)

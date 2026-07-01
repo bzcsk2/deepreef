@@ -1,13 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { ReasonixEngine } from "../src/engine.js"
 import type { LoopEvent } from "../src/interface.js"
-import { createWriteFileTool } from "@deepreef/tools"
-import { createReadFileTool } from "@deepreef/tools"
-import { createEditTool } from "@deepreef/tools"
-import { createBashTool } from "@deepreef/tools"
+import { createWriteFileTool, createReadFileTool, createEditTool, createBashTool } from "@deepreef/tools"
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs"
-import { join } from "node:path"
-import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
 
 function g(gen: AsyncGenerator<any>): AsyncGenerator<any> { return gen }
 
@@ -82,7 +78,7 @@ function genTool(name: string, args: Record<string, unknown>) {
 describe("TT2: E2E tool chains through engine", () => {
   let tmpDir: string
 
-  beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "e2e-")) })
+  beforeEach(() => { tmpDir = mkdtempSync(join(process.cwd(), ".deepreef-test-e2e-")) })
   afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
 
   it("write_file → read_file chain", async () => {

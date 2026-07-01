@@ -1,8 +1,6 @@
-import { describe, expect, it } from "vitest"
-
-import {
-import { setPromptLocale } from "../src/prompt-locale";
-  TaskLedgerTracker,
+import { describe, expect, it, beforeEach } from "vitest"
+import { setPromptLocale } from "../src/prompt-locale.js"
+import { TaskLedgerTracker,
   shouldCreateLedger,
   parsePlanSteps,
   serializePlan,

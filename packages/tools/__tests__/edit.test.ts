@@ -90,6 +90,45 @@ describe("fuzzyReplaceOnce", () => {
     expect(res!.method).toBe("exact")
   })
 
+  it("rejects ambiguous trimmed_full match", () => {
+    const res = fuzzyReplaceOnce("foo\nbar\nfoo", "foo", "REPLACED")
+    expect(res).toBeNull()
+  })
+
+  it("rejects ambiguous trimmed lines match", () => {
+    const res = fuzzyReplaceOnce("a\nb\nc\na\nb\nc", "a \nb \nc ", "REPLACED")
+    expect(res).toBeNull()
+  })
+
+  it("rejects ambiguous trimmedBoundary match", () => {
+    const res = fuzzyReplaceOnce("  hello\n  world\n  hello\n  world", "hello\nworld", "REPLACED")
+    expect(res).toBeNull()
+  })
+
+  it("rejects ambiguous escapeNormalized match", () => {
+    const haystack = "line1\nline2\nline1\nline2"
+    const needle = "line1\\nline2"
+    const res = fuzzyReplaceOnce(haystack, needle, "REPLACED")
+    expect(res).toBeNull()
+  })
+
+  it("rejects ambiguous blockAnchor regions", () => {
+    // Two regions both have matching first/last anchors and meet the threshold
+    const region = "start anchor\nmiddle content\nmiddle extra\nend anchor"
+    const haystack = `prefix\n${region}\nsome text\n${region}\nsuffix`
+    const needle = "start anchor\nmiddle content\ndifferent whitespace\nend anchor"
+    const res = fuzzyReplaceOnce(haystack, needle, "REPLACED")
+    expect(res).toBeNull()
+  })
+
+  it("rejects ambiguous contextAware regions", () => {
+    const region = "first anchor\nmiddle-A\nmiddle-B\nmiddle-C\nlast anchor"
+    const haystack = `before\n${region}\nbetween\n${region}\nafter`
+    const needle = "first anchor\ndifferent X\ndifferent Y\ndifferent Z\nlast anchor"
+    const res = fuzzyReplaceOnce(haystack, needle, "REPLACED")
+    expect(res).toBeNull()
+  })
+
   it("trimmed_full match", () => {
     const res = fuzzyReplaceOnce("Hello  world", " world", " there")
     expect(res).not.toBeNull()
@@ -256,6 +295,64 @@ describe("edit tool stale-read integration", () => {
     const p = JSON.parse(r.content as string)
     expect(p.method).toBe("hash_anchored")
     expect(readFileSync(filePath, "utf-8")).toBe("replaced string here")
+  })
+
+  it("correct old_hash allows the edit", async () => {
+    const dir = tempDir()
+    const file = join(dir, "hash-ok.txt")
+    writeFileSync(file, "content to replace", "utf-8")
+
+    const tool = createEditTool()
+    const ctx = { cwd: dir, signal: new AbortController().signal } as any
+    const r = await tool.execute({ path: file, old_string: "content to replace", new_string: "replaced", old_hash: sha256("content to replace") }, ctx)
+    expect(r.isError).toBe(false)
+    expect(readFileSync(file, "utf-8")).toBe("replaced")
+    await rm(dir, { recursive: true })
+  })
+
+  it("incorrect old_hash rejects the edit and preserves file content", async () => {
+    const dir = tempDir()
+    const file = join(dir, "hash-bad.txt")
+    writeFileSync(file, "original content", "utf-8")
+
+    const tool = createEditTool()
+    const ctx = { cwd: dir, signal: new AbortController().signal } as any
+    const r = await tool.execute({ path: file, old_string: "original content", new_string: "should not appear", old_hash: "deadbeef" }, ctx)
+    expect(r.isError).toBe(true)
+    const parsed = JSON.parse(r.content as string)
+    expect(parsed.error).toContain("old_hash mismatch")
+    expect(readFileSync(file, "utf-8")).toBe("original content")
+    await rm(dir, { recursive: true })
+  })
+
+  it("missing old_hash preserves current behavior", async () => {
+    const dir = tempDir()
+    const file = join(dir, "no-hash.txt")
+    writeFileSync(file, "exact string here", "utf-8")
+
+    const tool = createEditTool()
+    const ctx = { cwd: dir, signal: new AbortController().signal } as any
+    const r = await tool.execute({ path: file, old_string: "exact string", new_string: "replaced string" }, ctx)
+    expect(r.isError).toBe(false)
+    const p = JSON.parse(r.content as string)
+    expect(p.method).toBe("hash_anchored")
+    expect(readFileSync(file, "utf-8")).toBe("replaced string here")
+    await rm(dir, { recursive: true })
+  })
+
+  it("CRLF file remains CRLF after a successful hash-anchored edit with old_hash", async () => {
+    const dir = tempDir()
+    const file = join(dir, "crlf-hash.txt")
+    writeFileSync(file, "line1\r\nline2\r\nline3", "utf-8")
+
+    const tool = createEditTool()
+    const ctx = { cwd: dir, signal: new AbortController().signal } as any
+    const r = await tool.execute({ path: file, old_string: "line2", new_string: "LINE2", old_hash: sha256("line2") }, ctx)
+    expect(r.isError).toBe(false)
+    const content = readFileSync(file, "utf-8")
+    expect(content).toBe("line1\r\nLINE2\r\nline3")
+    expect(content).toContain("\r\n")
+    await rm(dir, { recursive: true })
   })
 
   it("M11: should support concurrent edits to different files", async () => {

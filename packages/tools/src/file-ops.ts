@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises"
-import { resolve } from "node:path"
 import type { AgentTool } from "@deepreef/core"
 import { recordRead } from "./stale-read.js"
+import { resolvePath, PathContainmentError } from "./resolve-path.js"
 import { isSensitive } from "./sensitive.js"
 import { safeStringify, hasBinaryEncoding } from "./safe-stringify.js"
 
@@ -27,7 +27,16 @@ export function createReadFileTool(): AgentTool {
       if (typeof args.path !== "string" || !args.path) {
         return { content: safeStringify({ error: "path is required" }), isError: true }
       }
-      const path = resolve(ctx.cwd, args.path)
+
+      let path: string
+      try {
+        path = await resolvePath(args.path, ctx.cwd)
+      } catch (e) {
+        if (e instanceof PathContainmentError) {
+          return { content: safeStringify({ error: `path is outside the project directory: ${args.path}` }), isError: true }
+        }
+        return { content: safeStringify({ error: `cannot resolve path: ${args.path}` }), isError: true }
+      }
 
       if (isSensitive(path)) {
         return { content: safeStringify({ error: `Reading sensitive file is denied: ${args.path}` }), isError: true }

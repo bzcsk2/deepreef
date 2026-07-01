@@ -1186,9 +1186,21 @@ export function createBridge(
 
     try {
       // Phase G: 主动重跑直到 goal 终结
+      // TUI-level 防御性 guard（WorkflowCoordinator 已有 maxRounds，此处提供额外保险）
+      const MAX_CONTINUATION_CYCLES = 50;
+      let continuationCycles = 0;
+      let prevSig = '';
       let runAgain = true;
       while (runAgain) {
         runAgain = false;
+        continuationCycles++;
+        if (continuationCycles > MAX_CONTINUATION_CYCLES) {
+          commitBridge(prev => ({
+            ...prev,
+            warnings: [...prev.warnings, t().workflowContinuationGuard].slice(-MAX_WARNINGS),
+          }));
+          break;
+        }
         for await (const rawEvent of workflowCoordinator.runWorkflow()) {
         const hasType = (rawEvent as any).type !== undefined;
         const hasRole = (rawEvent as any).role !== undefined;
@@ -1388,6 +1400,16 @@ export function createBridge(
               coordState.currentPhase === "idle" ||
               coordState.currentPhase === "supervisor_analyse";
             if (goal && goal.status === "active" && canStartFromPhase) {
+              // 检测无进展循环（相同的 wfId + phase + iteration + goal status）
+              const sig = `${coordState.workflowId}|${coordState.currentPhase}|${coordState.iteration}|${goal.status}`;
+              if (sig === prevSig) {
+                commitBridge(prev => ({
+                  ...prev,
+                  warnings: [...prev.warnings, t().workflowStuckGuard].slice(-MAX_WARNINGS),
+                }));
+                break;
+              }
+              prevSig = sig;
               runAgain = true;
             }
           }

@@ -308,6 +308,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   const engineRef = useRef(engine);
   const dualRuntimeRef = useRef(dualRuntime);
   dualRuntimeRef.current = dualRuntime;
+  const workflowCoordinatorRef = useRef(workflowCoordinator);
+  workflowCoordinatorRef.current = workflowCoordinator;
   const mountedRef = useRef(true);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const appendMessage = useCallback((message: ChatMessage) => {
@@ -400,6 +402,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       supervisor: persistedS ? { provider: persistedS.provider, model: persistedS.model, baseUrl: persistedS.baseUrl ?? '' } : { provider: config.provider ?? 'zen', model: config.model, baseUrl: config.baseUrl ?? '' },
     }
   });
+  const roleConfigRef = useRef(roleConfig);
+  roleConfigRef.current = roleConfig;
   const [inputText, setInputText] = useState('');                                // 用户输入框当前文本
   const [showAutocomplete, setShowAutocomplete] = useState(false);               // 是否显示命令自动补全面板
   const [showModelPicker, setShowModelPicker] = useState(false);                 // 是否显示模型选择器覆盖层
@@ -428,6 +432,10 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
   }, [config.model]);
   const [harnessStrictness, setHarnessStrictness] = useState<'strict' | 'normal' | 'loose'>(initialStrictness.strictness);
   const [harnessSource, setHarnessSource] = useState(initialStrictness.source);
+  const harnessStrictnessRef = useRef(harnessStrictness);
+  harnessStrictnessRef.current = harnessStrictness;
+  const harnessSourceRef = useRef(harnessSource);
+  harnessSourceRef.current = harnessSource;
   const modalBlocksScroll = showSearch
     || showModelPicker
     || showSessionPicker
@@ -719,7 +727,7 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       if (command.subcommand === 'status') {
         appendMessage({
           role: 'assistant' as const,
-          content: t().harnessStatus(harnessStrictness, harnessSource),
+          content: t().harnessStatus(harnessStrictnessRef.current, harnessSourceRef.current),
         });
         return;
       }
@@ -801,9 +809,9 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
     // /alone /subagent /loop — quick mode switch aliases
     if (command?.name === 'alone' || command?.name === 'subagent' || command?.name === 'loop') {
       if (workflowMode === 'loop' && command.name !== 'loop') {
-        workflowCoordinator?.interrupt();
-        workflowCoordinator?.reset();
-        dualRuntime?.reset();
+        workflowCoordinatorRef.current?.interrupt();
+        workflowCoordinatorRef.current?.reset();
+        dualRuntimeRef.current?.reset();
       }
       setWorkflowMode(command.name);
       saveTuiSettings({ workflowMode: command.name });
@@ -832,7 +840,8 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       }
 
       const defaultModels = (() => {
-        const workerTarget = `${roleConfig.worker.provider}/${roleConfig.worker.model}`
+        const rc = roleConfigRef.current
+        const workerTarget = `${rc.worker.provider}/${rc.worker.model}`
         const freeTargets = FREE_MODEL_TARGETS.map(t => `${t.provider}/${t.model}`)
         return [workerTarget, ...freeTargets.filter(t => t !== workerTarget)]
       })()
@@ -862,12 +871,13 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
       }
 
       setTUIState('loading')
-      const supervisorTarget = `${roleConfig.supervisor.provider}/${roleConfig.supervisor.model}`
-      const { value: workerApiKey } = resolveApiKey(roleConfig.worker.provider)
+      const rc = roleConfigRef.current
+      const supervisorTarget = `${rc.supervisor.provider}/${rc.supervisor.model}`
+      const { value: workerApiKey } = resolveApiKey(rc.worker.provider)
       const workerConfig = {
-        provider: roleConfig.worker.provider,
-        model: roleConfig.worker.model,
-        baseUrl: roleConfig.worker.baseUrl || config.baseUrl || '',
+        provider: rc.worker.provider,
+        model: rc.worker.model,
+        baseUrl: rc.worker.baseUrl || config.baseUrl || '',
         apiKey: workerApiKey ?? '',
       }
       appendMessage({ role: 'assistant' as const, content: t().evalStarted(models.length, finalCases.length, totalRuns) })
@@ -961,11 +971,14 @@ export function App({ engine, config, pluginCount = 0, contentPackCount = 0, ass
 
         if (command.subcommand === 'open') {
           appendMessage({ role: 'assistant' as const, content: t().configOpen(configPath) });
-          // 打开编辑器
-          const { execSync } = await import('child_process');
-          const editor = process.env.EDITOR || 'vi';
+          // 打开编辑器 — 使用 spawnSync 而非 execSync 防止 shell 注入
+          const { spawnSync } = await import('child_process');
+          const editorEnv = process.env.EDITOR || 'vi';
+          const editorParts = editorEnv.split(/\s+/);
+          const editorCmd = editorParts[0]!;
+          const editorArgs = [...editorParts.slice(1), configPath];
           try {
-            execSync(`${editor} "${configPath}"`, { stdio: 'inherit' });
+            spawnSync(editorCmd, editorArgs, { stdio: 'inherit' });
             // 编辑后重新加载
             await configManager.reload();
             appendMessage({ role: 'assistant' as const, content: t().configReloaded });
