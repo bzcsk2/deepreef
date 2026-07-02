@@ -41,9 +41,9 @@ describe("Content Pack Runtime Integration", () => {
     expect(runtime.loadCommandSkills()).toEqual([])
   })
 
-  test("dispose cleans up correctly", () => {
+  test("dispose cleans up correctly", async () => {
     const runtime = new PluginRuntime()
-    runtime.dispose()
+    await runtime.dispose()
     const status = runtime.getStatus()
     expect(status.initialized).toBe(false)
     expect(status.loadedPlugins).toEqual([])

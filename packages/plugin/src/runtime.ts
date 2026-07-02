@@ -465,19 +465,57 @@ export class PluginRuntime {
     }
   }
 
-  dispose(): void {
+  /**
+   * P3: 统一 shutdown 编排。
+   *
+   * 原 dispose() 是同步的，且只移除 hooks、清状态，不触发 ECC onShutdown
+   * hooks，也不调用 plugin 自身的 shutdown 回调。这导致 content pack 中
+   * 声明的 SessionEnd/onShutdown 钩子永不执行，plugin 无法做异步清理。
+   *
+   * 现改为 async，按以下顺序编排：
+   * 1. 派发 { role: "shutdown" } loop event，触发 ECC onShutdown hooks；
+   * 2. drain 等待 in-flight hooks 完成；
+   * 3. 逐一调用 plugin 的可选 shutdown 回调（向后兼容，未实现则跳过）；
+   * 4. 移除 ECC hook adapters、清状态、dispose hookRegistry；
+   * 5. 重置内部数组。
+   */
+  async dispose(): Promise<void> {
     if (this.options.hookManager) {
-      // Remove ECC hook adapters first
+      // 1. 派发 shutdown 事件，激活 ECC onShutdown phase
+      try {
+        await this.options.hookManager.runOnLoopEvent({ role: "shutdown" })
+        // 2. 等待 in-flight hooks 完成
+        await this.options.hookManager.drain()
+      } catch {
+        // best-effort: shutdown 事件失败不阻止清理
+      }
+
+      // 3. 调用每个 plugin 的可选 shutdown 回调
+      for (const loaded of this.loadedPlugins) {
+        const shutdown = (loaded.mod as { shutdown?: unknown }).shutdown
+        if (typeof shutdown === "function") {
+          try {
+            const result = shutdown.call(loaded.mod)
+            if (result instanceof Promise) {
+              await result
+            }
+          } catch {
+            // best-effort: 单个 plugin shutdown 失败不阻止其他清理
+          }
+        }
+      }
+
+      // 4. 移除 ECC hook adapters、清状态、dispose hookRegistry
       for (const adapter of this.eccHookAdapters) {
         this.options.hookManager.removeHooks(adapter)
       }
       this.eccHookAdapters = []
-      // Clear lifecycle state for each content pack
       for (const cp of this.contentPacks) {
         clearEccHookState(cp)
       }
       this.hookRegistry.dispose(this.options.hookManager)
     }
+    // 5. 重置内部数组
     this.loadedPlugins = []
     this.pluginTools = []
     this.contentPacks = []

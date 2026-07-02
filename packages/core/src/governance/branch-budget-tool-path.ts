@@ -1,9 +1,10 @@
+// G1: 对齐运行时真实工具名。原集合含 edit_file/append_file/patch_file/
+// batch_edit_file 等运行时不存在的名字，导致 edit/NotebookEdit 的编辑计数被遗漏。
+// 运行时注册见 engine.ts:938 / loop.ts:575。
 const FILE_WRITE_TOOLS = new Set([
   "write_file",
-  "edit_file",
-  "append_file",
-  "patch_file",
-  "batch_edit_file",
+  "edit",
+  "NotebookEdit",
 ])
 
 /** 从 write/edit 类工具参数中提取目标文件路径。 */

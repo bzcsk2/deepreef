@@ -150,7 +150,7 @@ describe("Plugin Runtime", () => {
     const statusBefore = runtime.getStatus()
     expect(statusBefore.loadedPlugins.length).toBeGreaterThan(0)
 
-    runtime.dispose()
+    await runtime.dispose()
 
     const statusAfter = runtime.getStatus()
     expect(statusAfter.initialized).toBe(false)
@@ -182,5 +182,26 @@ describe("Plugin Runtime", () => {
 
     const status = runtime.getStatus()
     expect(status.initialized).toBe(true)
+  })
+
+  it("P3: dispose dispatches shutdown loop event to hookManager", async () => {
+    const receivedEvents: string[] = []
+    const fakeHookManager = {
+      runOnLoopEvent: async (event: Record<string, unknown>) => {
+        receivedEvents.push(String(event.role))
+      },
+      drain: async () => {},
+      removeHooks: () => {},
+      onHookError: undefined,
+    }
+    const runtime = new PluginRuntime({
+      hookManager: fakeHookManager as unknown as import("@covalo/security").HookManager,
+    })
+    await runtime.init()
+    await runtime.dispose()
+
+    // dispose 应派发 { role: "shutdown" } 事件
+    expect(receivedEvents).toContain("shutdown")
+    expect(runtime.getStatus().initialized).toBe(false)
   })
 })

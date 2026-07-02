@@ -36,12 +36,12 @@ describe("BranchBudgetTracker - hard block gate", () => {
     expect(block.message).toMatch(/Blocked/)
   })
 
-  it("checkToolBlock rejects run_command after failed retries", () => {
+  it("checkToolBlock rejects bash after failed retries", () => {
     const t = new BranchBudgetTracker({ commandRetryMax: 2 })
     t.recordFailedCommandAttempt("npm test")
     t.recordFailedCommandAttempt("npm test")
     const block = t.checkToolBlock(
-      "run_command",
+      "bash",
       { command: "npm test" },
       extractToolTargetPath,
       extractRunCommand,
@@ -56,7 +56,7 @@ describe("BranchBudgetTracker - hard block gate", () => {
     t.recordFileEdit("src/a.ts")
     t.recordFileEdit("src/a.ts")
     expect(t.checkToolBlock(
-      "edit_file",
+      "edit",
       { path: "src/a.ts" },
       extractToolTargetPath,
       extractRunCommand,
@@ -108,7 +108,7 @@ describe("BranchBudgetTracker - hard block gate", () => {
     t.recordFileEdit(filePath)
     t.recordFileEdit(filePath)
     const block = t.checkToolBlock(
-      "edit_file",
+      "edit",
       { path: filePath },
       extractToolTargetPath,
       extractRunCommand,

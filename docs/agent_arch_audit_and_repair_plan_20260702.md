@@ -20,15 +20,15 @@
 | P1 | P1-C | engine.ts | shutdown() 不 dispose BackgroundTaskManager，后台进程泄漏 | ✅ 已修复 (PR #18) |
 | P1 | P1-D | engine.ts | loadSession() 不清理旧 session 的 BackgroundTaskManager | ✅ 已修复 (PR #18) |
 | P2 | F0-1 | engine.ts | CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine 未接入运行时 | ⏳ 后续阶段 |
-| P2 | G1 | governance/branch-budget.ts | 工具名集合与 TaskLedger 不交集 | ⏳ 后续阶段 |
+| P2 | G1 | governance/branch-budget.ts | 工具名集合与 TaskLedger 不交集 | ✅ P3 阶段修复 |
 | P2 | G2 | governance/mode-decision.ts | recovery_pending 无法触发 forced | ⏳ 后续阶段 |
 | P2 | C1 | checkpoint/checkpoint-engine.ts | 未接入运行时 | ⏳ 后续阶段 |
 | P2 | LSP-1 | lsp/lsp-client.ts | starting 状态可永久卡死 | ✅ 本阶段修复 |
-| P2 | LSP-2 | lsp/manager.ts | DocumentInfo 未绑定 serverKey | ⏳ 后续阶段 |
+| P2 | LSP-2 | lsp/manager.ts | DocumentInfo 未绑定 serverKey | ✅ P3 阶段修复 |
 | P2 | LSP-3 | lsp/* | LSP 双版本并存（旧版 lsp-client.ts 与新版 lsp/lsp-client.ts） | ✅ 本阶段修复 |
-| P2 | P3 | plugin/runtime.ts | 无统一 shutdown 编排 | ⏳ 后续阶段 |
+| P2 | P3 | plugin/runtime.ts | 无统一 shutdown 编排 | ✅ P3 阶段修复 |
 | P2 | M2 | memory/runtime/memory-store.ts | parse-error 永久阻塞 | ✅ 已核查无需修复（try/finally 已存在） |
-| P2 | G5 | governance/branch-budget-path.ts | mergeBudgetPathMap 用 max 而非 sum | ⏳ 后续阶段 |
+| P2 | G5 | governance/branch-budget-path.ts | mergeBudgetPathMap 用 max 而非 sum | ✅ P3 阶段修复 |
 | P2 | L8 | loop-helpers.ts | resetToolCallSeq 模块级全局，subagent 并发共享 | ✅ 本阶段修复 |
 
 > 编号说明：L=Loop、M=Memory/Message、G=Governance、C=Checkpoint、LSP=Language Server、F=Framework、P=Plugin/Lifecycle。
@@ -314,17 +314,61 @@
 
 **核查结果**：与现状不符。`withKeyLock` 已有完整的 `try { return await fn() } finally { release() }` 保护，parse-error 不会导致锁泄漏。无需修复。
 
-### 4.5 后续阶段（P3+）规划
+### 4.5 P3 阶段修复详情（已完成）
+
+#### LSP-2: DocumentInfo 绑定 serverKey（已修复）
+
+**问题**：`manager.ts` 的 `DocumentInfo` 接口缺少 `serverKey` 字段，`findClientForLanguage` 仅按 language 查找、忽略 workspaceRoot。在多 workspace 同语言场景下会返回错误的 server，导致文档同步到错误的 LSP 实例；`clearDocumentsForServer` 也无法正确清理文档。
+
+**修复**：
+- `DocumentInfo` 新增 `serverKey: string` 字段，`ensureDocumentSync` 创建时写入 `managed.key`。
+- `markDirty` 改用 `this.servers.get(existing.serverKey)` 精确查找归属 server。
+- `clearDocumentsForServer` 改用 `doc.serverKey === serverKey` 直接比对清理。
+- `findClientForLanguage` 保留作 fallback 工具方法。
+
+**文件**：`packages/tools/src/lsp/manager.ts`
+
+#### G5: mergeBudgetPathMap 改为累加（已修复）
+
+**问题**：`mergeBudgetPathMap` 用 `Math.max` 合并同文件不同路径表示的编辑计数，低估实际编辑次数。同一文件以相对/绝对路径各记录一次独立编辑时，应累加而非取较大值。
+
+**修复**：`Math.max(merged.get(key) ?? 0, count)` → `(merged.get(key) ?? 0) + count`。幂等性由 `bindWorkspaceRoot` 的同 root 早退 + `applySnapshot` 的整体替换 map 保证。
+
+**文件**：`packages/core/src/governance/branch-budget-path.ts`、`packages/core/__tests__/branch-budget-path.test.ts`
+
+#### G1: 统一工具名集合（已修复）
+
+**问题**：`BranchBudgetTracker` 的工具名集合（`run_command`、`edit_file`、`append_file` 等）与运行时真实工具名（`bash`、`write_file`、`edit`、`NotebookEdit`）不交集。虽当前未接入运行时（潜伏态），但接入后会静默失效。
+
+**修复**：
+- `branch-budget-tool-path.ts` 的 `FILE_WRITE_TOOLS` 对齐为 `["write_file", "edit", "NotebookEdit"]`。
+- `branch-budget.ts` 的 `checkToolBlock` 中 `toolName === "run_command"` → `toolName === "bash"`。
+- 同步更新 `branch-budget-block.test.ts` 测试用例。
+
+**文件**：`packages/core/src/governance/branch-budget-tool-path.ts`、`packages/core/src/governance/branch-budget.ts`、`packages/core/__tests__/branch-budget-block.test.ts`
+
+#### P3: plugin runtime 统一 shutdown 编排（已修复）
+
+**问题**：`PluginRuntime.dispose()` 是同步的，只移除 hooks、清状态，不触发 ECC `onShutdown` hooks（content pack 中声明的 `SessionEnd`/`onShutdown` 钩子永不执行），也不调用 plugin 自身的 shutdown 回调。
+
+**修复**：`dispose()` 改为 `async dispose()`，按以下顺序编排：
+1. 派发 `{ role: "shutdown" }` loop event，触发 ECC onShutdown hooks；
+2. `drain()` 等待 in-flight hooks 完成；
+3. 逐一调用 plugin 的可选 `shutdown` 回调（向后兼容，未实现则跳过）；
+4. 移除 ECC hook adapters、清状态、dispose hookRegistry；
+5. 重置内部数组。
+
+`tui.ts` 调用点改为 `await pluginRuntime.dispose()`。
+
+**文件**：`packages/plugin/src/runtime.ts`、`packages/cli/src/tui.ts`、`packages/plugin/__tests__/runtime.test.ts`、`packages/plugin/__tests__/content-pack-runtime-integration.test.ts`
+
+### 4.6 后续阶段（P4+）规划
 
 以下项目推迟到后续阶段：
 
-- **F0-1**: 接入 CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine — 需确定接入点、定义与 effectivePolicy 的关系、添加集成测试。
-- **G1**: 统一工具名集合 — BranchBudgetTracker 与 TaskLedger 的工具名集合不交集。
+- **F0-1**: 接入 CheckpointEngine/BranchBudgetTracker/ModeDecisionEngine — 需确定接入点、定义与 effectivePolicy 的关系、添加集成测试。G1 工具名对齐已为此铺路。
 - **G2**: recovery_pending 无法触发 forced。
 - **C1**: checkpoint-engine 未接入运行时。
-- **LSP-2**: manager.ts DocumentInfo 未绑定 serverKey。
-- **P3**: plugin/runtime 无统一 shutdown 编排。
-- **G5**: mergeBudgetPathMap 用 max 而非 sum。
 
 ---
 
