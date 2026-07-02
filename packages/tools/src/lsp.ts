@@ -186,11 +186,13 @@ export function createLspTool(): AgentTool {
           timeoutMs,
         })
 
-        await client.start()
-        await client.initialize()
-
         let result: unknown
         try {
+          // 把 start/initialize 也纳入 try/finally：若 initialize() 抛错
+          // （timeout/协议错误），立即 shutdown 而非等 watchdog 30s 后清理。
+          await client.start()
+          await client.initialize()
+
           const uri = pathToFileURL(filePath).href
           const content = await readFile(filePath, "utf8")
           await client.openDocument(filePath, language, content)
@@ -224,7 +226,8 @@ export function createLspTool(): AgentTool {
           if (stderr.trim() && error instanceof Error) throw new Error(`${error.message}; server stderr: ${stderr.trim()}`)
           throw error
         } finally {
-          await client.shutdown()
+          // shutdown 失败时降级为 kill，确保子进程被回收
+          await client.shutdown().catch(() => client.kill())
         }
 
         const normalized = normalizeResult(action, result)
