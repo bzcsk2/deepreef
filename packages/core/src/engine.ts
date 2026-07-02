@@ -347,6 +347,17 @@ export class ReasonixEngine implements CoreEngine {
     if (!SessionLoader.validateSessionId(sessionId)) {
       throw new Error(`Invalid session ID: ${sessionId}`)
     }
+    // P1-fix: 切换 session 前 dispose 旧 session 的 BackgroundTaskManager。
+    // 原先 loadSession 不清理旧 session 的 manager，导致旧 session 的后台 shell
+    // 子进程、hard timer、log 写流驻留在 managersBySession Map 中直到进程退出。
+    if (this.sessionId !== sessionId) {
+      try {
+        const { disposeBackgroundTaskManagerFor } = await import("@covalo/tools")
+        disposeBackgroundTaskManagerFor(this.sessionId)
+      } catch {
+        // best-effort: 不阻塞 session 切换
+      }
+    }
     this.sessionId = sessionId
     this.ctx.log.clear()
     this.toolExecutor.setSessionId(sessionId)
@@ -594,6 +605,18 @@ export class ReasonixEngine implements CoreEngine {
       }
     }
 
+    // P1-fix: dispose BackgroundTaskManager for this session。
+    // 原先生产代码从不调用 dispose，导致后台 shell 子进程、hard timer、
+    // log 写流在进程退出或 session 切换时泄漏。
+    try {
+      const { disposeBackgroundTaskManagerFor } = await import("@covalo/tools")
+      disposeBackgroundTaskManagerFor(this.sessionId)
+    } catch (e) {
+      if (this.logger.isEnabled("warn")) {
+        this.logger.warn("engine.shutdown.bg_task_dispose_error", { error: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
     if (this.logger.isEnabled("info")) this.logger.info("engine.shutdown.done", { sessionId: this.sessionId })
 
     try {
@@ -837,6 +860,14 @@ Follow the current workflow phase. Do not perform Worker tasks yourself.`
     const abortController = new AbortController()
     this.activeAbortController = abortController
 
+    // P1-fix: 把 isSubmitting = true 之后的整个 submit 生命周期放入外层 try/catch/finally。
+    // 原先 try 从 guard 之后才开始，中间的 prefix.build / readProjectHarnessConfig /
+    // resolveHarnessStrictness / ctx.getBudget / runSummarize / reduceToTarget 等抛错时
+    // finally 不执行，isSubmitting 和 activeAbortController 泄漏。
+    let submitFailed = false
+    const packetRunId = submitId ?? `loop-${Date.now().toString(36)}`
+
+    try {
     // ADV-HAR-P1: 不再在 submit 开始时清除所有 worker
     // worker 生命周期由 spawnSubagent 管理，completed/failed/cancelled 状态保留供 React 渲染
     // worker_remove 仅在 session 切换时调用
@@ -950,11 +981,11 @@ Do not change goal status.`
         }
       }
     }
+    // P1-fix (A): buildMessages() 在外层 try 内、guard 之前持久化。
+    // 确保即使 guard block 也能记录用户输入和当时上下文，且 buildMessages
+    // 抛错时 finally 能清理。原先此行在 try 之前，抛错会泄漏 isSubmitting。
     this.sessionWriter?.enqueue({ ts: Date.now(), type: "messages", payload: this.ctx.buildMessages() })
     if (diagnosticsEnabled) submitLogger.info("submit.start", { agent: this.currentAgent, role: role ?? "unspecified", mode: mode ?? "unspecified", inputLength: userInput.length })
-
-    // Packet lifecycle: generate runId for loop mode
-    const packetRunId = submitId ?? `loop-${Date.now().toString(36)}`
 
     // TUI-FIX-10: emit loop_transition at submit start
     yield {
@@ -1046,7 +1077,6 @@ Do not change goal status.`
       yield { role: "error", content: `Runtime guard blocked: ${userInput.slice(0, 200)}`, severity: "error" };
     }
 
-    try {
       // If guard blocked, skip the entire loop execution
       if (guardSkipped) {
         // Break out of try to trigger finally cleanup
@@ -1262,13 +1292,37 @@ Do not change goal status.`
           // Packet lifecycle is optional
         }
       }
+    } catch (err) {
+      // P1-fix (B): submit 总 catch — 把任何 throw 转为 error + done 事件。
+      // 原先 submit() 只有 try/finally 无 catch，throw 直接传播给 async generator
+      // 消费者，TUI 难以处理。现在统一转为 error 事件，确保 finally 仍执行清理。
+      submitFailed = true
+      const errMsg = err instanceof Error ? err.message : String(err)
+      if (this.logger.isEnabled("error")) {
+        this.logger.error("submit.uncaught_error", err instanceof Error ? err : new Error(String(err)), { submitId })
+      }
+      const errEvt: LoopEvent = {
+        role: "error",
+        content: `Submit failed: ${errMsg}`,
+        severity: "error" as const,
+        metadata: { source: "submit", submitId },
+      }
+      yield errEvt
+      this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: errEvt })
+      const doneEvt: LoopEvent = {
+        role: "done",
+        metadata: { reason: "submit_error" } as Record<string, unknown>,
+      }
+      yield doneEvt
+      this.sessionWriter?.enqueue({ ts: Date.now(), type: "event", payload: doneEvt })
     } finally {
       // Packet lifecycle: emit completed phase
+      // P1-fix: submit 失败时标记为 Failed，不再误报 Accepted
       if (mode === "loop" || mode === "subagent") {
         yield {
           role: "status",
-          content: this._interrupted ? "Interrupted" : "Accepted",
-          severity: this._interrupted ? "warning" : undefined,
+          content: submitFailed ? "Failed" : this._interrupted ? "Interrupted" : "Accepted",
+          severity: (submitFailed || this._interrupted) ? "warning" : undefined,
           metadata: { runId: packetRunId },
         };
       }
@@ -1280,7 +1334,7 @@ Do not change goal status.`
           kind: "loop_transition",
           transition: {
             from: "observe",
-            to: this._interrupted ? "paused" : "done",
+            to: submitFailed ? "failed" : this._interrupted ? "paused" : "done",
             attempt: 1,
             timestamp: Date.now(),
           },
