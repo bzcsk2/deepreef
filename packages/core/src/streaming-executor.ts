@@ -99,14 +99,14 @@ export class StreamingToolExecutor {
           const result = makeToolError(argsResult.error)
           settle(tc, index, result)
           if (diagnosticsEnabled) logger.warn("tool.args.invalid_json", { toolName: tc.function.name, toolCallIndex: index, argumentLength: tc.function.arguments.length })
-          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
           continue
         }
         if (shouldBlockSalvagedTruncatedWrite(tc.function.name, argsResult.args)) {
           const result = makeToolError(buildSalvagedTruncatedWriteBlockMessage(tc.function.name, argsResult.args))
           settle(tc, index, result)
           if (diagnosticsEnabled) logger.warn("tool.args.salvage_truncated_write_blocked", { toolName: tc.function.name, toolCallIndex: index })
-          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
           continue
         }
 
@@ -114,7 +114,7 @@ export class StreamingToolExecutor {
         if (permResult === "deny") {
           const result = makeToolError(resolveDenyMessage(tc, exec.tools, exec.permissionEngine, argsResult.args))
           settle(tc, index, result)
-          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
           continue
         }
         if (permResult === "ask") {
@@ -125,7 +125,7 @@ export class StreamingToolExecutor {
             const result = makeToolError(`Tool call denied by user: ${tc.function.name}`)
             settle(tc, index, result)
             if (diagnosticsEnabled) logger.warn("tool.execute.denied", { permissionSource: "user", durationMs: Date.now() - batchStartedAt })
-            yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+            yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
             continue
           }
         }
@@ -160,7 +160,7 @@ export class StreamingToolExecutor {
           const { tc, index } = allowedBatch[i]
           const result = makeToolError(`Tool execution failed: ${errorMessage(entry.reason)}`)
           settle(tc, index, result)
-          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
         }
       }
       settled_results.sort((a, b) => a.index - b.index)
@@ -193,7 +193,7 @@ export class StreamingToolExecutor {
           const result = makeToolError(`Tool not available in this turn: ${tc.function.name}`)
           settle(tc, index, result)
           if (logger.isEnabled("error")) logger.warn("tool.execute.not_allowed", { toolName: tc.function.name, toolCallIndex: index })
-          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error", metadata: { error: true, reason: "tool_not_allowed" } }
+          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error", metadata: { error: true, reason: "tool_not_allowed" } }
           continue
         }
         const handler = this.tools.get(tc.function.name)
@@ -221,7 +221,7 @@ export class StreamingToolExecutor {
           const tc = toolCalls[index]
           const result = makeToolError("tool execution interrupted")
           settle(tc, index, result)
-          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+          yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
         }
       }
     }
@@ -245,7 +245,7 @@ export class StreamingToolExecutor {
     if (!handler) {
       const result = makeToolError(`Unknown tool: ${tc.function.name}`)
       if (diagnosticsEnabled) logger.warn("tool.execute.unknown", { durationMs: Date.now() - startedAt })
-      return { event: makeErrorEvent(result, tc.function.name, index), result }
+      return { event: makeErrorEvent(result, tc.function.name, index, tc.id), result }
     }
     if (diagnosticsEnabled) logger.info("tool.execute.start", { concurrency: handler.concurrency, approval: handler.approval })
 
@@ -253,12 +253,12 @@ export class StreamingToolExecutor {
     if (!argsResult.ok) {
       const result = makeToolError(argsResult.error)
       if (diagnosticsEnabled) logger.warn("tool.args.invalid_json", { durationMs: Date.now() - startedAt, argumentLength: tc.function.arguments.length })
-      return { event: makeErrorEvent(result, tc.function.name, index), result }
+      return { event: makeErrorEvent(result, tc.function.name, index, tc.id), result }
     }
     if (shouldBlockSalvagedTruncatedWrite(tc.function.name, argsResult.args)) {
       const result = makeToolError(buildSalvagedTruncatedWriteBlockMessage(tc.function.name, argsResult.args))
       if (diagnosticsEnabled) logger.warn("tool.args.salvage_truncated_write_blocked", { durationMs: Date.now() - startedAt })
-      return { event: makeErrorEvent(result, tc.function.name, index), result }
+      return { event: makeErrorEvent(result, tc.function.name, index, tc.id), result }
     }
     const args = argsResult.args
     if (argsResult.repaired && diagnosticsEnabled) logger.warn("tool.arguments.repaired")
@@ -271,7 +271,7 @@ export class StreamingToolExecutor {
         if (!guard.ok) {
           const result = makeToolError(guard.reason ?? "Write guard: read file first")
           if (diagnosticsEnabled) logger.warn("tool.write_guard", { toolName: tc.function.name, filePath })
-          return { event: makeErrorEvent(result, tc.function.name, index), result }
+          return { event: makeErrorEvent(result, tc.function.name, index, tc.id), result }
         }
       }
     }
@@ -281,7 +281,7 @@ export class StreamingToolExecutor {
       if (check?.decision === "deny") {
         const result = makeToolError(check.reason ?? "Permission denied")
         if (diagnosticsEnabled) logger.warn("tool.execute.denied", { durationMs: Date.now() - startedAt })
-        return { event: makeErrorEvent(result, tc.function.name, index), result }
+        return { event: makeErrorEvent(result, tc.function.name, index, tc.id), result }
       }
 
       // Action certificate gate: check high-risk bash commands before execution
@@ -330,7 +330,7 @@ export class StreamingToolExecutor {
             });
             // Block execution: return tool error with the certificate evidence
             const blockedResult = makeToolError(`Action certificate: blocked ${risk}-risk command. Certificate ${completedCert.packetId} recorded outcome=${completedCert.outcome?.status}. Command: ${command.slice(0, 200)}`);
-            return { event: makeErrorEvent(blockedResult, tc.function.name, index), result: blockedResult };
+            return { event: makeErrorEvent(blockedResult, tc.function.name, index, tc.id), result: blockedResult };
           }
         }
       }
@@ -343,7 +343,7 @@ export class StreamingToolExecutor {
       if (signal.aborted) {
         const result = makeToolError("tool execution interrupted")
         if (diagnosticsEnabled) logger.warn("tool.execute.aborted", { durationMs: Date.now() - startedAt })
-        return { event: makeErrorEvent(result, tc.function.name, index), result }
+        return { event: makeErrorEvent(result, tc.function.name, index, tc.id), result }
       }
 
       const rawResult = normalizeToolResult(await handler.execute(args, toolCtx))
@@ -384,7 +384,7 @@ export class StreamingToolExecutor {
       this.hookManager?.runAfterToolCall(tc.function.name, { content: result.content, isError: true, metadata: result.metadata })
       evalToolTracker.record(true)
       if (diagnosticsEnabled) logger.error("tool.execute.error", e, { durationMs: Date.now() - startedAt })
-      return { event: makeErrorEvent(result, tc.function.name, index), result }
+      return { event: makeErrorEvent(result, tc.function.name, index, tc.id), result }
     }
   }
 
@@ -437,20 +437,20 @@ export class StreamingToolExecutor {
     if (!argsResult.ok) {
       const result = makeToolError(argsResult.error)
       settle(tc, index, result)
-      yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+      yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
       return
     }
     if (shouldBlockSalvagedTruncatedWrite(tc.function.name, argsResult.args)) {
       const result = makeToolError(buildSalvagedTruncatedWriteBlockMessage(tc.function.name, argsResult.args))
       settle(tc, index, result)
-      yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+      yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
       return
     }
     const permResult = await this.checkAskPermission(tc, index, argsResult.args)
     if (permResult === "deny") {
       const result = makeToolError(resolveDenyMessage(tc, this.tools, this.permissionEngine, argsResult.args))
       settle(tc, index, result)
-      yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+      yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
       return
     }
     if (permResult === "ask") {
@@ -460,7 +460,7 @@ export class StreamingToolExecutor {
       if (!allowed) {
         const result = makeToolError(`Tool call denied by user: ${tc.function.name}`)
         settle(tc, index, result)
-        yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, severity: "error" }
+        yield { role: "error", content: result.content, toolName: tc.function.name, toolCallIndex: index, toolCallId: tc.id, severity: "error" }
         return
       }
     }
@@ -476,12 +476,13 @@ export class StreamingToolExecutor {
   }
 }
 
-function makeErrorEvent(result: ToolResult, toolName: string, index: number): LoopEvent {
+function makeErrorEvent(result: ToolResult, toolName: string, index: number, toolCallId?: string): LoopEvent {
   return {
     role: "error",
     content: result.content,
     toolName,
     toolCallIndex: index,
+    toolCallId,
     severity: "error",
     metadata: result.metadata,
   }
