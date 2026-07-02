@@ -61,14 +61,15 @@ export class MemoryStore {
     let release!: () => void
     const next = new Promise<void>((resolve) => { release = resolve })
     // Chain: wait for previous, run fn, then release
-    this.locks.set(lockKey, prev.then(() => next, () => next))
+    const chained = prev.then(() => next, () => next)
+    this.locks.set(lockKey, chained)
     await prev
     try {
       return await fn()
     } finally {
       release()
       // Clean up lock entry only if it's still the current chain tail
-      if (this.locks.get(lockKey) === next) {
+      if (this.locks.get(lockKey) === chained) {
         this.locks.delete(lockKey)
       }
     }

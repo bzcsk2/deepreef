@@ -505,9 +505,11 @@ async function runSingleCase(
       } else {
         _currentCaseWorkspace = workspaceDir;
         try {
-          // C5: process.chdir removed — cwd is passed via executeWorker context
-          // or embedded in the prompt alone. All execSync calls already have { cwd }.
-          workerOutput = await options.executeWorker(workerPrompt);
+          workerOutput = await options.executeWorker(workerPrompt, {
+            cwd: workspaceDir,
+            caseId,
+            evalRunId: runId,
+          });
         } finally {
           _currentCaseWorkspace = null;
         }

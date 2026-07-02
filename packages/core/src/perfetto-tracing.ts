@@ -49,6 +49,11 @@ function generateSpanId(): string {
   return `span_${++spanIdCounter}`
 }
 
+function pushEvent(event: TraceEvent): void {
+  events.push(event)
+  evictOldestEvents()
+}
+
 function evictOldestEvents(): void {
   const currentCount = events.length - startIndex
   if (currentCount < MAX_EVENTS) return
@@ -133,7 +138,7 @@ export function startInteractionSpan(userPromptLength?: number): string {
     startTime,
     args: { user_prompt_length: userPromptLength },
   })
-  events.push({
+  pushEvent({
     name: "Interaction",
     cat: "interaction",
     ph: "B",
@@ -142,7 +147,6 @@ export function startInteractionSpan(userPromptLength?: number): string {
     tid: 1,
     args: { user_prompt_length: userPromptLength },
   })
-  if (events.length > MAX_EVENTS) evictOldestEvents()
   return spanId
 }
 
@@ -151,7 +155,7 @@ export function endInteractionSpan(spanId: string): void {
   const pending = pendingSpans.get(spanId)
   if (!pending) return
   const endTime = getTimestamp()
-  events.push({
+  pushEvent({
     name: pending.name,
     cat: pending.category,
     ph: "E",
@@ -173,7 +177,7 @@ export function startLLMRequestSpan(model: string, messageCount?: number): strin
     startTime,
     args: { model, message_count: messageCount },
   })
-  events.push({
+  pushEvent({
     name: "LLM Request",
     cat: "llm_request",
     ph: "B",
@@ -199,7 +203,7 @@ export function endLLMRequestSpan(
   const pending = pendingSpans.get(spanId)
   if (!pending) return
   const endTime = getTimestamp()
-  events.push({
+  pushEvent({
     name: pending.name,
     cat: pending.category,
     ph: "E",
@@ -229,7 +233,7 @@ export function startToolBatchSpan(toolCount: number): string {
     startTime,
     args: { tool_count: toolCount },
   })
-  events.push({
+  pushEvent({
     name: "Tool Batch",
     cat: "tool_batch",
     ph: "B",
@@ -246,7 +250,7 @@ export function endToolBatchSpan(spanId: string, errorCount?: number): void {
   const pending = pendingSpans.get(spanId)
   if (!pending) return
   const endTime = getTimestamp()
-  events.push({
+  pushEvent({
     name: pending.name,
     cat: pending.category,
     ph: "E",
@@ -272,7 +276,7 @@ export function startToolSpan(toolName: string, toolCallId?: string): string {
     startTime,
     args: { tool_name: toolName, tool_call_id: toolCallId },
   })
-  events.push({
+  pushEvent({
     name: `Tool: ${toolName}`,
     cat: "tool",
     ph: "B",
@@ -296,7 +300,7 @@ export function endToolSpan(
   const pending = pendingSpans.get(spanId)
   if (!pending) return
   const endTime = getTimestamp()
-  events.push({
+  pushEvent({
     name: pending.name,
     cat: pending.category,
     ph: "E",
@@ -315,7 +319,7 @@ export function endToolSpan(
 
 export function emitInstant(name: string, category: string, args?: Record<string, unknown>): void {
   if (!isEnabled) return
-  events.push({
+  pushEvent({
     name,
     cat: category,
     ph: "i",
@@ -331,7 +335,7 @@ async function writePerfettoTrace(): Promise<void> {
   try {
     for (const [spanId, pending] of pendingSpans) {
       const endTime = getTimestamp()
-      events.push({
+      pushEvent({
         name: pending.name,
         cat: pending.category,
         ph: "E",

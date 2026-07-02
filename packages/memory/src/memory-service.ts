@@ -319,18 +319,25 @@ export class MemoryService {
     }
   }
 
+  private runTimerTask(name: string, fn: () => Promise<void>): void {
+    void fn().catch(err => {
+      this._intervalFailCount++
+      this.bootLog(`[warn] timer ${name} failed: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }
+
   private startTimers(): void {
     const autoForgetMs = parseInt(process.env.AUTO_FORGET_INTERVAL_MS || "3600000", 10)
     if (process.env.AUTO_FORGET_ENABLED !== "false") {
-      const t = setInterval(() => { void this.sdk.trigger({ function_id: "mem::auto-forget", payload: { dryRun: false } }).catch(() => {}) }, autoForgetMs)
+      const t = setInterval(() => { this.runTimerTask('auto-forget', () => this.sdk.trigger({ function_id: "mem::auto-forget", payload: { dryRun: false } })) }, autoForgetMs)
       t.unref(); this.timers.push(t)
     }
     if (process.env.LESSON_DECAY_ENABLED !== "false") {
-      const t = setInterval(() => { void this.sdk.trigger({ function_id: "mem::lesson-decay-sweep", payload: {} }).catch(() => {}) }, 86400000)
+      const t = setInterval(() => { this.runTimerTask('lesson-decay', () => this.sdk.trigger({ function_id: "mem::lesson-decay-sweep", payload: {} })) }, 86400000)
       t.unref(); this.timers.push(t)
     }
     if (process.env.INSIGHT_DECAY_ENABLED !== "false") {
-      const t = setInterval(() => { void this.sdk.trigger({ function_id: "mem::insight-decay-sweep", payload: {} }).catch(() => {}) }, 86400000)
+      const t = setInterval(() => { this.runTimerTask('insight-decay', () => this.sdk.trigger({ function_id: "mem::insight-decay-sweep", payload: {} })) }, 86400000)
       t.unref(); this.timers.push(t)
     }
     // P1-2: Use userConfig.enableConsolidation with env var fallback
@@ -339,7 +346,7 @@ export class MemoryService {
       && (this.userConfig.enableConsolidation ?? isConsolidationEnabled())
     if (shouldConsolidate) {
       const consolidationMs = parseInt(process.env.CONSOLIDATION_INTERVAL_MS || "7200000", 10)
-      const t = setInterval(() => { void this.sdk.trigger({ function_id: "mem::consolidate-pipeline", payload: {} }).catch(() => {}) }, consolidationMs)
+      const t = setInterval(() => { this.runTimerTask('consolidate', () => this.sdk.trigger({ function_id: "mem::consolidate-pipeline", payload: {} })) }, consolidationMs)
       t.unref(); this.timers.push(t)
     }
   }

@@ -288,7 +288,7 @@ export interface FixedEvalOptions {
   checkApiKey?: (model: string) => Promise<boolean>;
   switchModel?: (model: string) => Promise<void>;
   restoreModel?: () => Promise<void>;
-  executeWorker?: (prompt: string) => Promise<string>;
+  executeWorker?: (prompt: string, context?: { cwd: string; caseId: string; evalRunId?: string }) => Promise<string>;
   executeSupervisor?: (prompt: string) => Promise<string>;
   sandboxProvider?: import("../sandbox/types").SandboxProvider;
   writeObservability?: (event: string, level: string, overrides?: Record<string, unknown>) => void;

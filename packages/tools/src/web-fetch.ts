@@ -184,8 +184,8 @@ export function hasPrivateIP(host: string): boolean {
 
 export async function isPrivateHostname(host: string): Promise<boolean> {
   try {
-    const addrs = await dns.resolve(host)
-    return addrs.some(a => hasPrivateIP(a))
+    const addrs = await dns.lookup(host, { all: true })
+    return addrs.some(a => hasPrivateIP(a.address))
   } catch {
     return true // can't resolve = unsafe
   }
@@ -260,8 +260,8 @@ export function createWebFetchTool(): AgentTool {
         let redirectCount = 0
         let resp: Response | null = null
 
-        while (redirectCount <= MAX_REDIRECTS) {
-          try {
+        try {
+          while (redirectCount <= MAX_REDIRECTS) {
             resp = await fetch(currentUrl, {
               signal,
               redirect: "manual",
@@ -270,99 +270,99 @@ export function createWebFetchTool(): AgentTool {
                 Accept: acceptHeader(format),
               },
             })
-          } finally {
-            clearTimeout(timer)
-            cleanup()
-          }
 
-          // Handle redirect (3xx)
-          if (resp.status >= 300 && resp.status < 400) {
-            const location = resp.headers.get("location")
-            if (!location) {
-              return { content: safeStringify({ error: `Redirect without Location header: ${resp.status}` }), isError: true }
+            // Handle redirect (3xx)
+            if (resp.status >= 300 && resp.status < 400) {
+              const location = resp.headers.get("location")
+              if (!location) {
+                return { content: safeStringify({ error: `Redirect without Location header: ${resp.status}` }), isError: true }
+              }
+
+              redirectCount++
+              if (redirectCount > MAX_REDIRECTS) {
+                return { content: safeStringify({ error: `Too many redirects (max ${MAX_REDIRECTS})` }), isError: true }
+              }
+
+              // Resolve relative redirect URL
+              const redirectUrl = new URL(location, currentUrl)
+              currentUrl = redirectUrl.toString()
+
+              // SSRF check on redirect target
+              const ssrfError = await checkSSRF(redirectUrl.hostname, currentUrl)
+              if (ssrfError) {
+                return { content: safeStringify({ error: `Redirect target ${ssrfError}` }), isError: true }
+              }
+
+              // Continue loop to follow redirect
+              continue
             }
 
-            redirectCount++
-            if (redirectCount > MAX_REDIRECTS) {
-              return { content: safeStringify({ error: `Too many redirects (max ${MAX_REDIRECTS})` }), isError: true }
-            }
-
-            // Resolve relative redirect URL
-            const redirectUrl = new URL(location, currentUrl)
-            currentUrl = redirectUrl.toString()
-
-            // SSRF check on redirect target
-            const ssrfError = await checkSSRF(redirectUrl.hostname, currentUrl)
-            if (ssrfError) {
-              return { content: safeStringify({ error: `Redirect target ${ssrfError}` }), isError: true }
-            }
-
-            // Continue loop to follow redirect
-            continue
+            // Non-redirect response: proceed
+            break
           }
 
-          // Non-redirect response: proceed
-          break
-        }
-
-        if (!resp) {
-          return { content: safeStringify({ error: "No response received" }), isError: true }
-        }
-
-        // SSRF: validate final URL hostname
-        const finalHostname = new URL(currentUrl).hostname
-        const ssrfError = await checkSSRF(finalHostname, currentUrl)
-        if (ssrfError) {
-          return { content: safeStringify({ error: `Final URL ${ssrfError}` }), isError: true }
-        }
-
-        if (!resp.ok) {
-          return {
-            content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url: currentUrl }),
-            isError: true,
+          if (!resp) {
+            return { content: safeStringify({ error: "No response received" }), isError: true }
           }
-        }
 
-        const contentType = resp.headers.get("content-type") ?? ""
-        const isHtml = contentType.includes("text/html")
+          // SSRF: validate final URL hostname
+          const finalHostname = new URL(currentUrl).hostname
+          const ssrfError = await checkSSRF(finalHostname, currentUrl)
+          if (ssrfError) {
+            return { content: safeStringify({ error: `Final URL ${ssrfError}` }), isError: true }
+          }
 
-        const buf = await resp.arrayBuffer()
-        const bytes = buf.byteLength
-        if (bytes > MAX_CONTENT_LENGTH) {
-          return { content: safeStringify({ error: `Content too large: ${bytes} bytes exceeds limit of ${MAX_CONTENT_LENGTH}` }), isError: true }
-        }
+          if (!resp.ok) {
+            return {
+              content: safeStringify({ error: `HTTP ${resp.status}: ${resp.statusText}`, code: resp.status, url: currentUrl }),
+              isError: true,
+            }
+          }
 
-        let text = new TextDecoder().decode(buf)
-        let result: string
+          const contentType = resp.headers.get("content-type") ?? ""
+          const isHtml = contentType.includes("text/html")
 
-        if (isHtml) {
-          if (format === "markdown") {
-            result = convertHTMLToMarkdown(text)
-          } else if (format === "text") {
-            result = extractTextFromHTML(text)
+          const buf = await resp.arrayBuffer()
+          const bytes = buf.byteLength
+          if (bytes > MAX_CONTENT_LENGTH) {
+            return { content: safeStringify({ error: `Content too large: ${bytes} bytes exceeds limit of ${MAX_CONTENT_LENGTH}` }), isError: true }
+          }
+
+          let text = new TextDecoder().decode(buf)
+          let result: string
+
+          if (isHtml) {
+            if (format === "markdown") {
+              result = convertHTMLToMarkdown(text)
+            } else if (format === "text") {
+              result = extractTextFromHTML(text)
+            } else {
+              result = text // raw HTML
+            }
           } else {
-            result = text // raw HTML
+            // Non-HTML content: return as-is regardless of format
+            result = text
           }
-        } else {
-          // Non-HTML content: return as-is regardless of format
-          result = text
-        }
 
-        if (result.length > maxLen) {
-          result = result.slice(0, maxLen) + `\n... [truncated: ${result.length - maxLen} more chars]`
-        }
+          if (result.length > maxLen) {
+            result = result.slice(0, maxLen) + `\n... [truncated: ${result.length - maxLen} more chars]`
+          }
 
-        const elapsed = Date.now() - t0
-        return {
-          content: safeStringify({
-            content: result,
-            format,
-            bytes,
-            code: resp.status,
-            durationMs: elapsed,
-            url: currentUrl,
-          }),
-          isError: false,
+          const elapsed = Date.now() - t0
+          return {
+            content: safeStringify({
+              content: result,
+              format,
+              bytes,
+              code: resp.status,
+              durationMs: elapsed,
+              url: currentUrl,
+            }),
+            isError: false,
+          }
+        } finally {
+          clearTimeout(timer)
+          cleanup()
         }
       } catch (e) {
         if (e instanceof Error && e.name === "AbortError") {
@@ -387,12 +387,12 @@ async function checkSSRF(hostname: string, url: string): Promise<string | null> 
     return null
   }
 
-  // Hostname: resolve DNS and check all addresses
+  // Hostname: resolve DNS and check all addresses (both A and AAAA)
   try {
-    const addrs = await dns.resolve(hostname)
-    const blocked = addrs.filter(a => hasPrivateIP(a))
+    const addrs = await dns.lookup(hostname, { all: true })
+    const blocked = addrs.filter(a => hasPrivateIP(a.address))
     if (blocked.length > 0) {
-      return `Hostname ${hostname} resolves to internal network: ${blocked.join(", ")}`
+      return `Hostname ${hostname} resolves to internal network: ${blocked.map(a => a.address).join(", ")}`
     }
     return null
   } catch {

@@ -527,14 +527,14 @@ async function runForegroundShell(opts: ForegroundRunOptions): Promise<Foregroun
       reject(e)
     })
     child.on("close", (code) => {
-      if (escalated || done) return
-      if (softTimer) clearTimeout(softTimer)
-      clearTimeout(hardTimer)
-      // Process closed (SIGTERM worked or it exited); clean up SIGKILL timer
+      // Clear SIGKILL timer first, regardless of done/escalated status
       if (sigtermTimer) {
         clearTimeout(sigtermTimer)
         sigtermTimer = null
       }
+      if (escalated || done) return
+      if (softTimer) clearTimeout(softTimer)
+      clearTimeout(hardTimer)
       finish(code ?? 0)
     })
   })

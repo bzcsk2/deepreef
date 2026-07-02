@@ -327,53 +327,48 @@ function parseHookCommand(
     return { error: "Hook command contains shell metacharacters; rejected in safe mode" }
   }
 
-  // Handle $CLAUDE_PLUGIN_ROOT/... prefix (without shell substitution — we resolve it)
-  let resolvedPath: string | null = null
-  let restArgs: string[] = []
+  // Split into argv-style tokens (simple split on whitespace,
+  // not shell-style parsing, since shell metacharacters are already rejected)
+  const tokens = command.split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) {
+    return { error: "Empty hook command" }
+  }
 
-  const dollarVarMatch = command.match(/^\$CLAUDE_PLUGIN_ROOT(\/.+)$/)
-  const dollarBraceMatch = command.match(/^\$\{CLAUDE_PLUGIN_ROOT\}(\/.+)$/)
+  const first = tokens[0]
+  const rest = tokens.slice(1)
+  let resolvedPath: string | null = null
+  let restArgs: string[] = rest
+
+  // Handle $CLAUDE_PLUGIN_ROOT/... or ${CLAUDE_PLUGIN_ROOT}/... prefix (without shell substitution)
+  const dollarVarMatch = first.match(/^\$CLAUDE_PLUGIN_ROOT(\/.+)$/)
+  const dollarBraceMatch = first.match(/^\$\{CLAUDE_PLUGIN_ROOT\}(\/.+)$/)
 
   if (dollarVarMatch) {
     resolvedPath = resolve(pluginRoot, dollarVarMatch[1])
-    restArgs = []
   } else if (dollarBraceMatch) {
     resolvedPath = resolve(pluginRoot, dollarBraceMatch[1])
-    restArgs = []
+  } else if (first.includes("/") || first.startsWith(".")) {
+    // Relative path — resolve against pluginRoot
+    resolvedPath = resolve(pluginRoot, first)
   } else {
-    // Plain command — split into argv-style tokens (simple split on whitespace,
-    // not shell-style parsing, since shell metacharacters are already rejected)
-    const tokens = command.split(/\s+/).filter(Boolean)
-    if (tokens.length === 0) {
-      return { error: "Empty hook command" }
-    }
-    const first = tokens[0]
-    const rest = tokens.slice(1)
-
-    // If first token is a relative path (contains / or starts with ./)
-    if (first.includes("/") || first.startsWith(".")) {
-      resolvedPath = resolve(pluginRoot, first)
-      restArgs = rest
-    } else {
-      // Simple command name like "node", "python3" — allow as-is (must be in PATH)
-      resolvedPath = first
-      restArgs = rest
+    // Safe mode: reject bare command names (e.g. "node", "python3", "bash")
+    // Only pluginRoot-relative paths or $CLAUDE_PLUGIN_ROOT/... references are allowed.
+    // Set COVALO_ALLOW_UNSAFE_PLUGIN_HOOKS=1 to allow PATH commands.
+    return {
+      error: `Hook command "${first}" is a bare command name; rejected in safe mode. ` +
+        `Use a pluginRoot-relative path (e.g. ./scripts/hook.js) or ` +
+        `$CLAUDE_PLUGIN_ROOT/scripts/hook.js instead.`,
     }
   }
 
-  // If we resolved a path, check containment within pluginRoot
-  if (resolvedPath && (resolvedPath.includes("/") || resolvedPath.startsWith("."))) {
-    const absPath = resolve(pluginRoot, resolvedPath)
-    const finalPath = isAbsolute(resolvedPath) ? resolvedPath : absPath
-    const rel = relative(pluginRoot, finalPath)
-    if (rel.startsWith("..") || isAbsolute(rel)) {
-      return { error: `Hook command resolves outside plugin root: ${command}` }
-    }
-    resolvedPath = finalPath
+  // Containment check: resolvedPath must be within pluginRoot
+  const rel = relative(pluginRoot, resolvedPath!)
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    return { error: `Hook command resolves outside plugin root: ${command}` }
   }
 
   return {
-    executable: resolvedPath ?? "sh",
+    executable: resolvedPath!,
     args: restArgs,
   }
 }
