@@ -640,3 +640,91 @@ describe("CL-30: Context budget boundaries", () => {
     expect(budget.window).toBe(10000)
   })
 })
+
+// M1-fix: 修复消息结构后必须重新计算预算，以修复后的最终消息为校验基准
+describe("M1-fix: repairMessageStructure budget re-check", () => {
+  // 修复删除 orphaned tool_result 后，原本超预算的消息应回到预算内，
+  // 不应继续走 aggressive truncation 丢失不必要的上下文
+  it("returns to budget after removing orphaned tool_result, no over-truncation", () => {
+    const cm = new ContextManager(20, 500)
+    cm.prefix.build("sys")
+    cm.log.append({ role: "user", content: "query" })
+    cm.log.append({ role: "assistant", content: "answer" })
+    // orphaned tool_result: 无对应 tool_call，content 巨大撑爆预算
+    cm.log.append({
+      role: "tool",
+      tool_call_id: "orphan-tr-1",
+      content: "x".repeat(5000),
+      name: "ghost",
+    })
+
+    const messages = cm.buildMessages()
+    // orphaned tool_result 应被删除
+    expect(messages.find(m => m.role === "tool" && m.tool_call_id === "orphan-tr-1")).toBeUndefined()
+    // 原始 user/assistant 应保留（未被过度截断）
+    expect(messages.find(m => m.role === "user" && m.content === "query")).toBeDefined()
+    expect(messages.find(m => m.role === "assistant" && m.content === "answer")).toBeDefined()
+    // 最终消息应在预算内
+    const total = estimateTokens(messages)
+    expect(total).toBeLessThanOrEqual(500)
+  })
+
+  // 修复插入占位 tool_result 后，若仍超预算，应走 aggressive truncation 或 throw，
+  // 不会静默返回超窗消息
+  it("does not silently return over-budget messages after inserting placeholder", () => {
+    // 构造：window 极小，assistant 带 orphaned tool_call，修复后插入 placeholder 仍超窗
+    const cm = new ContextManager(20, 80) // 极小窗口
+    cm.prefix.build("sys")
+    cm.log.append({ role: "user", content: "q" })
+    cm.log.append({
+      role: "assistant",
+      content: "a",
+      tool_calls: [{
+        id: "orphan-tc-1",
+        type: "function",
+        function: { name: "big_tool", arguments: "{}" },
+      }],
+    })
+    // 另一个大 round 撑爆预算
+    cm.log.append({ role: "user", content: "z".repeat(500) })
+    cm.log.append({ role: "assistant", content: "y".repeat(500) })
+
+    const messages = cm.buildMessages()
+    // 最终消息应在预算内（要么截断了大 round，要么 throw — 这里期望截断成功）
+    const total = estimateTokens(messages)
+    expect(total).toBeLessThanOrEqual(80)
+    // 不应残留 orphaned tool_call（要么有 placeholder 配对，要么 assistant 被截掉）
+    const assistantMsgs = messages.filter(m => m.role === "assistant" && m.tool_calls)
+    for (const a of assistantMsgs) {
+      for (const tc of a.tool_calls!) {
+        const hasResult = messages.some(m => m.role === "tool" && m.tool_call_id === tc.id)
+        expect(hasResult).toBe(true)
+      }
+    }
+  })
+
+  // 预算内分支：修复插入 placeholder 后若仍 ≤ window，直接返回
+  it("returns messages as-is when repaired messages fit within budget", () => {
+    const cm = new ContextManager(20, 5000)
+    cm.prefix.build("sys")
+    cm.log.append({ role: "user", content: "query" })
+    cm.log.append({
+      role: "assistant",
+      content: "answer",
+      tool_calls: [{
+        id: "orphan-tc-2",
+        type: "function",
+        function: { name: "tool", arguments: "{}" },
+      }],
+    })
+    // 无对应 tool_result → orphaned tool_call，修复后插入 placeholder
+
+    const messages = cm.buildMessages()
+    // 应插入 placeholder tool_result
+    const placeholder = messages.find(m => m.role === "tool" && m.tool_call_id === "orphan-tc-2")
+    expect(placeholder).toBeDefined()
+    expect(placeholder?.is_error).toBe(true)
+    // 原 user/assistant 保留
+    expect(messages.find(m => m.role === "user" && m.content === "query")).toBeDefined()
+  })
+})
