@@ -3,8 +3,9 @@ import { safeStringify } from "./safe-stringify.js"
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import { isSensitive } from "./sensitive.js"
-import { runLspRequest } from "./lsp-client.js"
+import { LspClient } from "./lsp/lsp-client.js"
 import { readLspConfig, getLanguageConfig, getRequestTimeout, getInstallHint } from "./lsp/config.js"
 import { inferLanguage } from "./lsp/language.js"
 import {
@@ -174,21 +175,57 @@ export function createLspTool(): AgentTool {
         : getRequestTimeout(config)
 
       try {
-        const result = await runLspRequest({
+        // LSP-3: 直接使用 LspClient，不再经过 lsp-client.ts 包装器（已删除）。
+        // 逻辑等价于原 runLspRequest：start → initialize → 单次请求 → shutdown。
+        const client = new LspClient({
           command: server.command,
           args: server.args ?? [],
           cwd: ctx.cwd,
-          filePath,
+          rootPath: ctx.cwd,
           language,
-          action,
-          method: ACTION_METHODS[action],
-          line: numberOrZero(args.line),
-          column: numberOrZero(args.column),
-          query: typeof args.query === "string" ? args.query : undefined,
-          new_name: typeof args.new_name === "string" ? args.new_name : undefined,
           timeoutMs,
-          signal: ctx.signal,
         })
+
+        await client.start()
+        await client.initialize()
+
+        let result: unknown
+        try {
+          const uri = pathToFileURL(filePath).href
+          const content = await readFile(filePath, "utf8")
+          await client.openDocument(filePath, language, content)
+
+          if (action === "diagnostics") {
+            await new Promise((resolve) => setTimeout(resolve, Math.min(timeoutMs, 750)))
+            result = client.getDiagnostics(uri)
+          } else if (action === "workspace_symbols") {
+            result = await client.request(ACTION_METHODS[action], { query: typeof args.query === "string" ? args.query : "" })
+          } else if (action === "signature_help") {
+            result = await client.request(ACTION_METHODS[action], {
+              textDocument: { uri },
+              position: { line: numberOrZero(args.line), character: numberOrZero(args.column) },
+            })
+          } else if (action === "rename_preview") {
+            result = await client.request(ACTION_METHODS[action], {
+              textDocument: { uri },
+              position: { line: numberOrZero(args.line), character: numberOrZero(args.column) },
+              newName: typeof args.new_name === "string" ? args.new_name : "",
+            })
+          } else {
+            const params: Record<string, unknown> = {
+              textDocument: { uri },
+              position: { line: numberOrZero(args.line), character: numberOrZero(args.column) },
+            }
+            if (action === "references") params.context = { includeDeclaration: true }
+            result = await client.request(ACTION_METHODS[action], params)
+          }
+        } catch (error) {
+          const stderr = client.getStderr()
+          if (stderr.trim() && error instanceof Error) throw new Error(`${error.message}; server stderr: ${stderr.trim()}`)
+          throw error
+        } finally {
+          await client.shutdown()
+        }
 
         const normalized = normalizeResult(action, result)
         const response: Record<string, unknown> = {

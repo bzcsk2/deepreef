@@ -7,6 +7,9 @@ import type { SupportedPlatform } from "../platform/shell-backend.js"
 
 const INITIALIZE_TIMEOUT_MS = 10000
 const SHUTDOWN_TIMEOUT_MS = 5000
+// LSP-1: starting 状态 guard timer，防止调用方只调 start() 不调 initialize()
+// 导致 state 永久停留 "starting"。initialize() 成功后会 clear 该 timer。
+const STARTING_GUARD_TIMEOUT_MS = 30000
 
 export type LspServerState =
   | "idle"
@@ -50,6 +53,8 @@ export class LspClient {
   private pending = new Map<number, PendingRequest>()
   private diagnostics = new Map<string, unknown[]>()
   private startedAt = 0
+  // LSP-1: starting 状态 watchdog，防止 initialize() 不被调用导致永久 starting
+  private startingGuardTimer: ReturnType<typeof setTimeout> | null = null
   private stderr = ""
   private serverCapabilities: Record<string, unknown> = {}
   private diagnosticRegistrations = new Map<string, { id: string; method: string }>()
@@ -107,6 +112,20 @@ export class LspClient {
 
       this.setupConnectionHandlers()
       this.connection.listen()
+
+      // LSP-1: 启动 starting guard timer。若 initialize() 在超时内未成功
+      // 将 state 转为 "running"，则转 "unhealthy" 并 kill 子进程，避免
+      // 调用方只调 start() 不调 initialize() 导致 state 永久停留 "starting"。
+      // 使用 kill() 而非新增私有方法：kill() 会终止进程树、清理 connection、
+      // 拒绝 pending requests，符合 guard timer 超时后的预期清理行为。
+      this.startingGuardTimer = setTimeout(() => {
+        if (this.state === "starting") {
+          this.startingGuardTimer = null
+          this.kill()
+        }
+      }, STARTING_GUARD_TIMEOUT_MS)
+      // unref 避免阻止进程退出
+      this.startingGuardTimer.unref?.()
     } catch (error) {
       this.state = "unhealthy"
       throw error
@@ -208,6 +227,11 @@ export class LspClient {
 
     this.serverCapabilities = result?.capabilities ?? {}
     this.state = "running"
+    // LSP-1: initialize 成功，clear starting guard timer
+    if (this.startingGuardTimer) {
+      clearTimeout(this.startingGuardTimer)
+      this.startingGuardTimer = null
+    }
     await this.connection.sendNotification("initialized", {})
 
     if (this.options.settings) {
