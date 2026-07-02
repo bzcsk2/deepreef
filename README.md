@@ -65,13 +65,13 @@ The Supervisor uses a stronger model. It is responsible for planning, reviewing 
 ### Install the CLI
 
 ```bash
-npm install -g @covalo/cli
+npm install -g covalo
 ```
 
 You can also use Bun:
 
 ```bash
-bun install -g @covalo/cli
+bun install -g covalo
 ```
 
 ### Start inside a project
@@ -276,7 +276,9 @@ bun run build
 npm pack --dry-run
 ```
 
-The package is published as `@covalo/cli` and exposes the `covalo` binary.
+Before publishing, run `npm pack --dry-run` and confirm the package name is `covalo` and the `covalo` binary is included.
+
+The package is published as `covalo` and exposes the `covalo` binary. The `looprig` binary is kept as a compatibility alias.
 
 ---
 
