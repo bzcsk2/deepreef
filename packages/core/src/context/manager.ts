@@ -81,6 +81,9 @@ export class ContextManager {
     if (this.maxRounds > 0) {
       log = this.truncateByRounds(log)
     }
+    // M1-fix: 截断前先修复，避免 orphaned tool_result 撑爆 token 估算
+    // 导致 truncateToBudget 过度删除整 round（丢失有效上下文）
+    log = this.repairMessageStructure(log)
     log = this.truncateToBudget(log)
     return log
   }
@@ -103,54 +106,66 @@ export class ContextManager {
       throw new Error(`Context budget exceeded: scratch alone (${scratchTokens}t) exceeds window (${this.contextWindow}t)`)
     }
 
-    // ADV-BUG-03: Final budget invariant check
+    // ADV-BUG-03 + M1-fix: 先修复消息结构，再算 token，再判断预算。
+    // 原先先算 token 再修复，修复后不重新算 token：
+    //  1. 预算内分支：修复插入占位 tool_result 后可能超窗，却静默返回
+    //  2. 超预算分支：修复删除 orphaned tool_result 后可能已回到预算内，
+    //     却仍走 aggressive truncation，丢失不必要的上下文
+    // 现在以「修复后的最终消息」作为预算校验基准。
     const summaryTokens = estimateTokens(summaryMsgs)
-    const allMessages = [...prefixMsgs, ...summaryMsgs, ...log, ...scratchMsgs]
-    const totalTokens = estimateTokens(allMessages)
-    
-    if (totalTokens > this.contextWindow) {
-      // ADV-BUG-03: Validate message structure integrity
-      this.validateMessageStructure(allMessages)
-      
-      // Log warning for diagnostics
-      if (this.contextWindow > 0) {
-        console.warn(
-          `[ContextManager] Final budget exceeded: ${totalTokens}t > ${this.contextWindow}t. ` +
-          `Attempting aggressive truncation.`
-        )
-      }
-      
-      // ADV-BUG-03: Aggressive truncation — remove oldest rounds until under budget
-      const truncatedLog = this.aggressiveTruncate(log, prefixTokens, summaryTokens, scratchTokens)
-      const truncatedMessages = [...prefixMsgs, ...summaryMsgs, ...truncatedLog, ...scratchMsgs]
-      const finalTokens = estimateTokens(truncatedMessages)
-      
-      if (finalTokens > this.contextWindow) {
-        // ADV-BUG-03: Throw diagnostic error — cannot continue to provider
-        throw new Error(
-          `[ContextManager] FATAL: Unable to fit within budget after aggressive truncation. ` +
-          `Total: ${finalTokens}t, Window: ${this.contextWindow}t. ` +
-          `Cannot proceed with provider request. Consider increasing context window or reducing system prompt size.`
-        )
-      }
-      
-      return truncatedMessages
+    let allMessages = this.repairMessageStructure([...prefixMsgs, ...summaryMsgs, ...log, ...scratchMsgs])
+    let totalTokens = estimateTokens(allMessages)
+
+    if (totalTokens <= this.contextWindow) {
+      return allMessages
     }
 
-    // ADV-BUG-03: Validate message structure even when under budget
-    this.validateMessageStructure(allMessages)
+    // Log warning for diagnostics
+    if (this.contextWindow > 0) {
+      console.warn(
+        `[ContextManager] Final budget exceeded: ${totalTokens}t > ${this.contextWindow}t. ` +
+        `Attempting aggressive truncation.`
+      )
+    }
 
-    return allMessages
+    // ADV-BUG-03: Aggressive truncation — remove oldest rounds until under budget
+    const truncatedLog = this.aggressiveTruncate(log, prefixTokens, summaryTokens, scratchTokens)
+    let truncatedMessages = this.repairMessageStructure([...prefixMsgs, ...summaryMsgs, ...truncatedLog, ...scratchMsgs])
+    const finalTokens = estimateTokens(truncatedMessages)
+
+    if (finalTokens > this.contextWindow) {
+      // ADV-BUG-03: Throw diagnostic error — cannot continue to provider
+      throw new Error(
+        `[ContextManager] FATAL: Unable to fit within budget after aggressive truncation. ` +
+        `Total: ${finalTokens}t, Window: ${this.contextWindow}t. ` +
+        `Cannot proceed with provider request. Consider increasing context window or reducing system prompt size.`
+      )
+    }
+
+    return truncatedMessages
   }
 
   /**
-   * ADV-BUG-03: Validate message structure integrity.
-   * Ensures assistant tool_calls have corresponding tool results.
+   * M1: 检测并修复消息结构中的孤儿 tool_call / tool_result（基于全局 ID 配对）。
+   * - orphaned tool_call（assistant 有 tool_calls 但全序列无对应 tool_result）：
+   *   在该 assistant 消息后插入占位 tool_result（is_error: true）。
+   * - orphaned tool_result（tool 消息全序列无对应 tool_call）：
+   *   删除该 tool 消息。
+   *
+   * 职责边界（M1-clarify）：
+   *   本方法只做「全局 ID 配对」层面的修复，不保证 OpenAI tool-call 协议要求的
+   *   「assistant tool_calls 紧跟对应 tool_result」严格相邻序列。provider 协议
+   *   合法性的最终兜底由 client.ts 的 repairToolCallSequence() 统一保证（它维护
+   *   pending tool calls 状态机，遇到非 tool 消息前自动补齐）。
+   *   本方法负责上下文层的展示/截断一致性，避免 ContextManager 拼装的消息
+   *   因双向孤儿导致 token 估算严重偏差或日志混乱。
+   *
+   * 返回修复后的新数组（不修改原数组）。
    */
-  private validateMessageStructure(messages: ChatMessage[]): void {
+  private repairMessageStructure(messages: ChatMessage[]): ChatMessage[] {
     const toolCallIds = new Set<string>()
     const toolResultIds = new Set<string>()
-    
+
     for (const msg of messages) {
       if (msg.role === "assistant" && msg.tool_calls) {
         for (const tc of msg.tool_calls) {
@@ -161,16 +176,52 @@ export class ContextManager {
         toolResultIds.add(msg.tool_call_id)
       }
     }
-    
-    // Check for orphaned tool_calls without results
+
+    // 双向检测孤儿
+    const orphanedToolCallIds = new Set<string>()
     for (const tcId of toolCallIds) {
-      if (!toolResultIds.has(tcId)) {
+      if (!toolResultIds.has(tcId)) orphanedToolCallIds.add(tcId)
+    }
+    const orphanedToolResultIds = new Set<string>()
+    for (const trId of toolResultIds) {
+      if (!toolCallIds.has(trId)) orphanedToolResultIds.add(trId)
+    }
+
+    if (orphanedToolCallIds.size === 0 && orphanedToolResultIds.size === 0) {
+      return messages
+    }
+
+    // 修复：构建新数组
+    const repaired: ChatMessage[] = []
+    for (const msg of messages) {
+      // 删除 orphaned tool_result（无对应 tool_call）
+      if (msg.role === "tool" && msg.tool_call_id && orphanedToolResultIds.has(msg.tool_call_id)) {
         console.warn(
-          `[ContextManager] Orphaned tool_call detected: ${tcId} has no corresponding tool result. ` +
-          `This may cause provider errors.`
+          `[ContextManager] Removing orphaned tool_result: ${msg.tool_call_id} has no corresponding tool_call.`
         )
+        continue
+      }
+      repaired.push(msg)
+      // 为 orphaned tool_call 插入占位 tool_result
+      if (msg.role === "assistant" && msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (orphanedToolCallIds.has(tc.id)) {
+            console.warn(
+              `[ContextManager] Inserting placeholder tool_result for orphaned tool_call: ${tc.id}.`
+            )
+            repaired.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              content: "[result unavailable: truncated]",
+              name: tc.function.name,
+              is_error: true,
+            })
+          }
+        }
       }
     }
+
+    return repaired
   }
 
   /**
