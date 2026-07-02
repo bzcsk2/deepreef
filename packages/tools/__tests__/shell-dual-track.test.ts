@@ -332,4 +332,31 @@ describe("P1-fix: disposeBackgroundTaskManagerFor", () => {
     expect(mgr.list()).toHaveLength(0)
     rmSync(workDir, { recursive: true, force: true })
   })
+
+  it("kills running background task on dispose", async () => {
+    const workDir = mkdtempSync(join(tmpdir(), "p1-kill-"))
+    const sessionId = "p1-kill-test"
+    const mgr = getBackgroundTaskManagerFor(sessionId, workDir)
+    // 启动一个长时间运行的后台任务
+    const result = await mgr.spawn(
+      process.platform === "win32" ? "ping -n 30 127.0.0.1 > nul" : "sleep 30",
+      60_000,
+      "long sleep",
+    )
+    expect(result.taskId).toBeTruthy()
+    expect(mgr.getStatus(result.taskId)?.status).toBe("running")
+
+    // dispose 应 kill running task 并清空 tasks
+    disposeBackgroundTaskManagerFor(sessionId)
+
+    // dispose 后 tasks 应为空
+    // 注意：dispose 后 mgr 引用仍可用（V8 未 GC），但内部 tasks 已清空
+    expect(mgr.list()).toHaveLength(0)
+
+    // 新 manager 不应继承旧 task
+    const mgr2 = getBackgroundTaskManagerFor(sessionId, workDir)
+    expect(mgr2.list()).toHaveLength(0)
+    // Windows 上进程刚被 kill 时文件句柄可能未释放，忽略清理错误
+    try { rmSync(workDir, { recursive: true, force: true }) } catch { /* EBUSY */ }
+  }, 15_000)
 })
