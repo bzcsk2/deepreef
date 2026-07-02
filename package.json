@@ -47,7 +47,7 @@
   ],
   "scripts": {
     "dev": "bun run packages/cli/src/index.ts",
-    "build": "bun build ./packages/cli/src/index.ts --outdir ./dist --target node --format esm --external @anthropic-ai/sdk --external @anthropic-ai/claude-agent-sdk --banner '#!/usr/bin/env node'",
+    "build": "bun build ./packages/cli/src/index.ts --outdir ./dist --target node --format esm --external @anthropic-ai/sdk --external @anthropic-ai/claude-agent-sdk --external figlet --banner '#!/usr/bin/env node'",
     "eval:assets:build": "bun run scripts/eval-assets/build-swe-snapshots.ts",
     "eval:assets:verify": "bun run scripts/eval-assets/verify-assets.ts",
     "eval:assets:size": "bun run scripts/eval-assets/check-size.ts",
