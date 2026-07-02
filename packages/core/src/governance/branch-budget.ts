@@ -167,7 +167,7 @@ export class BranchBudgetTracker {
   }
 
   /**
-   * 统一工具拦截入口（write/edit 与 run_command）。
+   * 统一工具拦截入口（write/edit 与 bash）。
    * blocked=true 时不应执行工具，直接把 message 作为 tool_result 回给模型。
    */
   checkToolBlock(
@@ -193,7 +193,8 @@ export class BranchBudgetTracker {
       }
     }
 
-    if (toolName === "run_command") {
+    // G1: 对齐运行时真实工具名 bash（原 run_command 在运行时不存在）
+    if (toolName === "bash") {
       const command = extractCommand(args)
       if (command) {
         const cmdKey = normalizeCommand(command)

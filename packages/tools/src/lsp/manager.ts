@@ -31,6 +31,9 @@ interface DocumentInfo {
   language: string
   version: number
   contentHash: string
+  // LSP-2: 绑定创建该 document 的 server key，避免多 workspace 同语言
+  // 场景下 findClientForLanguage 返回错误的 server。
+  serverKey: string
 }
 
 export interface LspManagerStatus {
@@ -194,6 +197,8 @@ export class LspManager {
           language,
           version: 1,
           contentHash,
+          // LSP-2: 记录归属 server key，后续 markDirty/clear 精确查找
+          serverKey: managed.key,
         })
       } else if (existing.contentHash !== contentHash) {
         // Document has changed
@@ -253,8 +258,10 @@ export class LspManager {
       const contentHash = createHash("md5").update(content).digest("hex")
 
       if (existing.contentHash !== contentHash) {
-        const managed = this.findClientForLanguage(existing.language)
-        if (managed) {
+        // LSP-2: 用 serverKey 精确查找归属 server，避免多 workspace 同语言
+        // 场景下 findClientForLanguage 返回错误的 server。
+        const managed = this.servers.get(existing.serverKey)
+        if (managed && managed.client.getState() === "running") {
           const newVersion = existing.version + 1
           await managed.client.changeDocument(filePath, newVersion, content)
           existing.version = newVersion
@@ -276,9 +283,10 @@ export class LspManager {
   }
 
   private clearDocumentsForServer(serverKey: string): void {
+    // LSP-2: 用 doc.serverKey 直接比对，避免 findClientForLanguage 在多
+    // workspace 同语言场景下返回无关 server 导致文档被错误保留或清理。
     for (const [uri, doc] of this.documents) {
-      const serverForDoc = this.findClientForLanguage(doc.language)
-      if (!serverForDoc || serverForDoc.key !== serverKey) {
+      if (doc.serverKey === serverKey) {
         this.documents.delete(uri)
       }
     }

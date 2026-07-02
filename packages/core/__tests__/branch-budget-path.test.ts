@@ -37,7 +37,9 @@ describe("branch-budget-path", () => {
     expect(t.wouldBlockFileEdit(abs)).toBe(true)
   })
 
-  it("mergeBudgetPathMap keeps max count per canonical key", () => {
+  it("mergeBudgetPathMap sums counts per canonical key (G5)", () => {
+    // G5: 同一文件以相对路径和绝对路径各记录了独立编辑次数（2 + 3 = 5），
+    // 合并时应累加而非取 max，否则会低估实际编辑次数。
     const root = mkdtempSync(join(tmpdir(), "drf-budget-map-"))
     const merged = mergeBudgetPathMap(
       new Map([
@@ -46,6 +48,6 @@ describe("branch-budget-path", () => {
       ]),
       root,
     )
-    expect(merged.get("src/a.ts")).toBe(3)
+    expect(merged.get("src/a.ts")).toBe(5)
   })
 })

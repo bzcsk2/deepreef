@@ -414,7 +414,8 @@ async function main(): Promise<void> {
     await memoryService?.stop().catch(() => {})
     // LIFE-01: close engine (tokenizer worker, logger, session writer)
     await engine.shutdown()
-    pluginRuntime.dispose()
+    // P3: plugin runtime 现在是 async dispose，会派发 onShutdown hooks
+    await pluginRuntime.dispose()
     // Wait for background MCP load to settle before disconnecting (best-effort, 2s cap)
     await Promise.race([mcpLoadPromise, new Promise<void>(r => setTimeout(r, 2000))])
     await mcpHost.disconnectAll()
